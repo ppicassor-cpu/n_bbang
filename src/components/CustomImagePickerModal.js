@@ -17,7 +17,7 @@ const CustomImagePickerModal = ({ visible, onClose, onSelect, maxImages = 10, cu
   useEffect(() => {
     if (visible) {
       checkPermissions();
-      setSelected([]); // 모달 열릴 때 선택 초기화
+      setSelected([]);
     }
   }, [visible]);
 
@@ -31,11 +31,25 @@ const CustomImagePickerModal = ({ visible, onClose, onSelect, maxImages = 10, cu
 
   const loadAssets = async () => {
     setLoading(true);
-    // 최신 사진 100장 불러오기 (카메라 앨범 효과)
+    let targetAlbum = null;
+    
+    // ✅ [수정] 앨범 목록을 먼저 가져와 "Camera" 또는 "DCIM" 폴더 찾기
+    try {
+        const albums = await MediaLibrary.getAlbumsAsync({ includeSmartAlbums: true });
+        // 안드로이드는 보통 "Camera" 또는 "DCIM", iOS는 "Recents"
+        targetAlbum = albums.find(a => a.title === "Camera" || a.title === "DCIM" || a.title === "카메라" || a.title === "Recents");
+    } catch (e) {
+        console.log("앨범 가져오기 실패, 전체 로드 시도", e);
+    }
+
+    const albumId = targetAlbum ? targetAlbum.id : null;
+
+    // 해당 앨범 또는 전체에서 사진 가져오기
     const result = await MediaLibrary.getAssetsAsync({
       first: 100,
+      album: albumId, 
       mediaType: ["photo"],
-      sortBy: [[MediaLibrary.SortBy.creationTime, false]], // 최신순
+      sortBy: [[MediaLibrary.SortBy.creationTime, false]],
     });
     setAssets(result.assets);
     setLoading(false);
@@ -46,7 +60,6 @@ const CustomImagePickerModal = ({ visible, onClose, onSelect, maxImages = 10, cu
       setSelected(selected.filter((item) => item !== uri));
     } else {
       if (selected.length + currentCount >= maxImages) {
-        // 최대 개수 초과 시 무시 (또는 알림)
         return;
       }
       setSelected([...selected, uri]);
@@ -73,7 +86,16 @@ const CustomImagePickerModal = ({ visible, onClose, onSelect, maxImages = 10, cu
   };
 
   if (hasPermission === false) {
-    return null; // 권한 없음 처리 (필요 시 UI 추가)
+    return (
+        <Modal visible={visible} transparent={true}>
+            <View style={[styles.container, { justifyContent: "center", alignItems: "center" }]}>
+                <Text style={{ color: "white" }}>갤러리 접근 권한이 필요합니다.</Text>
+                <TouchableOpacity onPress={onClose} style={{ marginTop: 20 }}>
+                    <Text style={{ color: theme.primary }}>닫기</Text>
+                </TouchableOpacity>
+            </View>
+        </Modal>
+    );
   }
 
   return (
@@ -84,7 +106,7 @@ const CustomImagePickerModal = ({ visible, onClose, onSelect, maxImages = 10, cu
           <TouchableOpacity onPress={onClose}>
             <MaterialIcons name="close" size={28} color="white" />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>카메라 앨범</Text>
+          <Text style={styles.headerTitle}>사진 선택</Text>
           <TouchableOpacity onPress={handleComplete} disabled={selected.length === 0}>
             <Text style={[styles.completeText, selected.length === 0 && { color: "#555" }]}>
               첨부 ({selected.length})

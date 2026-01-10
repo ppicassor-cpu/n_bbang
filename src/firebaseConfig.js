@@ -1,8 +1,8 @@
-﻿import { initializeApp } from "firebase/app";
-// ⚠️ [수정] getAuth 대신 initializeAuth와 Persistence 모듈 사용
-import { initializeAuth, getReactNativePersistence } from "firebase/auth";
+﻿import { initializeApp, getApp, getApps } from "firebase/app";
+import { initializeAuth, getReactNativePersistence, getAuth } from "firebase/auth";
 import ReactNativeAsyncStorage from "@react-native-async-storage/async-storage";
-import { getFirestore } from "firebase/firestore";
+// ✅ initializeFirestore 추가 (설정 커스텀용)
+import { initializeFirestore, getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
 
 const firebaseConfig = {
@@ -16,12 +16,39 @@ const firebaseConfig = {
   measurementId: "G-WPP12P5W60"
 };
 
-const app = initializeApp(firebaseConfig);
+// 1. 앱 초기화 (중복 방지: 이미 켜져 있으면 기존 것 사용)
+let app;
+if (!getApps().length) {
+  app = initializeApp(firebaseConfig);
+} else {
+  app = getApp();
+}
 
-// ✅ [핵심] 로그인 정보가 앱을 꺼도 날아가지 않게 저장소와 연결
-export const auth = initializeAuth(app, {
-  persistence: getReactNativePersistence(ReactNativeAsyncStorage)
-});
+// 2. Auth 초기화 (중복 방지 & 로그인 유지 설정)
+let auth;
+try {
+  auth = initializeAuth(app, {
+    persistence: getReactNativePersistence(ReactNativeAsyncStorage),
+  });
+} catch (e) {
+  if (e.code === "auth/already-initialized") {
+    auth = getAuth(app);
+  } else {
+    console.error("Firebase Auth Init Error:", e);
+    throw e;
+  }
+}
 
-export const db = getFirestore(app);
+// 3. Firestore 초기화 (✅ 핵심: 안드로이드 연결 끊김 방지 설정)
+let db;
+try {
+    db = initializeFirestore(app, { 
+        experimentalForceLongPolling: true, // 이 설정이 있어야 안드로이드에서 타임아웃이 안 생깁니다.
+    });
+} catch (e) {
+    // 이미 초기화 된 경우 기존 DB 인스턴스 사용
+    db = getFirestore(app);
+}
+
+export { auth, db };
 export const storage = getStorage(app);

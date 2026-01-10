@@ -61,7 +61,7 @@ async function checkIpConsistency(gpsCoords) {
 
     const dist = getDistanceFromLatLonInKm(gpsCoords.latitude, gpsCoords.longitude, json.latitude, json.longitude);
     if (dist > 200) {
-      console.warn(`IP 거리 차이: ${dist.toFixed(0)}km`);
+      console.log(`[IP Check] 거리 차이 감지: ${dist.toFixed(0)}km`);
       return false;
     }
     return true;
@@ -121,7 +121,9 @@ export const AppProvider = ({ children }) => {
     const unsubscribe = onSnapshot(q, (querySnapshot) => {
       const loadedPosts = [];
       querySnapshot.forEach((doc) => {
-        loadedPosts.push({ id: doc.id, ...doc.data() });
+        // ✅ [핵심 수정] doc.data()를 먼저 풀고, 마지막에 id: doc.id를 덮어씌웁니다.
+        // 이렇게 해야 문서 안의 가짜 id가 무시되고, 진짜 문서 ID가 들어갑니다.
+        loadedPosts.push({ ...doc.data(), id: doc.id });
       });
       setPosts(loadedPosts);
     });
@@ -192,24 +194,42 @@ export const AppProvider = ({ children }) => {
 
   const addPost = async (newPostData) => {
     if (!user) return;
-    await addDoc(collection(db, "posts"), {
-      ...newPostData,
-      ownerId: user.uid,
-      ownerEmail: user.email,
-      createdAt: new Date().toISOString(),
-      location: currentLocation
-    });
+    try {
+        await addDoc(collection(db, "posts"), {
+        ...newPostData,
+        ownerId: user.uid,
+        ownerEmail: user.email,
+        createdAt: new Date().toISOString(),
+        location: currentLocation
+        });
+    } catch (e) {
+        console.error("게시글 작성 실패:", e);
+        throw e;
+    }
   };
 
-  // ✅ 게시글 수정 함수 추가
   const updatePost = async (postId, updatedData) => {
     if (!postId) return;
-    const postRef = doc(db, "posts", postId);
-    await updateDoc(postRef, updatedData);
+    console.log(`[AppContext] 업데이트 시도: ${postId}`);
+    try {
+        const postRef = doc(db, "posts", postId);
+        await updateDoc(postRef, updatedData);
+        console.log(`[AppContext] 업데이트 성공!`);
+    } catch (e) {
+        console.error(`[AppContext] 업데이트 실패 원인:`, e);
+        throw e;
+    }
   };
 
   const deletePost = async (postId) => {
-    await deleteDoc(doc(db, "posts", postId));
+    console.log(`[AppContext] 삭제 시도: ${postId}`);
+    try {
+        await deleteDoc(doc(db, "posts", postId));
+        console.log(`[AppContext] 삭제 성공!`);
+    } catch (e) {
+        console.error(`[AppContext] 삭제 실패 원인:`, e);
+        throw e;
+    }
   };
 
   return (

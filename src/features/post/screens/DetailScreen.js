@@ -1,20 +1,31 @@
 ﻿import React, { useState } from "react";
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Image, Dimensions, Platform } from "react-native";
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Image, Dimensions } from "react-native";
 import MapView, { Marker } from "react-native-maps";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { theme } from "../../../theme";
 import { ROUTES } from "../../../app/navigation/routes";
 import { useAppContext } from "../../../app/providers/AppContext";
 import { ensureRoom } from "../../chat/services/chatService";
+import CustomModal from "../../../components/CustomModal";
 
 const SCREEN_WIDTH = Dimensions.get("window").width;
 
 export default function DetailScreen({ route, navigation }) {
   const { post } = route.params || {};
-  const { user } = useAppContext();
+  const { user, deletePost } = useAppContext();
   const insets = useSafeAreaInsets();
   
   const [imgPage, setImgPage] = useState(1);
+  const [loading, setLoading] = useState(false);
+
+  // ✅ [수정] 모달 상태 하나로 통합 (확인/성공/실패 모두 처리)
+  const [modalConfig, setModalConfig] = useState({
+    visible: false,
+    title: "",
+    message: "",
+    type: "alert", // "confirm" or "alert"
+    onConfirm: () => {},
+  });
 
   if (!post) {
     return (
@@ -24,7 +35,6 @@ export default function DetailScreen({ route, navigation }) {
     );
   }
 
-  // ✅ 내가 쓴 글인지 확인
   const isMyPost = user && user.uid === post.ownerId;
   const isFree = post.category === "무료나눔";
 
@@ -36,12 +46,72 @@ export default function DetailScreen({ route, navigation }) {
     navigation.navigate(ROUTES.CHAT_ROOM, { roomId, roomName });
   };
 
-  // ✅ 수정 버튼 클릭 핸들러
   const handleEdit = () => {
     if (isFree) {
       navigation.navigate(ROUTES.WRITE_FREE, { post });
     } else {
       navigation.navigate(ROUTES.WRITE, { post });
+    }
+  };
+
+  // ✅ 삭제 버튼 클릭 시 (삭제 확인 모달 띄우기)
+  const onPressDelete = () => {
+    setModalConfig({
+      visible: true,
+      title: "게시글 삭제",
+      message: "정말로 이 게시글을 삭제하시겠습니까?\n삭제 후에는 되돌릴 수 없습니다.",
+      type: "confirm",
+      onConfirm: processDelete, // 확인 누르면 진짜 삭제 함수 실행
+    });
+  };
+
+  // ✅ 진짜 삭제 로직 (로딩 -> 성공/실패 모달로 전환)
+  const processDelete = async () => {
+    setLoading(true);
+
+    try {
+      // 15초 타임아웃
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error("NetworkTimeout")), 15000)
+      );
+
+      console.log(`[삭제 시도] 게시글 ID: ${post.id}`);
+      await Promise.race([deletePost(post.id), timeoutPromise]);
+      console.log("[삭제 성공]");
+
+      setLoading(false);
+
+      // ✅ [성공] 시스템 Alert 대신 커스텀 모달 내용 변경
+      setModalConfig({
+        visible: true,
+        title: "삭제 완료",
+        message: "게시글이 안전하게 삭제되었습니다.",
+        type: "alert",
+        onConfirm: () => {
+          setModalConfig({ ...modalConfig, visible: false });
+          navigation.goBack();
+        },
+      });
+
+    } catch (error) {
+      console.log("[삭제 실패 원인]", error);
+      setLoading(false);
+      
+      let errorMsg = "게시글 삭제 중 오류가 발생했습니다.";
+      if (error.message === "NetworkTimeout") {
+        errorMsg = "서버 응답이 지연되고 있습니다.\n인터넷 연결을 확인해주세요.";
+      } else if (error.code === "permission-denied") {
+        errorMsg = "삭제 권한이 없습니다.";
+      }
+
+      // ✅ [실패] 시스템 Alert 대신 커스텀 모달 내용 변경
+      setModalConfig({
+        visible: true,
+        title: "삭제 실패",
+        message: errorMsg,
+        type: "alert",
+        onConfirm: () => setModalConfig({ ...modalConfig, visible: false }), // 그냥 닫기
+      });
     }
   };
 
@@ -118,7 +188,6 @@ export default function DetailScreen({ route, navigation }) {
         </View>
       </ScrollView>
 
-      {/* 하단 바 */}
       <View style={[styles.bottomBar, { paddingBottom: Math.max(insets.bottom, 20) + 20 }]}>
         <View>
           {!isFree ? (
@@ -133,11 +202,22 @@ export default function DetailScreen({ route, navigation }) {
 
         <View style={{ flex: 1 }} />
 
-        {/* ✅ 내가 쓴 글이면 '수정하기', 아니면 '참여/채팅' */}
         {isMyPost ? (
-          <TouchableOpacity style={[styles.chatBtn, { backgroundColor: "#444" }]} onPress={handleEdit}>
-             <Text style={[styles.chatBtnText, { color: "white" }]}>글 수정하기</Text>
-          </TouchableOpacity>
+          <View style={{ flexDirection: "row", gap: 10 }}>
+            <TouchableOpacity 
+                style={[styles.chatBtn, { backgroundColor: "#333", borderWidth: 1, borderColor: "#555" }]} 
+                onPress={onPressDelete}
+            >
+               <Text style={[styles.chatBtnText, { color: "#FF6B6B" }]}>삭제</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+                style={[styles.chatBtn, { backgroundColor: theme.primary }]} 
+                onPress={handleEdit}
+            >
+               <Text style={[styles.chatBtnText, { color: "black" }]}>수정</Text>
+            </TouchableOpacity>
+          </View>
         ) : (
           <TouchableOpacity style={styles.chatBtn} onPress={onPressChat}>
             <Text style={styles.chatBtnText}>
@@ -146,28 +226,36 @@ export default function DetailScreen({ route, navigation }) {
           </TouchableOpacity>
         )}
       </View>
+
+      {/* ✅ 디자인 통일된 커스텀 모달 */}
+      <CustomModal
+        visible={modalConfig.visible}
+        title={modalConfig.title}
+        message={modalConfig.message}
+        type={modalConfig.type}
+        loading={loading}
+        onConfirm={modalConfig.onConfirm}
+        onCancel={() => !loading && setModalConfig({ ...modalConfig, visible: false })}
+      />
+
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.background },
-  
   heroContainer: { height: 300, position: "relative" }, 
   heroImage: { width: SCREEN_WIDTH, height: 300, resizeMode: "cover" },
-  
   pageIndicator: {
     position: "absolute", bottom: 15, right: 15,
     backgroundColor: "rgba(0,0,0,0.6)", paddingHorizontal: 12, paddingVertical: 4, borderRadius: 15
   },
   pageText: { color: "white", fontWeight: "bold", fontSize: 12 },
-
   body: { padding: 24 },
   title: { color: "white", fontSize: 22, fontWeight: "bold" },
   progress: { color: "grey", marginTop: 10, fontSize: 14 },
   content: { color: "#DDD", marginTop: 20, lineHeight: 24, fontSize: 16 },
   label: { color: theme.primary, fontSize: 16, fontWeight: "bold", marginBottom: 10 },
-
   bottomBar: {
     padding: 20,
     backgroundColor: theme.cardBg,
@@ -183,12 +271,13 @@ const styles = StyleSheet.create({
   },
   price: { color: "white", fontSize: 20, fontWeight: "bold" },
   priceSub: { color: "grey", fontSize: 12, marginTop: 2 },
-
   chatBtn: {
     backgroundColor: theme.primary,
-    paddingHorizontal: 24,
+    paddingHorizontal: 20,
     paddingVertical: 14,
     borderRadius: 12,
+    minWidth: 80,
+    alignItems: "center"
   },
   chatBtnText: { 
     fontWeight: "bold", 

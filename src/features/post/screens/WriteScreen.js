@@ -6,14 +6,13 @@ import { useAppContext } from "../../../app/providers/AppContext";
 import { theme } from "../../../theme";
 import { MaterialIcons } from "@expo/vector-icons";
 import CustomModal from "../../../components/CustomModal";
-import CustomImagePickerModal from "../../../components/CustomImagePickerModal"; // ✅ 커스텀 갤러리 추가
+import CustomImagePickerModal from "../../../components/CustomImagePickerModal";
 
 const WRITABLE_CATEGORIES = ["마트/식품", "생활용품", "기타"];
 
 export default function WriteScreen({ navigation, route }) {
   const { addPost, updatePost, currentLocation, myCoords } = useAppContext();
   
-  // ✅ 수정 모드 데이터 수신
   const editPostData = route.params?.post;
   const isEditMode = !!editPostData;
 
@@ -36,17 +35,15 @@ export default function WriteScreen({ navigation, route }) {
   
   const [isCustomTip, setIsCustomTip] = useState(false);
   
-  // 모달들
   const [alertVisible, setAlertVisible] = useState(false);
   const [alertMsg, setAlertMsg] = useState("");
-  const [galleryVisible, setGalleryVisible] = useState(false); // ✅ 갤러리 모달 상태
+  const [galleryVisible, setGalleryVisible] = useState(false);
 
   const [region, setRegion] = useState({
     latitude: 37.5665, longitude: 126.9780,
     latitudeDelta: 0.005, longitudeDelta: 0.005,
   });
 
-  // ✅ 수정 모드일 때 초기 데이터 세팅
   useEffect(() => {
     if (isEditMode) {
       setCategory(editPostData.category || "마트/식품");
@@ -65,7 +62,6 @@ export default function WriteScreen({ navigation, route }) {
   }, [editPostData]);
 
   useEffect(() => {
-    // 수정 모드가 아니고 내 위치가 있으면 내 위치로 이동
     if (!isEditMode && myCoords) {
       setRegion({ ...region, latitude: myCoords.latitude, longitude: myCoords.longitude });
     }
@@ -80,10 +76,13 @@ export default function WriteScreen({ navigation, route }) {
     if (isParticipantsDropdownOpen) setParticipantsDropdownOpen(false);
     else {
       Keyboard.dismiss();
-      participantsButtonRef.current?.measure((fx, fy, width, height, px, py) => {
-        setParticipantsDropdownCoords({ x: px, y: py + height + 5, width: width });
-        setParticipantsDropdownOpen(true);
-      });
+      setTimeout(() => {
+        participantsButtonRef.current?.measure((fx, fy, width, height, px, py) => {
+           if (!width || !height) return;
+           setParticipantsDropdownCoords({ x: px, y: py + height + 5, width: width });
+           setParticipantsDropdownOpen(true);
+        });
+      }, 100);
     }
   };
 
@@ -91,10 +90,13 @@ export default function WriteScreen({ navigation, route }) {
     if (isTipDropdownOpen) setTipDropdownOpen(false);
     else {
       Keyboard.dismiss();
-      tipButtonRef.current?.measure((fx, fy, width, height, px, py) => {
-        setTipDropdownCoords({ x: px, y: py + height + 5, width: width });
-        setTipDropdownOpen(true);
-      });
+      setTimeout(() => {
+        tipButtonRef.current?.measure((fx, fy, width, height, px, py) => {
+            if (!width || !height) return;
+            setTipDropdownCoords({ x: px, y: py + height + 5, width: width });
+            setTipDropdownOpen(true);
+        });
+      }, 100);
     }
   };
 
@@ -109,7 +111,6 @@ export default function WriteScreen({ navigation, route }) {
     checkTipLimit(tip);
   };
 
-  // ✅ 커스텀 갤러리 열기
   const openGallery = () => {
     if (images.length >= 10) {
       showAlert("사진은 최대 10장까지입니다.");
@@ -118,7 +119,6 @@ export default function WriteScreen({ navigation, route }) {
     setGalleryVisible(true);
   };
 
-  // ✅ 커스텀 갤러리에서 선택 완료 시
   const handleGallerySelect = (selectedUris) => {
     setImages([...images, ...selectedUris]);
   };
@@ -147,7 +147,8 @@ export default function WriteScreen({ navigation, route }) {
     const limit = price * 0.1;
 
     if (tipAmount > 0 && totalTip > limit) {
-      showAlert(`수고비 합계(${totalTip.toLocaleString()}원)가\n구매 금액의 10%(${limit.toLocaleString()}원)를\n초과할 수 없습니다.`);
+      // 안전한 문자열 연결 방식 사용
+      showAlert("수고비 합계(" + totalTip.toLocaleString() + "원)가\n구매 금액의 10%(" + limit.toLocaleString() + "원)를\n초과할 수 없습니다.");
     } else {
       setSelectedTip(tipAmount);
     }
@@ -182,14 +183,13 @@ export default function WriteScreen({ navigation, route }) {
       tip: selectedTip,
       maxParticipants: participants,
       images: images, 
-      // 수정 시 초기화되면 안 되는 값들
       status: isEditMode ? editPostData.status : "모집중",
       currentParticipants: isEditMode ? editPostData.currentParticipants : 1,
     };
 
     if (isEditMode) {
       await updatePost(editPostData.id, postData);
-      navigation.pop(2); // 상세화면 -> 글쓰기 -> 뒤로가서 목록 갱신
+      navigation.pop(2);
     } else {
       const newPost = {
         id: Date.now().toString(),
@@ -299,8 +299,9 @@ export default function WriteScreen({ navigation, route }) {
                             style={styles.dropdownHeader} 
                             onPress={toggleTipDropdown}
                         >
+                            {/* ✅ 수정된 부분: 백틱 대신 문자열 연결 사용 */}
                             <Text style={styles.dropdownValueText}>
-                                {selectedTip === 0 ? "무료봉사" : `+{selectedTip.toLocaleString()}원`}
+                                {selectedTip === 0 ? "무료봉사" : "+" + selectedTip.toLocaleString() + "원"}
                             </Text>
                             <MaterialIcons name={isTipDropdownOpen ? "keyboard-arrow-up" : "keyboard-arrow-down"} size={24} color="white" />
                         </TouchableOpacity>
@@ -422,8 +423,9 @@ export default function WriteScreen({ navigation, route }) {
                   style={[styles.dropdownItem, selectedTip === tip && { backgroundColor: '#333' }]}
                   onPress={() => handleTipChange(tip)}
                 >
+                  {/* ✅ 수정된 부분: 백틱 대신 문자열 연결 사용 */}
                   <Text style={[styles.dropdownItemText, selectedTip === tip && { color: theme.primary, fontWeight: 'bold' }]}>
-                    {tip === 0 ? "무료봉사" : `${tip.toLocaleString()}원`}
+                    {tip === 0 ? "무료봉사" : "+" + tip.toLocaleString() + "원"}
                   </Text>
                 </TouchableOpacity>
               ))}
@@ -432,7 +434,6 @@ export default function WriteScreen({ navigation, route }) {
         </TouchableOpacity>
       </Modal>
 
-      {/* 커스텀 갤러리 모달 */}
       <CustomImagePickerModal 
         visible={galleryVisible}
         onClose={() => setGalleryVisible(false)}

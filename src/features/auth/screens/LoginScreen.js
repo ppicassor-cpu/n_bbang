@@ -66,7 +66,6 @@ export default function LoginScreen() {
   };
 
   const handleSocialLogin = (platform) => {
-    // ✅ 문법 오류 수정 (백틱 복구)
     showAlert(`${platform} 로그인은 준비 중입니다.\n(추후 연동 예정)`);
   };
 
@@ -79,12 +78,12 @@ export default function LoginScreen() {
 
   return (
     <KeyboardAvoidingView 
-      behavior={Platform.OS === "ios" ? "padding" : "height"}
+      // ✅ [핵심 수정] 안드로이드는 자동완성 시 떨림 방지를 위해 behavior를 끕니다.
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
       style={styles.container}
     >
       <View style={styles.overlay}>
         
-        {/* ✅ [디자인 수정] 촌스러운 텍스트 대신 세련된 타이포그래피 로고 */}
         <View style={styles.logoContainer}>
             <Text style={styles.logoTextMain}>N-BBANG</Text>
             <Text style={styles.logoTextSub}>Premium Joint Purchase</Text>
