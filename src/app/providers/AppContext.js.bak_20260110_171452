@@ -1,0 +1,135 @@
+﻿import React, { createContext, useState, useContext, useEffect } from "react";
+import * as Location from "expo-location";
+
+const AppContext = createContext();
+
+// 거리 계산 함수 (Haversine formula)
+function getDistanceFromLatLonInKm(lat1, lon1, lat2, lon2) {
+  if (lat1 == null || lon1 == null || lat2 == null || lon2 == null) return 9999;
+
+  const R = 6371; 
+  const dLat = deg2rad(lat2 - lat1);
+  const dLon = deg2rad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const d = R * c; 
+  return d;
+}
+
+function deg2rad(deg) {
+  return deg * (Math.PI / 180);
+}
+
+export const AppProvider = ({ children }) => {
+  const [currentLocation, setCurrentLocation] = useState("위치 찾는 중...");
+  const [myCoords, setMyCoords] = useState(null); 
+  const [myPoints, setMyPoints] = useState(50000);
+  const [posts, setPosts] = useState([
+    {
+      id: "1",
+      ownerId: "other_user",
+      category: "대형마트",
+      title: "코스트코 소고기 소분해요",
+      location: "내동",
+      coords: { latitude: 35.2320, longitude: 128.8710 },
+      pickup_point: "현대아파트 정문",
+      price: 30000, 
+      pricePerPerson: 15000,
+      tip: 1000,
+      currentParticipants: 2,
+      maxParticipants: 4,
+      images: [],
+      status: "모집중",
+      content: "소고기 반 나누실 분!",
+    },
+  ]);
+
+  useEffect(() => {
+    (async () => {
+      let { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") {
+        setCurrentLocation("위치 권한 없음");
+        return;
+      }
+
+      let location = await Location.getCurrentPositionAsync({});
+      setMyCoords(location.coords);
+      
+      // ✅ [스마트 로직] "동/읍/면" 정밀 추출
+      let addresses = await Location.reverseGeocodeAsync(location.coords);
+
+      if (addresses && addresses.length > 0) {
+        let foundDong = null;
+
+        // 동 이름 추출 헬퍼 함수
+        const pickDong = (raw) => {
+          if (!raw) return null;
+          const str = String(raw).trim();
+          if (!str) return null;
+
+          // 괄호 등 특수문자 제거 후 공백 기준 분리
+          const parts = str.replace(/[()]/g, " ").split(/[\s,]+/).filter(Boolean);
+
+          for (const p of parts) {
+            const compact = p.replace(/\s+/g, "");
+            if (!compact) continue;
+
+            // 1. "로"나 "길"로 끝나는 도로명 제외 (예: 김해대로, 호계로)
+            if (/(로|길)$/.test(compact)) continue;
+
+            // 2. 한글+숫자 조합으로 "동/읍/면/리"로 끝나는지 확인 (예: 내동, 장유1동, 진영읍)
+            if (/^[가-힣0-9]+(동|읍|면|리)$/.test(compact)) {
+              return compact;
+            }
+          }
+          return null;
+        };
+
+        // 반환된 주소 후보군 전체 순회
+        for (const addr of addresses) {
+          // 우선순위가 높은 필드부터 검사
+          const candidates = [
+            addr.district,  // 구/군/동
+            addr.name,      // 건물명 (여기에 동 정보가 섞여있을 수 있음)
+            addr.street,    // 도로명 (여기에 지번 주소가 섞여있을 수 있음)
+            addr.subregion, // 읍/면
+          ].filter(Boolean);
+
+          for (const c of candidates) {
+            const dong = pickDong(c);
+            if (dong) { 
+              foundDong = dong; 
+              break; 
+            }
+          }
+          if (foundDong) break;
+        }
+
+        // 결과 반영
+        if (foundDong) {
+          setCurrentLocation(foundDong);
+        } else {
+          // 동을 못 찾았으면 깔끔하게 시/구 만 표시 (숫자 번지 제외)
+          const first = addresses[0];
+          const region = first.district || first.city || "내 위치";
+          setCurrentLocation(region);
+        }
+      }
+    })();
+  }, []);
+
+  const addPost = (newPost) => {
+    setPosts(prevPosts => [newPost, ...prevPosts]);
+  };
+
+  return (
+    <AppContext.Provider value={{ currentLocation, myCoords, setCurrentLocation, myPoints, posts, addPost, getDistanceFromLatLonInKm }}>
+      {children}
+    </AppContext.Provider>
+  );
+};
+
+export const useAppContext = () => useContext(AppContext);

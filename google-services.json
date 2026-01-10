@@ -1,0 +1,30 @@
+﻿{
+  "project_info": {
+    "project_number": "1060639718995",
+    "firebase_url": "https://randomch-6f635-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "project_id": "randomch-6f635",
+    "storage_bucket": "randomch-6f635.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1060639718995:android:7c852b9c865e11d91290a6",
+        "android_client_info": {
+          "package_name": "com.example.randomworldchat"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCY_eyXmQWXG1vHPaZwibyfnwkENkD-5lA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

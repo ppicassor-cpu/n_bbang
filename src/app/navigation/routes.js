@@ -3,7 +3,8 @@ export const ROUTES = {
   LOGIN: "Login",
   HOME: "Home",
   DETAIL: "Detail",
-  WRITE: "Write",
+  WRITE: "Write",           // N빵 글쓰기
+  WRITE_FREE: "WriteFree",  // ✅ 무료나눔 글쓰기
   PROFILE: "Profile",
   CHAT_ROOMS: "ChatRooms",
   CHAT_ROOM: "ChatRoom",

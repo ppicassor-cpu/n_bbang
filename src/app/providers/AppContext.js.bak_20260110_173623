@@ -1,0 +1,138 @@
+﻿import React, { createContext, useState, useContext, useEffect } from "react";
+import * as Location from "expo-location";
+
+const AppContext = createContext();
+
+function getDistanceFromLatLonInKm(lat1, lon1, lat2, lon2) {
+  if (lat1 == null || lon1 == null || lat2 == null || lon2 == null) return 9999;
+  const R = 6371;
+  const dLat = deg2rad(lat2 - lat1);
+  const dLon = deg2rad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const d = R * c; 
+  return d;
+}
+
+function deg2rad(deg) {
+  return deg * (Math.PI / 180);
+}
+
+export const AppProvider = ({ children }) => {
+  const [currentLocation, setCurrentLocation] = useState("위치 찾는 중...");
+  const [myCoords, setMyCoords] = useState(null); 
+  const [myPoints, setMyPoints] = useState(50000);
+  const [posts, setPosts] = useState([
+    {
+      id: "1",
+      ownerId: "other_user",
+      category: "대형마트",
+      title: "코스트코 소고기 소분해요",
+      location: "내동",
+      coords: { latitude: 35.2320, longitude: 128.8710 },
+      pickup_point: "현대아파트 정문",
+      price: 30000, 
+      pricePerPerson: 15000,
+      tip: 1000,
+      currentParticipants: 2,
+      maxParticipants: 4,
+      images: [],
+      status: "모집중",
+      content: "소고기 반 나누실 분!",
+    },
+  ]);
+
+  useEffect(() => {
+    (async () => {
+      let { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") {
+        setCurrentLocation("위치 권한 없음");
+        return;
+      }
+
+      try {
+        let location = await Location.getCurrentPositionAsync({});
+        setMyCoords(location.coords);
+        
+        let addresses = await Location.reverseGeocodeAsync(location.coords);
+        
+        if (addresses && addresses.length > 0) {
+          console.log("주소 반환값:", addresses); // 로그 확인용
+
+          let foundDong = null;
+          let fallbackName = null;
+
+          for (const addr of addresses) {
+            // 1. formattedAddress(전체 주소 문자열)까지 샅샅이 뒤짐
+            // 예: "대한민국 경상남도 김해시 내동 123" -> 여기서 "내동"을 찾아냄
+            const fullStr = addr.formattedAddress || "";
+            const chunks = fullStr.split(" ");
+            
+            for (const chunk of chunks) {
+               if (/[가-힣]+(동|읍|면)$/.test(chunk)) {
+                  // 시/군/구/도 제외
+                  if (chunk.endsWith("시") || chunk.endsWith("군") || chunk.endsWith("구") || chunk.endsWith("도")) continue;
+                  foundDong = chunk;
+                  break;
+               }
+            }
+            if (foundDong) break;
+
+            // 2. 기존 필드(street, district, name) 재검사
+            const fields = [addr.district, addr.street, addr.name, addr.subregion];
+            for (const field of fields) {
+               if (!field) continue;
+               // "동/읍/면" 찾기
+               const match = String(field).match(/([가-힣]+(동|읍|면))/);
+               if (match) {
+                 // "길"이나 "로"가 포함된 도로명이면 제외 (예: 호계로, 김해대로)
+                 if (match[0].endsWith("로") || match[0].endsWith("길")) continue;
+                 foundDong = match[0];
+                 break;
+               }
+               
+               // fallback: 동을 못 찾을 경우를 대비해 "도로명"이라도 저장해둠 (숫자 제외)
+               // 예: "김해대로"
+               if (!fallbackName && /[가-힣]+(로|길)$/.test(field)) {
+                   fallbackName = field;
+               }
+            }
+            if (foundDong) break;
+          }
+
+          if (foundDong) {
+            setCurrentLocation(foundDong);
+          } else {
+            // 동 정보가 아예 없으면 -> 도로명이라도 표시 -> 그것도 없으면 시/구 표시
+            // "김해시 21" 보다는 "김해대로"가 낫습니다.
+            if (fallbackName) {
+                // 도로명에서 숫자 제거하고 텍스트만 (예: 김해대로2385번길 -> 김해대로)
+                const roadOnly = fallbackName.replace(/[0-9].*/, "").trim(); 
+                setCurrentLocation(roadOnly || addresses[0].city);
+            } else {
+                const region = addresses[0].district || addresses[0].city || "내 위치";
+                setCurrentLocation(region);
+            }
+          }
+        }
+      } catch (e) {
+        setCurrentLocation("위치 확인 불가");
+      }
+    })();
+  }, []);
+
+  const addPost = (newPost) => {
+    setPosts(prevPosts => [newPost, ...prevPosts]);
+  };
+
+  return (
+    <AppContext.Provider value={{ currentLocation, myCoords, setCurrentLocation, myPoints, posts, addPost, getDistanceFromLatLonInKm }}>
+      {children}
+    </AppContext.Provider>
+  );
+};
+
+export const useAppContext = () => useContext(AppContext);
