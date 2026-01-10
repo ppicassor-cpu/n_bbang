@@ -1,36 +1,20 @@
-import React from 'react';
-import { NavigationContainer } from '@react-navigation/native';
-import { createStackNavigator } from '@react-navigation/stack';
-import { AppProvider } from './src/app/providers/AppContext';
+﻿import React from "react";
+import { Text, TextInput } from "react-native";
+import { AppProvider } from "./src/app/providers/AppContext";
+import RootNavigator from "./src/app/navigation/RootNavigator";
 
-import LoginScreen from './src/features/auth/screens/LoginScreen';
-import HomeScreen from './src/features/feed/screens/HomeScreen';
-import WriteScreen from './src/features/post/screens/WriteScreen';
-import DetailScreen from './src/features/post/screens/DetailScreen';
-import ProfileScreen from './src/features/profile/screens/ProfileScreen';
+// ✅ [폰트 고정 설정] 시스템 폰트 크기 변경 무시
+// 이 설정이 없으면 휴대폰 설정에 따라 앱 글씨가 깨질 수 있습니다.
+if (Text.defaultProps == null) Text.defaultProps = {};
+Text.defaultProps.allowFontScaling = false;
 
-const Stack = createStackNavigator();
+if (TextInput.defaultProps == null) TextInput.defaultProps = {};
+TextInput.defaultProps.allowFontScaling = false;
 
 export default function App() {
   return (
     <AppProvider>
-      <NavigationContainer>
-        <Stack.Navigator 
-          initialRouteName="Login"
-          screenOptions={{
-            headerStyle: { backgroundColor: 'black', shadowColor: 'transparent' },
-            headerTintColor: 'white',
-            headerTitleStyle: { fontWeight: 'bold' },
-            cardStyle: { backgroundColor: 'black' }
-          }}
-        >
-          <Stack.Screen name="Login" component={LoginScreen} options={{ headerShown: false }} />
-          <Stack.Screen name="Home" component={HomeScreen} options={{ headerShown: false }} />
-          <Stack.Screen name="Write" component={WriteScreen} options={{ title: '구매 정보 입력' }} />
-          <Stack.Screen name="Detail" component={DetailScreen} options={{ title: '상세 정보' }} />
-          <Stack.Screen name="Profile" component={ProfileScreen} options={{ title: '내 정보' }} />
-        </Stack.Navigator>
-      </NavigationContainer>
+      <RootNavigator />
     </AppProvider>
   );
 }
