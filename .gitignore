@@ -1,0 +1,10 @@
+﻿node_modules/
+.expo/
+*.log
+
+.env
+.env.*
+!.env.example
+
+all_project_code.txt
+n_bbang_tree.txt
