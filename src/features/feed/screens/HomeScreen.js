@@ -1,7 +1,7 @@
-﻿import React from 'react';
+import React from 'react';
 import { View, Text, FlatList, TouchableOpacity, Image, StyleSheet } from 'react-native';
-import { useAppContext } from '../context/AppContext';
-import { theme } from '../theme';
+import { useAppContext } from '../../../app/providers/AppContext';
+import { theme } from '../../../theme';
 import { MaterialIcons } from '@expo/vector-icons';
 
 export default function HomeScreen({ navigation }) {

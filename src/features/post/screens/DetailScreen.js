@@ -1,6 +1,6 @@
-﻿import React from 'react';
+import React from 'react';
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Image } from 'react-native';
-import { theme } from '../theme';
+import { theme } from '../../../theme';
 
 export default function DetailScreen({ route }) {
   const { post } = route.params;

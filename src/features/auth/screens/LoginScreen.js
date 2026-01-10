@@ -1,6 +1,6 @@
-﻿import React from 'react';
+import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
-import { theme } from '../theme';
+import { theme } from '../../../theme';
 import { MaterialIcons, FontAwesome } from '@expo/vector-icons';
 
 export default function LoginScreen({ navigation }) {

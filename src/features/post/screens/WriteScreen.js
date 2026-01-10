@@ -1,9 +1,9 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import { View, Text, TextInput, ScrollView, TouchableOpacity, StyleSheet, Alert, Image, Modal } from 'react-native';
 import Slider from '@react-native-community/slider';
 import * as ImagePicker from 'expo-image-picker';
-import { useAppContext } from '../context/AppContext';
-import { theme } from '../theme';
+import { useAppContext } from '../../../app/providers/AppContext';
+import { theme } from '../../../theme';
 import { MaterialIcons } from '@expo/vector-icons';
 
 export default function WriteScreen({ navigation }) {
