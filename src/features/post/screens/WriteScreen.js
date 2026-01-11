@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef } from "react";
+﻿﻿import React, { useState, useEffect, useRef } from "react";
 import { View, Text, TextInput, ScrollView, TouchableOpacity, StyleSheet, Image, Modal, KeyboardAvoidingView, Platform, Keyboard } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import MapView, { Marker } from "react-native-maps";
@@ -7,11 +7,13 @@ import { theme } from "../../../theme";
 import { MaterialIcons } from "@expo/vector-icons";
 import CustomModal from "../../../components/CustomModal";
 import CustomImagePickerModal from "../../../components/CustomImagePickerModal";
+import { auth, storage } from "../../../firebaseConfig";
+import { ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
 
 const WRITABLE_CATEGORIES = ["마트/식품", "생활용품", "기타"];
 
 export default function WriteScreen({ navigation, route }) {
-  const { addPost, updatePost, currentLocation, myCoords } = useAppContext();
+  const { addPost, updatePost, currentLocation, myCoords, posts } = useAppContext();
   
   const editPostData = route.params?.post;
   const isEditMode = !!editPostData;
@@ -44,6 +46,11 @@ export default function WriteScreen({ navigation, route }) {
     latitudeDelta: 0.005, longitudeDelta: 0.005,
   });
 
+  const postsRef = useRef(posts);
+  useEffect(() => {
+    postsRef.current = posts;
+  }, [posts]);
+
   useEffect(() => {
     if (isEditMode) {
       setCategory(editPostData.category || "마트/식품");
@@ -59,12 +66,14 @@ export default function WriteScreen({ navigation, route }) {
       }
       navigation.setOptions({ title: "게시글 수정" });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editPostData]);
 
   useEffect(() => {
     if (!isEditMode && myCoords) {
       setRegion({ ...region, latitude: myCoords.latitude, longitude: myCoords.longitude });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [myCoords]);
 
   const showAlert = (msg) => {
@@ -120,7 +129,7 @@ export default function WriteScreen({ navigation, route }) {
   };
 
   const handleGallerySelect = (selectedUris) => {
-    setImages([...images, ...selectedUris]);
+    setImages((prev) => [...prev, ...(selectedUris || [])]);
   };
 
   const takePhoto = async () => {
@@ -131,11 +140,15 @@ export default function WriteScreen({ navigation, route }) {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== "granted") return showAlert("카메라 권한이 필요합니다.");
     let result = await ImagePicker.launchCameraAsync({ allowsEditing: false, quality: 1 });
-    if (!result.canceled) setImages([...images, result.assets[0].uri]);
+    if (!result.canceled) {
+      const uri = result.assets?.[0]?.uri;
+      if (uri) setImages((prev) => [...prev, uri]);
+    }
   };
 
   const removeImage = (index) => setImages(images.filter((_, i) => i !== index));
 
+  // ✅ A안 반영: 수고비 합계는 "방장 제외 인원"만 낸다고 가정 (participants - 1)
   const checkTipLimit = (tipAmount, isDirectInput = false) => {
     if (!buyPrice) {
       showAlert("구매 금액을 먼저 입력해주세요.");
@@ -143,12 +156,20 @@ export default function WriteScreen({ navigation, route }) {
       return;
     }
     const price = buyPrice ? parseInt(buyPrice.replace(/,/g, ""), 10) : 0;
-    const totalTip = tipAmount * participants;
+
+    const payers = Math.max(participants - 1, 0);
+    const totalTip = tipAmount * payers;
+
     const limit = price * 0.1;
 
     if (tipAmount > 0 && totalTip > limit) {
-      // 안전한 문자열 연결 방식 사용
-      showAlert("수고비 합계(" + totalTip.toLocaleString() + "원)가\n구매 금액의 10%(" + limit.toLocaleString() + "원)를\n초과할 수 없습니다.");
+      showAlert(
+        "수고비 합계(" +
+          totalTip.toLocaleString() +
+          "원)가\n구매 금액의 10%(" +
+          limit.toLocaleString() +
+          "원)를\n초과할 수 없습니다."
+      );
     } else {
       setSelectedTip(tipAmount);
     }
@@ -164,13 +185,101 @@ export default function WriteScreen({ navigation, route }) {
     }
   };
 
+  const uriToBlob = (uri) =>
+    new Promise((resolve, reject) => {
+      try {
+        const xhr = new XMLHttpRequest();
+        xhr.onload = function () { resolve(xhr.response); };
+        xhr.onerror = function () { reject(new TypeError("BLOB_REQUEST_FAILED")); };
+        xhr.responseType = "blob";
+        xhr.open("GET", uri, true);
+        xhr.send(null);
+      } catch (e) {
+        reject(e);
+      }
+    });
+
+  const uploadImagesIfNeeded = async (uris) => {
+    if (!uris || uris.length === 0) return [];
+    const user = auth.currentUser;
+    if (!user) throw new Error("NO_USER");
+
+    const out = [];
+    for (let i = 0; i < uris.length; i++) {
+      const u = uris[i];
+
+      if (typeof u === "string" && u.startsWith("http")) {
+        out.push(u);
+        continue;
+      }
+
+      const rawExt = (typeof u === "string" ? u.split(".").pop() : "jpg") || "jpg";
+      const ext = String(rawExt).split("?")[0] || "jpg";
+      const fileName = `${Date.now()}_${i}.${ext}`;
+      const path = `posts/n_bbang/${user.uid}/${fileName}`;
+
+      const blob = await uriToBlob(u);
+      const r = storageRef(storage, path);
+      await uploadBytes(r, blob);
+      try { blob.close && blob.close(); } catch {}
+      const url = await getDownloadURL(r);
+      out.push(url);
+    }
+    return out;
+  };
+
+  const waitForUpdate = (targetId, nextUpdatedAt) =>
+    new Promise((resolve) => {
+      let count = 0;
+      const interval = setInterval(() => {
+        const list = postsRef.current || [];
+        const found = list.find((p) => p.id === targetId);
+
+        if (found) {
+          if (!nextUpdatedAt) {
+            clearInterval(interval);
+            resolve();
+            return;
+          }
+          const u = found.updatedAt;
+          if (u && typeof u === "string" && u >= nextUpdatedAt) {
+            clearInterval(interval);
+            resolve();
+            return;
+          }
+        }
+
+        if (count > 30) {
+          clearInterval(interval);
+          resolve();
+          return;
+        }
+        count++;
+      }, 200);
+    });
+
   const handleSubmit = async () => {
+    if (isEditMode && !editPostData?.id) { showAlert("수정할 게시글 정보가 없습니다."); return; }
     if (!title) { showAlert("상품명을 입력해주세요."); return; }
     if (!buyPrice) { showAlert("구매 금액을 입력해주세요."); return; }
 
     const priceInt = buyPrice ? parseInt(buyPrice.replace(/,/g, ""), 10) : 0;
     const perPerson = Math.ceil(priceInt / participants);
-    
+
+    let uploadedImages = images;
+    try {
+      uploadedImages = await uploadImagesIfNeeded(images);
+    } catch (e) {
+      if (String(e && e.message) === "NO_USER") {
+        showAlert("로그인이 필요합니다.");
+      } else {
+        showAlert("이미지 업로드에 실패했습니다.");
+      }
+      return;
+    }
+
+    const nextUpdatedAt = new Date().toISOString();
+
     const postData = {
       category,
       title,
@@ -182,14 +291,22 @@ export default function WriteScreen({ navigation, route }) {
       pricePerPerson: perPerson,
       tip: selectedTip,
       maxParticipants: participants,
-      images: images, 
+      images: uploadedImages,
       status: isEditMode ? editPostData.status : "모집중",
       currentParticipants: isEditMode ? editPostData.currentParticipants : 1,
+      updatedAt: nextUpdatedAt,
     };
 
     if (isEditMode) {
-      await updatePost(editPostData.id, postData);
-      navigation.pop(2);
+      try {
+        await updatePost(editPostData.id, postData);
+        await waitForUpdate(editPostData.id, nextUpdatedAt);
+        setAlertMsg("게시글이 성공적으로 수정되었습니다.");
+        setAlertVisible(true);
+      } catch (e) {
+        console.error("수정 오류:", e);
+        showAlert("저장에 실패했습니다.");
+      }
     } else {
       const newPost = {
         id: Date.now().toString(),
@@ -203,6 +320,8 @@ export default function WriteScreen({ navigation, route }) {
 
   const priceInt = buyPrice ? parseInt(buyPrice.replace(/,/g, ""), 10) : 0;
   const perPerson = participants > 0 ? Math.ceil(priceInt / participants) : 0;
+
+  // ✅ A안 기준: "참여자(방장 제외)"가 내는 1인 최종 금액(물건값 + 수고비)
   const finalPerPerson = perPerson + selectedTip;
 
   return (
@@ -237,7 +356,7 @@ export default function WriteScreen({ navigation, route }) {
             </TouchableOpacity>
             {images.map((uri, idx) => (
               <View key={idx} style={styles.imageContainer}>
-                <Image source={{ uri }} style={styles.imagePreview} />
+                <Image source={{ uri: typeof uri === "string" ? uri : uri?.uri }} style={styles.imagePreview} />
                 <TouchableOpacity style={styles.deleteBtn} onPress={() => removeImage(idx)}>
                    <MaterialIcons name="close" size={16} color="white" />
                 </TouchableOpacity>
@@ -299,7 +418,6 @@ export default function WriteScreen({ navigation, route }) {
                             style={styles.dropdownHeader} 
                             onPress={toggleTipDropdown}
                         >
-                            {/* ✅ 수정된 부분: 백틱 대신 문자열 연결 사용 */}
                             <Text style={styles.dropdownValueText}>
                                 {selectedTip === 0 ? "무료봉사" : "+" + selectedTip.toLocaleString() + "원"}
                             </Text>
@@ -423,7 +541,6 @@ export default function WriteScreen({ navigation, route }) {
                   style={[styles.dropdownItem, selectedTip === tip && { backgroundColor: '#333' }]}
                   onPress={() => handleTipChange(tip)}
                 >
-                  {/* ✅ 수정된 부분: 백틱 대신 문자열 연결 사용 */}
                   <Text style={[styles.dropdownItemText, selectedTip === tip && { color: theme.primary, fontWeight: 'bold' }]}>
                     {tip === 0 ? "무료봉사" : "+" + tip.toLocaleString() + "원"}
                   </Text>
@@ -445,7 +562,10 @@ export default function WriteScreen({ navigation, route }) {
         visible={alertVisible} 
         title="알림"
         message={alertMsg} 
-        onConfirm={() => setAlertVisible(false)} 
+        onConfirm={() => {
+          setAlertVisible(false);
+          if (alertMsg.includes("수정되었습니다")) navigation.goBack();
+        }} 
       />
     </View>
   );

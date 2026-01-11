@@ -1,4 +1,10 @@
-﻿import React, { useState, useEffect } from "react";
+function __safeDate(d) {
+  if (!d) return null;
+  if (d instanceof Date) return d;
+  if (typeof d.toDate === "function") return d.toDate();
+  return null;
+}
+import React, { useState, useEffect } from "react";
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator } from "react-native";
 import { theme } from "../../../theme";
 import { ROUTES } from "../../../app/navigation/routes";
@@ -28,7 +34,7 @@ export default function ChatRoomsScreen({ navigation }) {
     if (diff < oneDay) {
       return date.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
     } else {
-      return date.toLocaleDateString("ko-KR", { month: "short", day: "numeric" });
+      return __safeDate(date)?.toLocaleDateString("ko-KR", { month: "short", day: "numeric" });
     }
   };
 

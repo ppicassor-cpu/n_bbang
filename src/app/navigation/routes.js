@@ -8,4 +8,5 @@ export const ROUTES = {
   PROFILE: "Profile",
   CHAT_ROOMS: "ChatRooms",
   CHAT_ROOM: "ChatRoom",
+  FREE_DETAIL: "FreeDetail",
 };

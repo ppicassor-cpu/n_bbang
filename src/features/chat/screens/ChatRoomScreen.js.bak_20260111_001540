@@ -1,16 +1,13 @@
 ﻿import React, { useState, useEffect, useRef } from "react";
-import { 
-  View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet, 
-  KeyboardAvoidingView, Platform, ActivityIndicator, Keyboard, Animated 
-} from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { theme } from "../../../theme";
+import { View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet, KeyboardAvoidingView, Platform, ActivityIndicator } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context"; 
+import { theme } from "./././theme";
 import { MaterialIcons } from "@expo/vector-icons";
-import { useAppContext } from "../../../app/providers/AppContext";
-import { subscribeMessages, sendMessage, markAsRead, leaveRoom, leaveRoomAsOwner } from "../services/chatService";
-import { db } from "../../../firebaseConfig";
-import { doc, getDoc, onSnapshot } from "firebase/firestore";
-import CustomModal from "../../../components/CustomModal";
+import { useAppContext } from "./././app/providers/AppContext";
+import { subscribeMessages, sendMessage, markAsRead, leaveRoom } from "././chat/services/chatService";
+import { db } from "./././firebaseConfig";
+import { doc, getDoc } from "firebase/firestore";
+import CustomModal from "./././components/CustomModal"; // ✅ 커스텀 모달 추가
 
 export default function ChatRoomScreen({ route, navigation }) {
   const { roomId, roomName } = route.params || {};
@@ -21,16 +18,14 @@ export default function ChatRoomScreen({ route, navigation }) {
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(true);
   const [totalParticipants, setTotalParticipants] = useState(0);
-  const [roomOwnerId, setRoomOwnerId] = useState(null);
-  const [isClosed, setIsClosed] = useState(false);
+  
+  // ✅ 나가기 확인 모달 상태
   const [leaveModalVisible, setLeaveModalVisible] = useState(false);
   
-  // ✅ 키보드 높이만큼 여백을 조절하기 위한 애니메이션 값
-  const keyboardHeight = useRef(new Animated.Value(0)).current;
   const flatListRef = useRef(null);
-  const isOwner = !!user?.uid && !!roomOwnerId && user.uid === roomOwnerId;
 
   useEffect(() => {
+    // ✅ 상단 헤더 설정 (나가기 버튼 위치 조정: marginRight 20)
     navigation.setOptions({ 
       title: roomName || "채팅방",
       headerRight: () => (
@@ -43,30 +38,6 @@ export default function ChatRoomScreen({ route, navigation }) {
       )
     });
 
-    // ✅ 키보드 리스너: 키보드가 올라오고 내려갈 때 높이 직접 계산
-    const showSubscription = Keyboard.addListener(
-      Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow",
-      (e) => {
-        Animated.timing(keyboardHeight, {
-          duration: Platform.OS === "ios" ? 250 : 100,
-          toValue: e.endCoordinates.height - (Platform.OS === "ios" ? insets.bottom : 0),
-          useNativeDriver: false,
-        }).start(() => {
-          flatListRef.current?.scrollToEnd({ animated: true });
-        });
-      }
-    );
-    const hideSubscription = Keyboard.addListener(
-      Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide",
-      () => {
-        Animated.timing(keyboardHeight, {
-          duration: Platform.OS === "ios" ? 250 : 100,
-          toValue: 0,
-          useNativeDriver: false,
-        }).start();
-      }
-    );
-
     const fetchRoomInfo = async () => {
         const roomRef = doc(db, "chatRooms", roomId);
         const snap = await getDoc(roomRef);
@@ -76,27 +47,13 @@ export default function ChatRoomScreen({ route, navigation }) {
     };
     fetchRoomInfo();
 
-    const roomRef = doc(db, "chatRooms", roomId);
-    const unsubRoom = onSnapshot(roomRef, (snap) => {
-      if (!snap.exists()) return;
-      const data = snap.data() || {};
-      setTotalParticipants(data.participants?.length || 0);
-      setRoomOwnerId(data.ownerId || null);
-      setIsClosed(!!data.isClosed);
-    });
-
     const unsubscribe = subscribeMessages(roomId, (newMessages) => {
       setMessages(newMessages);
       setLoading(false);
     });
 
-    return () => {
-      showSubscription.remove();
-      hideSubscription.remove();
-      unsubscribe();
-      unsubRoom();
-    };
-  }, [roomId, insets.bottom]);
+    return () => unsubscribe();
+  }, [roomId]);
 
   useEffect(() => {
     if (!user || messages.length === 0) return;
@@ -111,7 +68,6 @@ export default function ChatRoomScreen({ route, navigation }) {
   }, [messages, user]);
 
   const handleSend = async () => {
-    if (isClosed) return;
     if (!text.trim()) return;
     const tempText = text;
     setText(""); 
@@ -124,11 +80,7 @@ export default function ChatRoomScreen({ route, navigation }) {
 
   const handleLeave = async () => {
     try {
-      if (isOwner) {
-        await leaveRoomAsOwner(roomId);
-      } else {
-        await leaveRoom(roomId);
-      }
+      await leaveRoom(roomId);
       setLeaveModalVisible(false);
       navigation.goBack();
     } catch (e) {
@@ -138,7 +90,12 @@ export default function ChatRoomScreen({ route, navigation }) {
   };
 
   const renderItem = ({ item }) => {
-    const isSystemLeave = item.senderId === "system";
+    // ✅ 시스템 퇴장 메시지: 가운데 정렬 + 작고 흐리게 (대화 bubble과 구분)
+    const isSystemLeave =
+      item.senderId === "system" &&
+      typeof item.text === "string" &&
+      item.text.includes("채팅방을 떠났습니다.");
+
     if (isSystemLeave) {
       return (
         <View style={styles.systemMsgContainer}>
@@ -148,9 +105,7 @@ export default function ChatRoomScreen({ route, navigation }) {
     }
 
     const isMy = item.senderId === user?.uid;
-    const timeString = item.createdAt instanceof Date 
-      ? item.createdAt.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })
-      : "";
+    const timeString = item.createdAt.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
     const readCount = item.readBy ? item.readBy.length : 0;
     const unreadCount = totalParticipants - readCount;
 
@@ -175,54 +130,60 @@ export default function ChatRoomScreen({ route, navigation }) {
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: theme.background }}>
-      <Animated.View style={{ flex: 1, paddingBottom: keyboardHeight }}>
-        {loading ? (
-          <View style={styles.center}><ActivityIndicator size="large" color={theme.primary} /></View>
-        ) : (
-          <FlatList
-            ref={flatListRef}
-            data={messages}
-            renderItem={renderItem}
-            keyExtractor={item => item.id}
-            contentContainerStyle={{ padding: 16, paddingBottom: 10 }}
-            onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
-          />
-        )}
-        
-        <View style={[styles.inputContainer, { paddingBottom: Math.max(insets.bottom, 10) }]}>
-          <TextInput
-            style={styles.input}
-            value={text}
-            onChangeText={setText}
-            placeholder="메시지를 입력하세요"
-            placeholderTextColor="grey"
-            returnKeyType="send"
-            onSubmitEditing={handleSend}
-            editable={!isClosed}
-          />
-          <TouchableOpacity onPress={handleSend} style={styles.sendBtn} disabled={!text.trim() || isClosed}>
-            <MaterialIcons name="send" size={24} color={text.trim() ? "black" : "#555"} />
-          </TouchableOpacity>
-        </View>
-      </Animated.View>
+    <KeyboardAvoidingView 
+      style={styles.container} 
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0}
+    >
+      {loading ? (
+        <View style={styles.center}><ActivityIndicator size="large" color={theme.primary} /></View>
+      ) : (
+        <FlatList
+          ref={flatListRef}
+          data={messages}
+          renderItem={renderItem}
+          keyExtractor={item => item.id}
+          contentContainerStyle={{ padding: 16, paddingBottom: 20 }}
+          onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
+        />
+      )}
+      
+      <View style={[styles.inputContainer, { paddingBottom: Math.max(insets.bottom, 15) }]}>
+        <TextInput
+          style={styles.input}
+          value={text}
+          onChangeText={setText}
+          placeholder="메시지를 입력하세요"
+          placeholderTextColor="grey"
+          returnKeyType="send"
+          onSubmitEditing={handleSend}
+        />
+        <TouchableOpacity onPress={handleSend} style={styles.sendBtn} disabled={!text.trim()}>
+          <MaterialIcons name="send" size={24} color={text.trim() ? "black" : "#555"} />
+        </TouchableOpacity>
+      </View>
 
+      {/* ✅ 기존 나가기 Alert를 커스텀 모달로 교체 */}
       <CustomModal
         visible={leaveModalVisible}
         title="채팅방 나가기"
-        message={isOwner ? "방장이 나가면 채팅이 종료됩니다. 계속하시겠습니까?" : "방에서 나가시겠습니까?"}
+        message="방에서 나가시겠습니까? 목록에서 삭제되며 대화에 참여할 수 없습니다."
         type="confirm"
         onConfirm={handleLeave}
         onCancel={() => setLeaveModalVisible(false)}
       />
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: theme.background },
   center: { flex: 1, justifyContent: "center", alignItems: "center" },
+
+  // ✅ 시스템 메시지 스타일(가운데/작게/흐리게)
   systemMsgContainer: { marginVertical: 10, alignItems: "center" },
   systemMsgText: { color: "#666", fontSize: 12, textAlign: "center" },
+
   msgContainer: { marginVertical: 6 },
   myMsgContainer: { alignItems: "flex-end" },
   otherMsgContainer: { alignItems: "flex-start" },
@@ -235,7 +196,7 @@ const styles = StyleSheet.create({
   otherMsgText: { color: "white" },
   timeText: { color: "#666", fontSize: 10, marginTop: 2 },
   unreadCountText: { fontSize: 11, fontWeight: "bold", color: "#D0FFD0", marginBottom: 1 },
-  inputContainer: { flexDirection: "row", padding: 10, backgroundColor: theme.cardBg, alignItems: "center" },
+  inputContainer: { flexDirection: "row", padding: 10, borderTopWidth: 1, borderTopColor: "#222", backgroundColor: theme.cardBg, alignItems: "center" },
   input: { flex: 1, backgroundColor: "#111", color: "white", borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10, marginRight: 10, borderWidth: 1, borderColor: "#333" },
   sendBtn: { backgroundColor: theme.primary, width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center" },
 });

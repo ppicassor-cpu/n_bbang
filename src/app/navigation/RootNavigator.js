@@ -1,4 +1,5 @@
 ﻿import React from "react";
+import { View } from "react-native";
 import { NavigationContainer, DarkTheme } from "@react-navigation/native";
 import { createStackNavigator } from "@react-navigation/stack";
 import { MaterialIcons } from "@expo/vector-icons";
@@ -8,8 +9,9 @@ import { StatusBar } from "expo-status-bar";
 import LoginScreen from "../../features/auth/screens/LoginScreen";
 import HomeScreen from "../../features/feed/screens/HomeScreen";
 import WriteScreen from "../../features/post/screens/WriteScreen";
-import WriteFreeScreen from "../../features/post/screens/WriteFreeScreen"; // ✅ 무료나눔 화면 추가
+import WriteFreeScreen from "../../features/post/screens/WriteFreeScreen"; 
 import DetailScreen from "../../features/post/screens/DetailScreen";
+import FreeDetailScreen from "../../features/post/screens/FreeDetailScreen"; 
 import ProfileScreen from "../../features/profile/screens/ProfileScreen";
 import ChatRoomsScreen from "../../features/chat/screens/ChatRoomsScreen";
 import ChatRoomScreen from "../../features/chat/screens/ChatRoomScreen";
@@ -37,27 +39,27 @@ export default function RootNavigator() {
           headerStyle: { backgroundColor: "black", shadowColor: "transparent" },
           headerTintColor: "white",
           headerTitleStyle: { fontWeight: "bold" },
+          headerTitleAlign: "center",
           cardStyle: { backgroundColor: "black" },
           headerBackTitleVisible: false,
           headerBackTitle: "",
+          headerRight: () => <View style={{ width: 45 }} />, 
           headerBackImage: ({ tintColor }) => (
             <MaterialIcons
               name="arrow-back-ios-new"
               size={22}
               color={tintColor || "white"}
-              style={{ marginLeft: 10 }}
+              style={{ marginLeft: 10, width: 35 }}
             />
           ),
         }}
       >
         <Stack.Screen name={ROUTES.LOGIN} component={LoginScreen} options={{ headerShown: false }} />
         <Stack.Screen name={ROUTES.HOME} component={HomeScreen} options={{ headerShown: false }} />
-        
         <Stack.Screen name={ROUTES.WRITE} component={WriteScreen} options={{ title: "N빵 모집하기" }} />
-        {/* ✅ 무료나눔 스택 등록 */}
         <Stack.Screen name={ROUTES.WRITE_FREE} component={WriteFreeScreen} options={{ title: "무료나눔 하기" }} />
-        
         <Stack.Screen name={ROUTES.DETAIL} component={DetailScreen} options={{ title: "상세 정보" }} />
+        <Stack.Screen name={ROUTES.FREE_DETAIL} component={FreeDetailScreen} options={{ title: "무료나눔 상세" }} />
         <Stack.Screen name={ROUTES.PROFILE} component={ProfileScreen} options={{ title: "내 정보" }} />
         <Stack.Screen name={ROUTES.CHAT_ROOMS} component={ChatRoomsScreen} options={{ title: "채팅" }} />
         <Stack.Screen name={ROUTES.CHAT_ROOM} component={ChatRoomScreen} options={{ title: "채팅방" }} />
