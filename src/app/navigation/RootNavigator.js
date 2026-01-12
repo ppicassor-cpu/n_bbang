@@ -15,6 +15,12 @@ import FreeDetailScreen from "../../features/post/screens/FreeDetailScreen";
 import ProfileScreen from "../../features/profile/screens/ProfileScreen";
 import ChatRoomsScreen from "../../features/chat/screens/ChatRoomsScreen";
 import ChatRoomScreen from "../../features/chat/screens/ChatRoomScreen";
+import MyListingsScreen from "../../features/profile/screens/MyListingsScreen"; 
+import PremiumScreen from "../../features/profile/screens/PremiumScreen";
+import AdminReportScreen from "../../features/profile/screens/AdminReportScreen";
+
+// ✅ [추가] 알림 화면 import
+import NotificationScreen from "../../features/profile/screens/NotificationScreen";
 
 const Stack = createStackNavigator();
 
@@ -63,6 +69,35 @@ export default function RootNavigator() {
         <Stack.Screen name={ROUTES.PROFILE} component={ProfileScreen} options={{ title: "내 정보" }} />
         <Stack.Screen name={ROUTES.CHAT_ROOMS} component={ChatRoomsScreen} options={{ title: "채팅" }} />
         <Stack.Screen name={ROUTES.CHAT_ROOM} component={ChatRoomScreen} options={{ title: "채팅방" }} />
+
+        {/* 프리미엄 화면 */}
+        <Stack.Screen
+          name={ROUTES.PREMIUM}
+          component={PremiumScreen}
+          options={{ title: "프리미엄" }}
+        />
+        
+        {/* 내가 쓴 글 관리 */}
+        <Stack.Screen 
+          name={ROUTES.MY_LISTINGS} 
+          component={MyListingsScreen} 
+          options={{ headerShown: false }} 
+        />
+
+        {/* 관리자 신고 내역 화면 */}
+        <Stack.Screen 
+          name={ROUTES.ADMIN_REPORT} 
+          component={AdminReportScreen} 
+          options={{ headerShown: false }} 
+        />
+
+        {/* ✅ [추가] 알림 센터 화면 (커스텀 헤더 사용으로 headerShown: false) */}
+        <Stack.Screen 
+          name={ROUTES.NOTIFICATION} 
+          component={NotificationScreen} 
+          options={{ headerShown: false }} 
+        />
+
       </Stack.Navigator>
     </NavigationContainer>
   );

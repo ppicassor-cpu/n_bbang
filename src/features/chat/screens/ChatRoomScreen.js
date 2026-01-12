@@ -1,7 +1,7 @@
 ﻿import React, { useState, useEffect, useRef } from "react";
 import { 
   View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet, 
-  KeyboardAvoidingView, Platform, ActivityIndicator, Keyboard, Animated 
+  KeyboardAvoidingView, Platform, ActivityIndicator, Keyboard, Animated, Alert
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { theme } from "../../../theme";
@@ -14,7 +14,8 @@ import CustomModal from "../../../components/CustomModal";
 
 export default function ChatRoomScreen({ route, navigation }) {
   const { roomId, roomName } = route.params || {};
-  const { user } = useAppContext();
+  // ✅ [수정] 차단/신고 관련 함수 및 목록 가져오기
+  const { user, reportUser, blockUser, blockedUsers } = useAppContext();
   const insets = useSafeAreaInsets(); 
   
   const [messages, setMessages] = useState([]);
@@ -23,27 +24,37 @@ export default function ChatRoomScreen({ route, navigation }) {
   const [totalParticipants, setTotalParticipants] = useState(0);
   const [roomOwnerId, setRoomOwnerId] = useState(null);
   const [isClosed, setIsClosed] = useState(false);
+  
   const [leaveModalVisible, setLeaveModalVisible] = useState(false);
+  
+  // ✅ [신규] 헤더 메뉴 상태
+  const [isHeaderMenuOpen, setIsHeaderMenuOpen] = useState(false);
   
   // ✅ 키보드 높이만큼 여백을 조절하기 위한 애니메이션 값
   const keyboardHeight = useRef(new Animated.Value(0)).current;
   const flatListRef = useRef(null);
   const isOwner = !!user?.uid && !!roomOwnerId && user.uid === roomOwnerId;
 
+  // ✅ [핵심] 차단된 사용자의 메시지 필터링
+  const filteredMessages = messages.filter(msg => {
+    // 시스템 메시지는 보여줌 OR 차단 목록에 없는 유저의 메시지만 보여줌
+    return msg.senderId === "system" || !blockedUsers.includes(msg.senderId);
+  });
+
   useEffect(() => {
     navigation.setOptions({ 
       title: roomName || "채팅방",
       headerRight: () => (
         <TouchableOpacity 
-          onPress={() => setLeaveModalVisible(true)} 
-          style={{ marginRight: 20 }} 
+          onPress={() => setIsHeaderMenuOpen(prev => !prev)} 
+          style={{ marginRight: 10, padding: 5 }} 
         >
-          <MaterialIcons name="logout" size={24} color={theme.danger} />
+          <MaterialIcons name="more-vert" size={26} color="white" />
         </TouchableOpacity>
       )
     });
 
-    // ✅ 키보드 리스너: 키보드가 올라오고 내려갈 때 높이 직접 계산
+    // ✅ 키보드 리스너
     const showSubscription = Keyboard.addListener(
       Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow",
       (e) => {
@@ -137,6 +148,37 @@ export default function ChatRoomScreen({ route, navigation }) {
     }
   };
 
+  // ✅ [신규] 신고하기 핸들러
+  const handleReportRoom = () => {
+    setIsHeaderMenuOpen(false);
+    Alert.alert("신고하기", "이 채팅방을 부적절한 콘텐츠로 신고하시겠습니까?", [
+      { text: "취소", style: "cancel" },
+      { 
+        text: "신고", 
+        onPress: () => reportUser(roomOwnerId, roomId, "부적절한 채팅방", "chat") 
+      }
+    ]);
+  };
+
+  // ✅ [신규] 차단하고 나가기 핸들러
+  const handleBlockAndLeave = () => {
+    setIsHeaderMenuOpen(false);
+    if (!roomOwnerId || roomOwnerId === user.uid) return;
+
+    Alert.alert("차단하고 나가기", "방장을 차단하고 채팅방을 나가시겠습니까?", [
+      { text: "취소", style: "cancel" },
+      { 
+        text: "차단 및 나가기", 
+        style: "destructive",
+        onPress: async () => {
+          await blockUser(roomOwnerId); // 방장 차단
+          await leaveRoom(roomId);    // 방 나가기
+          navigation.goBack();
+        }
+      }
+    ]);
+  };
+
   const renderItem = ({ item }) => {
     const isSystemLeave = item.senderId === "system";
     if (isSystemLeave) {
@@ -176,13 +218,41 @@ export default function ChatRoomScreen({ route, navigation }) {
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.background }}>
+      {/* ✅ 헤더 드롭다운 메뉴 */}
+      {isHeaderMenuOpen && (
+        <TouchableOpacity 
+          style={styles.menuOverlay} 
+          activeOpacity={1} 
+          onPress={() => setIsHeaderMenuOpen(false)}
+        >
+          <View style={[styles.menuContainer, { top: insets.top + 50 }]}>
+            <TouchableOpacity style={styles.menuItem} onPress={() => { setIsHeaderMenuOpen(false); setLeaveModalVisible(true); }}>
+              <MaterialIcons name="logout" size={20} color={theme.danger} />
+              <Text style={[styles.menuText, { color: theme.danger }]}>나가기</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity style={styles.menuItem} onPress={handleReportRoom}>
+              <MaterialIcons name="report-problem" size={20} color="#FFD700" />
+              <Text style={[styles.menuText, { color: "#FFD700" }]}>신고하기</Text>
+            </TouchableOpacity>
+
+            {!isOwner && (
+              <TouchableOpacity style={styles.menuItem} onPress={handleBlockAndLeave}>
+                <MaterialIcons name="block" size={20} color="#AAA" />
+                <Text style={[styles.menuText, { color: "#AAA" }]}>차단하고 나가기</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </TouchableOpacity>
+      )}
+
       <Animated.View style={{ flex: 1, paddingBottom: keyboardHeight }}>
         {loading ? (
           <View style={styles.center}><ActivityIndicator size="large" color={theme.primary} /></View>
         ) : (
           <FlatList
             ref={flatListRef}
-            data={messages}
+            data={filteredMessages} // ✅ 필터링된 메시지 사용
             renderItem={renderItem}
             keyExtractor={item => item.id}
             contentContainerStyle={{ padding: 16, paddingBottom: 10 }}
@@ -238,4 +308,10 @@ const styles = StyleSheet.create({
   inputContainer: { flexDirection: "row", padding: 10, backgroundColor: theme.cardBg, alignItems: "center" },
   input: { flex: 1, backgroundColor: "#111", color: "white", borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10, marginRight: 10, borderWidth: 1, borderColor: "#333" },
   sendBtn: { backgroundColor: theme.primary, width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center" },
+  
+  // ✅ [신규] 메뉴 스타일
+  menuOverlay: { position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, zIndex: 999 },
+  menuContainer: { position: 'absolute', right: 10, backgroundColor: '#222', borderRadius: 8, padding: 5, elevation: 5, borderWidth: 1, borderColor: '#333', minWidth: 150 },
+  menuItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 10, borderBottomWidth: 0.5, borderBottomColor: '#333' },
+  menuText: { fontSize: 14, fontWeight: 'bold', marginLeft: 10 },
 });

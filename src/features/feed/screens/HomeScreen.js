@@ -1,7 +1,7 @@
 ﻿import React, { useState } from "react";
 import { View, Text, FlatList, TouchableOpacity, Image, StyleSheet } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
-import { MaterialIcons } from "@expo/vector-icons";
+import { MaterialIcons, Ionicons } from "@expo/vector-icons"; 
 import { theme } from "../../../theme";
 import { ROUTES } from "../../../app/navigation/routes";
 import { useAppContext } from "../../../app/providers/AppContext";
@@ -10,14 +10,34 @@ import CustomModal from "../../../components/CustomModal";
 const CATEGORIES = ["전체", "마트/식품", "생활용품", "기타", "무료나눔"];
 
 export default function HomeScreen({ navigation }) {
-  const { posts, currentLocation, myCoords, getDistanceFromLatLonInKm } = useAppContext();
+  // ✅ loadMorePosts 함수 가져오기
+  const { posts, currentLocation, myCoords, getDistanceFromLatLonInKm, loadMorePosts } = useAppContext();
   const insets = useSafeAreaInsets();
   
   const [selectedCategory, setSelectedCategory] = useState("전체");
   const [writeModalVisible, setWriteModalVisible] = useState(false);
 
-  const filteredPosts = posts.filter(post => {
+  /* =========================
+     ✅ 1시간 부스트 최상단 정렬 로직
+  ========================= */
+  const now = Date.now();
+
+  const boostedPosts = [];
+  const normalPosts = [];
+
+  posts.forEach((post) => {
+    if (post.boostUntil && new Date(post.boostUntil).getTime() > now) {
+      boostedPosts.push(post);
+    } else {
+      normalPosts.push(post);
+    }
+  });
+
+  const sortedPosts = [...boostedPosts, ...normalPosts];
+
+  const filteredPosts = sortedPosts.filter(post => {
     if (!myCoords || !post.coords) return true;
+
     const dist = getDistanceFromLatLonInKm(
       myCoords.latitude, myCoords.longitude,
       post.coords.latitude, post.coords.longitude
@@ -33,12 +53,8 @@ export default function HomeScreen({ navigation }) {
   const renderItem = ({ item }) => {
     const isFree = item.category === "무료나눔";
 
-    // ✅ 추가: N빵 글이 "마감" 상태면 리스트에서도 마감 처리
     const isNbbangClosed = !isFree && item.status === "마감";
-
-    // ✅ 수정: 인원 마감 + status 마감 둘 다 반영
     const isFull = !isFree && (item.currentParticipants >= item.maxParticipants || isNbbangClosed);
-
     const isClosed = isFree && item.status === "나눔완료";
 
     let distText = "";
@@ -57,6 +73,7 @@ export default function HomeScreen({ navigation }) {
     return (
       <TouchableOpacity 
         style={[styles.card, isClosed && { opacity: 0.6 }]} 
+        activeOpacity={0.7}
         onPress={() => {
           if (item.category === "무료나눔") {
             navigation.navigate(ROUTES.FREE_DETAIL, { post: item });
@@ -67,7 +84,14 @@ export default function HomeScreen({ navigation }) {
       >
         <View style={styles.imageBox}>
           {item.images && item.images.length > 0 ? (
-            <Image source={{ uri: item.images[0] }} style={styles.image} />
+            <Image 
+              source={{ uri: item.images[0] }} 
+              style={styles.image} 
+              // ✅ [이미지 최적화] 리사이징 및 메모리 관리
+              resizeMode="cover"
+              resizeMethod="resize" // 안드로이드 메모리 최적화
+              fadeDuration={0} // 리스트 스크롤 시 깜빡임 줄이기
+            />
           ) : (
             <MaterialIcons name="receipt-long" size={40} color="grey" />
           )}
@@ -93,10 +117,12 @@ export default function HomeScreen({ navigation }) {
             )}
           </View>
 
-          <Text style={[
-            styles.status,
-            { color: (isFull || isClosed) ? theme.danger : theme.primary }
-          ]}>
+          <Text
+            style={[
+              styles.status,
+              { color: (isFull || isClosed) ? theme.danger : theme.primary }
+            ]}
+          >
             {isFree 
               ? (item.status || "나눔중")
               : (isNbbangClosed ? "참여마감" : `${item.currentParticipants}/${item.maxParticipants}명 참여중`)}
@@ -108,18 +134,22 @@ export default function HomeScreen({ navigation }) {
 
   return (
     <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
+      {/* 헤더 */}
       <View style={styles.header}>
         <Text style={styles.location}>{currentLocation} </Text>
         <View style={{ flexDirection: "row", gap: 14, alignItems: "center" }}>
+          
           <TouchableOpacity onPress={() => navigation.navigate(ROUTES.CHAT_ROOMS)}>
-            <MaterialIcons name="forum" size={26} color="white" />
+            <Ionicons name="chatbubbles-outline" size={26} color="white" />
           </TouchableOpacity>
+
           <TouchableOpacity onPress={() => navigation.navigate(ROUTES.PROFILE)}>
             <MaterialIcons name="account-circle" size={30} color="white" />
           </TouchableOpacity>
         </View>
       </View>
 
+      {/* 카테고리 탭 */}
       <View style={styles.categoryRow}>
         {CATEGORIES.map((cat) => (
           <TouchableOpacity 
@@ -130,29 +160,46 @@ export default function HomeScreen({ navigation }) {
               selectedCategory === cat && styles.categoryBtnActive
             ]}
           >
-            <Text style={[
-              styles.categoryText, 
-              selectedCategory === cat && styles.categoryTextActive
-            ]}>
+            <Text
+              style={[
+                styles.categoryText, 
+                selectedCategory === cat && styles.categoryTextActive
+              ]}
+            >
               {cat}
             </Text>
           </TouchableOpacity>
         ))}
       </View>
 
+      {/* 게시글 리스트 (최적화 적용) */}
       <FlatList
         data={filteredPosts}
         renderItem={renderItem}
         keyExtractor={(item) => item.id}
         contentContainerStyle={{ padding: 16 }}
-        ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: "#333", marginVertical: 16 }} />}
+        ItemSeparatorComponent={() => (
+          <View style={{ height: 1, backgroundColor: "#333", marginVertical: 16 }} />
+        )}
         ListEmptyComponent={
           <View style={{ alignItems: "center", marginTop: 50 }}>
             <Text style={{ color: "grey" }}>해당 카테고리의 글이 없습니다.</Text>
           </View>
         }
+        // ✅ [핵심] 무한 스크롤 및 성능 최적화 옵션
+        onEndReached={() => {
+          // '전체' 보기일 때만 더 불러오기 (필터링 중에는 헷갈릴 수 있음)
+          if (selectedCategory === "전체") {
+             loadMorePosts();
+          }
+        }}
+        onEndReachedThreshold={0.5} // 스크롤이 절반 남았을 때 미리 로딩
+        initialNumToRender={6}      // 처음에 렌더링할 아이템 수 (화면 높이 고려)
+        windowSize={5}              // 렌더링 창 크기 (작을수록 메모리 절약)
+        removeClippedSubviews={true} // 화면 밖 아이템 메모리 해제 (안드로이드 필수)
       />
 
+      {/* 글쓰기 버튼 */}
       <TouchableOpacity 
         style={[styles.fab, { bottom: 20 + insets.bottom }]} 
         onPress={() => setWriteModalVisible(true)}
@@ -160,6 +207,7 @@ export default function HomeScreen({ navigation }) {
         <MaterialIcons name="post-add" size={30} color="black" />
       </TouchableOpacity>
 
+      {/* 글쓰기 선택 모달 */}
       <CustomModal
         visible={writeModalVisible}
         title="글쓰기 선택"

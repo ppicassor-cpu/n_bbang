@@ -48,6 +48,11 @@ export const ensureRoom = async (roomId, roomName, type, ownerId) => {
     const updateData = {};
     const participantsToAdd = [];
 
+    // ✅ [수정됨] 기존 방이라도 타입(type)이 다르면 업데이트 (예: 'free' 아이콘 적용을 위해)
+    if (type && data.type !== type) {
+      updateData.type = type;
+    }
+
     // ✅ [핵심 보강] 이미 participants에 있어도 joinedAt_* 이 없으면 반드시 채워준다.
     if (!data[`joinedAt_${userId}`]) {
       updateData[`joinedAt_${userId}`] = serverTimestamp();

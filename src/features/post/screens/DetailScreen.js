@@ -1,19 +1,21 @@
 ﻿import React, { useState, useEffect, useMemo } from "react";
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Image, Dimensions, ActivityIndicator } from "react-native";
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Image, Dimensions, ActivityIndicator, Alert } from "react-native";
 import MapView, { Marker } from "react-native-maps";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { MaterialIcons } from "@expo/vector-icons";
+
 import { theme } from "../../../theme";
 import { ROUTES } from "../../../app/navigation/routes";
 import { useAppContext } from "../../../app/providers/AppContext";
 import { ensureRoom } from "../../chat/services/chatService";
 import CustomModal from "../../../components/CustomModal";
-import { MaterialIcons } from "@expo/vector-icons";
 
 const SCREEN_WIDTH = Dimensions.get("window").width;
 
 export default function DetailScreen({ route, navigation }) {
   const { post: initialPost } = route.params || {};
-  const { user, deletePost, posts, updatePost } = useAppContext(); 
+  // ✅ [수정] 신고(reportUser), 차단(blockUser) 함수 추가 가져오기
+  const { user, deletePost, posts, updatePost, reportUser, blockUser } = useAppContext(); 
   const insets = useSafeAreaInsets();
   
   const [post, setPost] = useState(initialPost || null);
@@ -46,11 +48,7 @@ export default function DetailScreen({ route, navigation }) {
   }
 
   const isMyPost = user && user.uid === post.ownerId;
-
-  // ✅ 추가: 방장이 status를 "마감"으로 바꾸면 다른 사람은 참여 버튼 비활성화/텍스트 변경
   const isClosed = post.status === "마감";
-
-  // ✅ 수정: 기존 인원 마감 조건 + status 마감 조건을 함께 반영
   const isFull = post.currentParticipants >= post.maxParticipants || isClosed;
 
   const roomId = `post_${post.id}`;
@@ -99,6 +97,34 @@ export default function DetailScreen({ route, navigation }) {
     }
   };
 
+  // ✅ [신규] 신고 핸들러
+  const handleReport = () => {
+    setIsDropdownOpen(false);
+    Alert.alert("신고하기", "이 게시글을 부적절한 콘텐츠로 신고하시겠습니까?", [
+      { text: "취소", style: "cancel" },
+      { 
+        text: "신고", 
+        onPress: () => reportUser(post.ownerId, post.id, "부적절한 게시글(N빵)", "post") 
+      }
+    ]);
+  };
+
+  // ✅ [신규] 차단 핸들러
+  const handleBlock = () => {
+    setIsDropdownOpen(false);
+    Alert.alert("차단하기", "이 사용자를 차단하시겠습니까?\n차단 후에는 이 사용자의 글이 보이지 않습니다.", [
+      { text: "취소", style: "cancel" },
+      { 
+        text: "차단", 
+        style: "destructive",
+        onPress: async () => {
+          await blockUser(post.ownerId);
+          navigation.goBack(); // 차단했으니 글 안 보이게 나감
+        }
+      }
+    ]);
+  };
+
   const handleScroll = (event) => {
     const slideSize = event.nativeEvent.layoutMeasurement.width;
     const index = event.nativeEvent.contentOffset.x / slideSize;
@@ -117,6 +143,7 @@ export default function DetailScreen({ route, navigation }) {
   return (
     <View style={styles.container}>
       <ScrollView contentContainerStyle={{ paddingBottom: 100 }}>
+        {/* 이미지 섹션 */}
         <View style={styles.heroContainer}>
           {post.images && post.images.length > 0 ? (
             <>
@@ -139,30 +166,53 @@ export default function DetailScreen({ route, navigation }) {
         <View style={styles.body}>
           <View style={styles.titleRow}>
             <Text style={styles.title} numberOfLines={1}>{post.title}</Text>
+            
             <View style={styles.dropdownContainer}>
-              <TouchableOpacity 
-                style={[styles.statusBtn, isFull && { borderColor: theme.danger }]}
-                onPress={() => isMyPost && setIsDropdownOpen(!isDropdownOpen)}
-                disabled={!isMyPost}
-              >
-                <Text style={[styles.statusBtnText, isFull && { color: theme.danger }]}>
-                  {post.status || "모집중"}
-                </Text>
-                {isMyPost && <MaterialIcons name={isDropdownOpen ? "arrow-drop-up" : "arrow-drop-down"} size={20} color="white" />}
-              </TouchableOpacity>
+              {/* ✅ [수정] 내 글이면 상태버튼, 남의 글이면 메뉴(점 세개) 버튼 */}
+              {isMyPost ? (
+                <TouchableOpacity 
+                  style={[styles.statusBtn, isFull && { borderColor: theme.danger }]}
+                  onPress={() => setIsDropdownOpen(!isDropdownOpen)}
+                >
+                  <Text style={[styles.statusBtnText, isFull && { color: theme.danger }]}>
+                    {post.status || "모집중"}
+                  </Text>
+                  <MaterialIcons name={isDropdownOpen ? "arrow-drop-up" : "arrow-drop-down"} size={20} color="white" />
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity style={{ padding: 5 }} onPress={() => setIsDropdownOpen(!isDropdownOpen)}>
+                  <MaterialIcons name="more-vert" size={24} color="#888" />
+                </TouchableOpacity>
+              )}
 
+              {/* ✅ [수정] 드롭다운 메뉴 (분기 처리) */}
               {isDropdownOpen && (
-                <View style={styles.dropdownMenu}>
-                  {["모집중", "마감"].map((s) => (
-                    <TouchableOpacity key={s} style={styles.menuItem} onPress={() => setTempStatus(s)}>
-                      <Text style={[styles.menuText, tempStatus === s && { color: theme.primary }]}>{s}</Text>
-                      {tempStatus === s && <MaterialIcons name="check" size={16} color={theme.primary} />}
-                    </TouchableOpacity>
-                  ))}
-                  {tempStatus !== post.status && (
-                    <TouchableOpacity style={styles.saveBtn} onPress={handleStatusUpdate} disabled={loading}>
-                      {loading ? <ActivityIndicator size="small" color="black" /> : <Text style={styles.saveBtnText}>변경 확인</Text>}
-                    </TouchableOpacity>
+                <View style={[styles.dropdownMenu, !isMyPost && { width: 160 }]}>
+                  {isMyPost ? (
+                    // 1. 내 글일 때: 상태 변경
+                    <>
+                      {["모집중", "마감"].map((s) => (
+                        <TouchableOpacity key={s} style={styles.menuItem} onPress={() => setTempStatus(s)}>
+                          <Text style={[styles.menuText, tempStatus === s && { color: theme.primary }]}>{s}</Text>
+                          {tempStatus === s && <MaterialIcons name="check" size={16} color={theme.primary} />}
+                        </TouchableOpacity>
+                      ))}
+                      {tempStatus !== post.status && (
+                        <TouchableOpacity style={styles.saveBtn} onPress={handleStatusUpdate} disabled={loading}>
+                          {loading ? <ActivityIndicator size="small" color="black" /> : <Text style={styles.saveBtnText}>변경 확인</Text>}
+                        </TouchableOpacity>
+                      )}
+                    </>
+                  ) : (
+                    // 2. 남의 글일 때: 신고/차단
+                    <>
+                      <TouchableOpacity style={styles.menuItem} onPress={handleReport}>
+                        <Text style={{ color: theme.danger, fontSize: 14 }}>🚨 신고하기</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity style={[styles.menuItem, { borderBottomWidth: 0 }]} onPress={handleBlock}>
+                        <Text style={{ color: "#AAA", fontSize: 14 }}>🚫 이 사용자 차단</Text>
+                      </TouchableOpacity>
+                    </>
                   )}
                 </View>
               )}
@@ -176,7 +226,7 @@ export default function DetailScreen({ route, navigation }) {
             <Text style={styles.infoValue}>{post.currentParticipants} / {post.maxParticipants}명</Text>
           </View>
 
-          {/* 예상 계산서 - 만남 장소 위 */}
+          {/* 예상 계산서 */}
           <View style={styles.receipt}>
             <View style={{ flexDirection: "row", justifyContent: "center", marginBottom: 16 }}>
               <Text style={{ fontSize: 18 }}>🧾 </Text>
@@ -209,6 +259,7 @@ export default function DetailScreen({ route, navigation }) {
         </View>
       </ScrollView>
 
+      {/* 하단 고정 바 */}
       <View style={[styles.bottomBar, { paddingBottom: Math.max(insets.bottom, 20) + 20 }]}>
         <View>
           <Text style={{ color: "#888", fontSize: 12 }}>1인당 금액</Text>

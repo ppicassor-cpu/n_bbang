@@ -1,19 +1,21 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Image, Dimensions, ActivityIndicator } from "react-native";
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Image, Dimensions, Alert } from "react-native";
 import MapView, { Marker } from "react-native-maps";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { MaterialIcons } from "@expo/vector-icons";
+
 import { theme } from "../../../theme";
 import { ROUTES } from "../../../app/navigation/routes";
 import { useAppContext } from "../../../app/providers/AppContext";
 import { ensureRoom } from "../../chat/services/chatService";
 import CustomModal from "../../../components/CustomModal";
-import { MaterialIcons } from "@expo/vector-icons";
 
 const SCREEN_WIDTH = Dimensions.get("window").width;
 
 export default function FreeDetailScreen({ route, navigation }) {
   const { post: initialPost } = route.params || {};
-  const { user, deletePost, posts, updatePost } = useAppContext(); 
+  // ✅ [수정] 신고(reportUser), 차단(blockUser) 함수 추가 가져오기
+  const { user, deletePost, posts, updatePost, reportUser, blockUser } = useAppContext(); 
   const insets = useSafeAreaInsets();
   
   const [post, setPost] = useState(initialPost || null);
@@ -21,6 +23,8 @@ export default function FreeDetailScreen({ route, navigation }) {
   
   const [deleteModalVisible, setDeleteModalVisible] = useState(false);
   const [statusModalVisible, setStatusModalVisible] = useState(false);
+  
+  // 드롭다운 메뉴 상태 (내 글일 땐 상태변경, 남의 글일 땐 신고/차단 메뉴)
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [tempStatus, setTempStatus] = useState("");
   const [loading, setLoading] = useState(false);
@@ -54,13 +58,42 @@ export default function FreeDetailScreen({ route, navigation }) {
 
   const handleDelete = async () => {
     await deletePost(post.id);
+    setDeleteModalVisible(false);
     navigation.goBack();
+  };
+
+  // ✅ [신규] 신고 핸들러
+  const handleReport = () => {
+    setIsDropdownOpen(false);
+    Alert.alert("신고하기", "이 게시글을 부적절한 콘텐츠로 신고하시겠습니까?", [
+      { text: "취소", style: "cancel" },
+      { 
+        text: "신고", 
+        onPress: () => reportUser(post.ownerId, post.id, "부적절한 게시글(무료나눔)", "post") 
+      }
+    ]);
+  };
+
+  // ✅ [신규] 차단 핸들러
+  const handleBlock = () => {
+    setIsDropdownOpen(false);
+    Alert.alert("차단하기", "이 사용자를 차단하시겠습니까?\n차단 후에는 이 사용자의 글이 보이지 않습니다.", [
+      { text: "취소", style: "cancel" },
+      { 
+        text: "차단", 
+        style: "destructive",
+        onPress: async () => {
+          await blockUser(post.ownerId);
+          navigation.goBack(); // 차단 후 해당 글 안 보이게 뒤로가기
+        }
+      }
+    ]);
   };
 
   const onPressChat = () => {
     if (isClosed) return;
     const roomId = `post_${post.id}`;
-    ensureRoom(roomId, post.title, "group", post.ownerId);
+    ensureRoom(roomId, post.title, "free", post.ownerId);
     navigation.navigate(ROUTES.CHAT_ROOM, { roomId, roomName: post.title });
   };
 
@@ -87,25 +120,47 @@ export default function FreeDetailScreen({ route, navigation }) {
         <View style={styles.body}>
           <View style={styles.titleRow}>
             <Text style={styles.title}>{post.title}</Text>
-            {isMyPost && (
+            
+            {/* ✅ [수정] 내 글이면 상태변경 버튼, 남의 글이면 메뉴(점 세개) 버튼 노출 */}
+            {isMyPost ? (
               <TouchableOpacity style={styles.statusBtn} onPress={() => setIsDropdownOpen(!isDropdownOpen)}>
                 <Text style={[styles.statusBtnText, isClosed && { color: theme.danger }]}>{post.status || "나눔중"}</Text>
                 <MaterialIcons name="arrow-drop-down" size={20} color="white" />
               </TouchableOpacity>
+            ) : (
+              <TouchableOpacity style={{ padding: 5 }} onPress={() => setIsDropdownOpen(!isDropdownOpen)}>
+                <MaterialIcons name="more-vert" size={24} color="#888" />
+              </TouchableOpacity>
             )}
           </View>
 
+          {/* ✅ [수정] 드롭다운 메뉴 내용 분기 (내 글 vs 남의 글) */}
           {isDropdownOpen && (
             <View style={styles.dropdown}>
-              {["나눔중", "나눔완료"].map(s => (
-                <TouchableOpacity key={s} style={styles.dropdownItem} onPress={() => setTempStatus(s)}>
-                  <Text style={{ color: tempStatus === s ? theme.primary : "white" }}>{s}</Text>
-                </TouchableOpacity>
-              ))}
-              {tempStatus !== post.status && (
-                <TouchableOpacity style={styles.saveBtn} onPress={handleStatusUpdate}>
-                  <Text style={styles.saveBtnText}>변경 확인</Text>
-                </TouchableOpacity>
+              {isMyPost ? (
+                // 1. 내 글일 때: 상태 변경 메뉴
+                <>
+                  {["나눔중", "나눔완료"].map(s => (
+                    <TouchableOpacity key={s} style={styles.dropdownItem} onPress={() => setTempStatus(s)}>
+                      <Text style={{ color: tempStatus === s ? theme.primary : "white" }}>{s}</Text>
+                    </TouchableOpacity>
+                  ))}
+                  {tempStatus !== post.status && (
+                    <TouchableOpacity style={styles.saveBtn} onPress={handleStatusUpdate}>
+                      <Text style={styles.saveBtnText}>변경 확인</Text>
+                    </TouchableOpacity>
+                  )}
+                </>
+              ) : (
+                // 2. 남의 글일 때: 신고/차단 메뉴
+                <>
+                  <TouchableOpacity style={styles.dropdownItem} onPress={handleReport}>
+                    <Text style={{ color: theme.danger }}>🚨 신고하기</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={[styles.dropdownItem, { borderBottomWidth: 0 }]} onPress={handleBlock}>
+                    <Text style={{ color: "#888" }}>🚫 이 사용자 차단하기</Text>
+                  </TouchableOpacity>
+                </>
               )}
             </View>
           )}

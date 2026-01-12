@@ -1,12 +1,23 @@
-﻿// ✅ 앞으로 "라우트/스택" 관련 설정을 여기에 모으세요.
-export const ROUTES = {
+﻿export const ROUTES = {
   LOGIN: "Login",
   HOME: "Home",
+  
+  // 게시글 관련
+  WRITE: "Write",
+  WRITE_FREE: "WriteFree",
   DETAIL: "Detail",
-  WRITE: "Write",           // N빵 글쓰기
-  WRITE_FREE: "WriteFree",  // ✅ 무료나눔 글쓰기
+  FREE_DETAIL: "FreeDetail",
+  
+  // 프로필 관련
   PROFILE: "Profile",
+  MY_LISTINGS: "MyListings",
+  PREMIUM: "Premium",
+  
+  // ✅ [중요] 관리자 신고 화면 및 알림 화면 추가
+  ADMIN_REPORT: "AdminReport",
+  NOTIFICATION: "Notification",
+
+  // 채팅 관련
   CHAT_ROOMS: "ChatRooms",
   CHAT_ROOM: "ChatRoom",
-  FREE_DETAIL: "FreeDetail",
 };

@@ -1,25 +1,33 @@
-﻿import React, { createContext, useState, useContext, useEffect } from "react";
+﻿import React, { createContext, useState, useContext, useEffect, useRef } from "react";
+import { Platform, Alert } from "react-native";
 import * as Location from "expo-location";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { auth, db } from "../../firebaseConfig";
-import { 
-  createUserWithEmailAndPassword, 
-  signInWithEmailAndPassword, 
-  signOut, 
+import {
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signOut,
   onAuthStateChanged,
   sendPasswordResetEmail,
-  updateProfile
+  updateProfile,
+  GoogleAuthProvider, // ✅ 구글 인증 프로바이더
+  signInWithCredential, // ✅ 자격 증명으로 로그인
 } from "firebase/auth";
-import { 
-  collection, 
-  addDoc, 
-  query, 
-  orderBy, 
-  deleteDoc, 
-  updateDoc, 
+import {
+  collection,
+  addDoc,
+  query,
+  orderBy,
+  deleteDoc,
+  updateDoc,
   doc,
-  onSnapshot
+  onSnapshot,
+  getDoc,
+  setDoc,
+  limit,
+  arrayUnion,
 } from "firebase/firestore";
+import Purchases from "react-native-purchases";
 
 const AppContext = createContext();
 const STORAGE_KEY = "user_location_auth_v3";
@@ -29,16 +37,22 @@ function getDistanceFromLatLonInKm(lat1, lon1, lat2, lon2) {
   const R = 6371;
   const dLat = deg2rad(lat2 - lat1);
   const dLon = deg2rad(lon2 - lon1);
-  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(deg2rad(lat1)) *
+      Math.cos(deg2rad(lat2)) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
 }
-function deg2rad(deg) { return deg * (Math.PI / 180); }
+function deg2rad(deg) {
+  return deg * (Math.PI / 180);
+}
 
 function extractDong(text) {
   if (!text) return null;
-  const str = String(text);
-  const words = str.split(/[\s,()\[\]]+/);
+  const words = String(text).split(/[\s,()\[\]]+/);
   for (const w of words) {
     if (/^\d+$/.test(w)) continue;
     if (w.endsWith("로") || w.endsWith("길") || w.endsWith("대로")) continue;
@@ -48,54 +62,10 @@ function extractDong(text) {
   return null;
 }
 
-async function checkIpConsistency(gpsCoords) {
-  try {
-    const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), 3000);
-
-    const res = await fetch("https://ipwho.is/", { signal: controller.signal });
-    clearTimeout(id);
-    if (!res.ok) return true;
-    const json = await res.json();
-    if (!json.success) return true;
-
-    const dist = getDistanceFromLatLonInKm(gpsCoords.latitude, gpsCoords.longitude, json.latitude, json.longitude);
-    if (dist > 200) {
-      console.log(`[IP Check] 거리 차이 감지: ${dist.toFixed(0)}km`);
-      return false;
-    }
-    return true;
-  } catch (error) {
-    return true;
-  }
-}
-
-async function resolveAdminDong(coords) {
-  try {
-    const addresses = await Location.reverseGeocodeAsync(coords);
-    if (addresses && addresses.length > 0) {
-      for (const addr of addresses) {
-        const full = [addr.street, addr.name, addr.district, addr.subregion, addr.formattedAddress].join(" ");
-        const found = extractDong(full);
-        if (found) return found;
-      }
-    }
-  } catch (e) {}
-  
-  try {
-    const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${coords.latitude}&lon=${coords.longitude}&zoom=18&accept-language=ko`;
-    const res = await fetch(url, { headers: { "User-Agent": "NBBANG_APP/1.0" } });
-    if (res.ok) {
-      const json = await res.json();
-      const addr = json.address || {};
-      const candidates = [addr.neighbourhood, addr.quarter, addr.suburb, addr.village, addr.town, addr.hamlet, json.display_name];
-      for (const c of candidates) {
-        const found = extractDong(c);
-        if (found) return found;
-      }
-    }
-  } catch (e) {}
-  return null;
+function getTodayKST() {
+  const now = new Date();
+  const kst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+  return kst.toISOString().slice(0, 10);
 }
 
 export const AppProvider = ({ children }) => {
@@ -103,39 +73,352 @@ export const AppProvider = ({ children }) => {
   const [currentLocation, setCurrentLocation] = useState("위치 찾는 중...");
   const [myCoords, setMyCoords] = useState(null);
   const [posts, setPosts] = useState([]);
+  
+  // ✅ 게시글 조회 개수 제한 (기본 20개)
+  const [postLimit, setPostLimit] = useState(20);
+
+  // ✅ 차단한 사용자 ID 목록
+  const [blockedUsers, setBlockedUsers] = useState([]);
+
   const [isVerified, setIsVerified] = useState(false);
+
+  const [isPremium, setIsPremium] = useState(false);
+  const [premiumUntil, setPremiumUntil] = useState(null);
+  const [dailyPostCount, setDailyPostCount] = useState(0);
+  const [dailyPostCountDate, setDailyPostCountDate] = useState(null);
+
+  // ✅ 관리자(영구 프리미엄)
+  const [isAdmin, setIsAdmin] = useState(false);
+  const isAdminRef = useRef(false);
+  useEffect(() => {
+    isAdminRef.current = isAdmin;
+  }, [isAdmin]);
+
+  const ENTITLEMENT_ID = "premium";
+
+  const REVENUECAT_IOS_API_KEY = process.env.EXPO_PUBLIC_REVENUECAT_IOS_API_KEY || "";
+  const REVENUECAT_ANDROID_API_KEY = process.env.EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY || "";
+
+  const getRevenueCatApiKey = () => {
+    if (Platform.OS === "ios") return REVENUECAT_IOS_API_KEY;
+    if (Platform.OS === "android") return REVENUECAT_ANDROID_API_KEY;
+    return "";
+  };
+
+  const initRevenueCatForUser = async (uid) => {
+    try {
+      const apiKey = getRevenueCatApiKey();
+      if (!apiKey || !uid) return;
+      await Purchases.configure({ apiKey, appUserID: uid });
+    } catch (e) {
+      console.warn("RevenueCat configure 실패:", e);
+    }
+  };
+
+  const applyCustomerInfoToStateAndDb = async (uid, customerInfo) => {
+    try {
+      // ✅ 관리자는 RevenueCat/DB 값과 무관하게 영구 프리미엄 유지
+      if (isAdminRef.current) {
+        setPremiumUntil("2099-12-31T23:59:59.999Z");
+        setIsPremium(true);
+        return;
+      }
+
+      const entitlement = customerInfo?.entitlements?.active?.[ENTITLEMENT_ID] || null;
+      const nextPremiumUntil = entitlement?.expirationDate || null;
+      const nextIsPremium = !!entitlement || !!isAdminRef.current;
+
+      setPremiumUntil(nextPremiumUntil);
+      setIsPremium(nextIsPremium);
+
+      if (uid) {
+        await updateDoc(doc(db, "users", uid), {
+          premiumUntil: nextPremiumUntil,
+          isPremium: nextIsPremium,
+          premiumUpdatedAt: new Date().toISOString(),
+        });
+      }
+    } catch (e) {
+      console.warn("applyCustomerInfoToStateAndDb 실패:", e);
+    }
+  };
+
+  const refreshPremiumFromRevenueCat = async () => {
+    try {
+      if (!user?.uid) return;
+
+      // ✅ 관리자는 동기화 호출해도 영구 프리미엄
+      if (isAdminRef.current) {
+        setPremiumUntil("2099-12-31T23:59:59.999Z");
+        setIsPremium(true);
+        return;
+      }
+
+      const info = await Purchases.getCustomerInfo();
+      await applyCustomerInfoToStateAndDb(user.uid, info);
+    } catch (e) {
+      console.warn("refreshPremiumFromRevenueCat 실패:", e);
+    }
+  };
+
+  const restorePurchases = async () => {
+    try {
+      // ✅ 관리자는 복원 불필요
+      if (isAdminRef.current) return "RESTORE_OK";
+
+      const info = await Purchases.restorePurchases();
+      const entitlement = info?.entitlements?.active?.[ENTITLEMENT_ID];
+      if (!entitlement) return "NO_PURCHASE";
+      if (user?.uid) await applyCustomerInfoToStateAndDb(user.uid, info);
+      return "RESTORE_OK";
+    } catch (e) {
+      throw e;
+    }
+  };
+
+  const activatePremium = async (selectedPlan = "monthly") => {
+    // ✅ 관리자는 결제 진입 자체를 막거나(원하면) 그냥 true로 처리
+    if (isAdminRef.current) return true;
+
+    if (!user?.uid) throw new Error("NO_USER");
+    const apiKey = getRevenueCatApiKey();
+    if (!apiKey) throw new Error("NO_REVENUECAT_API_KEY");
+
+    await initRevenueCatForUser(user.uid);
+
+    const offerings = await Purchases.getOfferings();
+    const current = offerings?.current;
+    if (!current) throw new Error("NO_OFFERINGS");
+
+    let targetPackage = null;
+    if (selectedPlan === "yearly") {
+      targetPackage =
+        current.annual || current.availablePackages?.find((p) => p.packageType === "ANNUAL");
+    } else {
+      targetPackage =
+        current.monthly || current.availablePackages?.find((p) => p.packageType === "MONTHLY");
+    }
+    if (!targetPackage) throw new Error("NO_MATCHED_PACKAGE");
+
+    const purchaseResult = await Purchases.purchasePackage(targetPackage);
+    const customerInfo = purchaseResult?.customerInfo || null;
+    if (customerInfo) {
+      await applyCustomerInfoToStateAndDb(user.uid, customerInfo);
+    } else {
+      await refreshPremiumFromRevenueCat();
+    }
+    return true;
+  };
 
   useEffect(() => {
     checkSavedVerification();
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+
+    let customerInfoListener = null;
+
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
-      if (currentUser) {
-        subscribePosts(); 
+
+      if (customerInfoListener && Purchases.removeCustomerInfoUpdateListener) {
+        try {
+          Purchases.removeCustomerInfoUpdateListener(customerInfoListener);
+        } catch {}
+        customerInfoListener = null;
       }
+
+      if (!currentUser) {
+        setIsPremium(false);
+        setPremiumUntil(null);
+        setDailyPostCount(0);
+        setDailyPostCountDate(null);
+        setIsAdmin(false);
+        isAdminRef.current = false;
+        setBlockedUsers([]); // ✅ 차단 목록 초기화
+        setPostLimit(20);
+        return;
+      }
+
+      // ✅ [소셜 로그인 지원] 사용자 문서가 없으면 자동 생성 (구글/카카오 로그인 시 필수)
+      try {
+        const userRef = doc(db, "users", currentUser.uid);
+        const snap = await getDoc(userRef);
+        
+        if (snap.exists()) {
+          const data = snap.data();
+          const adminFlag = !!data.isAdmin;
+
+          setIsAdmin(adminFlag);
+          isAdminRef.current = adminFlag;
+
+          // 차단 목록 로드
+          setBlockedUsers(data.blockedUsers || []);
+
+          setPremiumUntil(data.premiumUntil || null);
+          setIsPremium(!!data.isPremium);
+          setDailyPostCount(data.dailyPostCount || 0);
+          setDailyPostCountDate(data.dailyPostCountDate || null);
+
+          if (adminFlag) {
+            setPremiumUntil("2099-12-31T23:59:59.999Z");
+            setIsPremium(true);
+          }
+        } else {
+          // 문서가 없으면(소셜로그인 최초 진입 시) 생성
+          await setDoc(userRef, {
+            premiumUntil: null,
+            isPremium: false,
+            isAdmin: false,
+            dailyPostCount: 0,
+            dailyPostCountDate: getTodayKST(),
+            createdAt: new Date().toISOString(),
+            blockedUsers: [],
+            email: currentUser.email,
+          });
+          
+          setIsAdmin(false);
+          isAdminRef.current = false;
+          setBlockedUsers([]);
+        }
+      } catch (e) {
+        console.warn("User DB Init Error:", e);
+        setIsAdmin(false);
+        isAdminRef.current = false;
+      }
+
+      await initRevenueCatForUser(currentUser.uid);
+
+      customerInfoListener = (info) => applyCustomerInfoToStateAndDb(currentUser.uid, info);
+      if (Purchases.addCustomerInfoUpdateListener) {
+        try {
+          Purchases.addCustomerInfoUpdateListener(customerInfoListener);
+        } catch {}
+      }
+
+      await refreshPremiumFromRevenueCat();
     });
-    return () => unsubscribe();
+
+    return () => {
+      unsubscribe();
+
+      if (customerInfoListener && Purchases.removeCustomerInfoUpdateListener) {
+        try {
+          Purchases.removeCustomerInfoUpdateListener(customerInfoListener);
+        } catch {}
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const subscribePosts = () => {
-    const q = query(collection(db, "posts"), orderBy("createdAt", "desc"));
-    const unsubscribe = onSnapshot(q, (querySnapshot) => {
-      const loadedPosts = [];
-      querySnapshot.forEach((doc) => {
-        // ✅ [핵심 수정] doc.data()를 먼저 풀고, 마지막에 id: doc.id를 덮어씌웁니다.
-        // 이렇게 해야 문서 안의 가짜 id가 무시되고, 진짜 문서 ID가 들어갑니다.
-        loadedPosts.push({ ...doc.data(), id: doc.id });
+  // ✅ 게시글 구독 (차단 필터링 적용)
+  useEffect(() => {
+    let unsub = null;
+    if (user) {
+      const q = query(
+        collection(db, "posts"),
+        orderBy("createdAt", "desc"),
+        limit(postLimit)
+      );
+
+      unsub = onSnapshot(q, (querySnapshot) => {
+        const loaded = [];
+        querySnapshot.forEach((d) => {
+          const postData = d.data();
+          // ✅ [핵심] 차단한 사용자의 글은 리스트에 담지 않음
+          if (!blockedUsers.includes(postData.ownerId)) {
+            loaded.push({ ...postData, id: d.id });
+          }
+        });
+        setPosts(loaded);
       });
-      setPosts(loadedPosts);
-    });
-    return unsubscribe;
+    } else {
+      setPosts([]);
+    }
+
+    return () => {
+      if (unsub) unsub();
+    };
+  }, [user, postLimit, blockedUsers]); // ✅ blockedUsers 변경 시 리스트 갱신
+
+  const loadMorePosts = () => {
+    setPostLimit((prev) => prev + 5);
   };
 
+  /* =========================
+      신고 / 차단 / 알림
+  ========================= */
+  
+  // ✅ [신규] 신고자에게 알림 발송 함수
+  const sendNotificationToReporter = async (reporterId, title, body) => {
+    if (!reporterId) return;
+    try {
+      await addDoc(collection(db, "users", reporterId, "notifications"), {
+        title,
+        body,
+        type: "report_result", 
+        isRead: false,
+        createdAt: new Date().toISOString()
+      });
+    } catch (e) {
+      console.error("알림 발송 실패:", e);
+    }
+  };
+
+  // ✅ 사용자 신고
+  const reportUser = async (targetUserId, contentId, reason, type = "post") => {
+    if (!user) {
+      Alert.alert("알림", "로그인이 필요합니다.");
+      return;
+    }
+    try {
+      await addDoc(collection(db, "reports"), {
+        reporterId: user.uid,
+        reporterEmail: user.email,
+        targetUserId,
+        contentId, // postId or roomId
+        reason,
+        type, // 'post', 'chat', 'user'
+        createdAt: new Date().toISOString(),
+        status: "pending"
+      });
+      Alert.alert("신고 완료", "신고가 접수되었습니다. 검토 후 조치하겠습니다.");
+    } catch (e) {
+      console.error("신고 실패:", e);
+      Alert.alert("오류", "신고 처리 중 문제가 발생했습니다.");
+    }
+  };
+
+  // ✅ 사용자 차단
+  const blockUser = async (targetUserId) => {
+    if (!user) return;
+    if (targetUserId === user.uid) {
+      Alert.alert("알림", "자기 자신은 차단할 수 없습니다.");
+      return;
+    }
+    
+    try {
+      // 1. Firestore 내 정보에 차단 목록 업데이트
+      await updateDoc(doc(db, "users", user.uid), {
+        blockedUsers: arrayUnion(targetUserId)
+      });
+
+      // 2. 로컬 상태 즉시 업데이트 (리렌더링 유발 -> 게시글 필터링 적용)
+      setBlockedUsers((prev) => [...prev, targetUserId]);
+
+      Alert.alert("차단 완료", "해당 사용자를 차단했습니다.\n이제 이 사용자의 글과 채팅이 보이지 않습니다.");
+    } catch (e) {
+      console.error("차단 실패:", e);
+      Alert.alert("오류", "차단 처리 중 문제가 발생했습니다.");
+    }
+  };
+
+  /* =========================
+      위치 인증
+  ========================= */
   const checkSavedVerification = async () => {
     try {
       const saved = await AsyncStorage.getItem(STORAGE_KEY);
       if (saved) {
         const { dong, coords, timestamp } = JSON.parse(saved);
-        if ((Date.now() - timestamp) < (30 * 24 * 60 * 60 * 1000)) {
+        if (Date.now() - timestamp < 30 * 24 * 60 * 60 * 1000) {
           setCurrentLocation(dong);
           setMyCoords(coords);
           setIsVerified(true);
@@ -143,101 +426,239 @@ export const AppProvider = ({ children }) => {
         }
       }
       verifyLocation();
-    } catch { 
-      verifyLocation(); 
+    } catch {
+      verifyLocation();
     }
   };
 
   const verifyLocation = async () => {
     setCurrentLocation("위치 확인 중...");
     let { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== "granted") { 
-      setCurrentLocation("위치 권한 필요"); 
+    if (status !== "granted") {
+      setCurrentLocation("위치 권한 필요");
       return;
     }
 
     try {
-      const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const location = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
       const coords = location.coords;
 
-      await checkIpConsistency(coords);
-      let dong = await resolveAdminDong(coords);
-      if (!dong) {
-         const raw = await Location.reverseGeocodeAsync(coords).catch(()=>[]);
-         dong = raw[0]?.district || raw[0]?.city || "내 동네";
+      let dong = null;
+      const addresses = await Location.reverseGeocodeAsync(coords).catch(() => []);
+      for (const addr of addresses) {
+        const found = extractDong([addr.street, addr.name, addr.district, addr.subregion].join(" "));
+        if (found) {
+          dong = found;
+          break;
+        }
       }
 
-      const authData = { dong, coords, timestamp: Date.now() };
+      const authData = { dong: dong || "내 동네", coords, timestamp: Date.now() };
       await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(authData));
-      
-      setCurrentLocation(dong);
+
+      setCurrentLocation(authData.dong);
       setMyCoords(coords);
       setIsVerified(true);
-    } catch (e) { 
-      console.log("위치 에러:", e);
-      setCurrentLocation("위치 확인 불가"); 
+    } catch (e) {
+      setCurrentLocation("위치 확인 불가");
     }
   };
 
+  /* =========================
+      Auth
+  ========================= */
   const login = (email, password) => signInWithEmailAndPassword(auth, email, password);
+
+  // ✅ [추가] 구글 로그인 (ID 토큰 받아서 Firebase 인증)
+  const loginWithGoogle = async (idToken) => {
+    const credential = GoogleAuthProvider.credential(idToken);
+    return signInWithCredential(auth, credential);
+  };
+
+  // ✅ [신규] 카카오 로그인 함수 (가상 이메일 지원)
+  const loginWithKakao = async (accessToken) => {
+    try {
+      // 1. 카카오 API로 유저 정보 가져오기
+      const response = await fetch("https://kapi.kakao.com/v2/user/me", {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/x-www-form-urlencoded;charset=utf-8",
+        },
+      });
+      const userResult = await response.json();
+      
+      const kakaoAccount = userResult.kakao_account;
+      const nickname = kakaoAccount?.profile?.nickname || "카카오유저";
+      
+      // 💡 [핵심] 실제 이메일이 없으면 '가상 이메일' 생성! (사업자 없어도 됨)
+      let email = kakaoAccount?.email;
+      if (!email) {
+        email = `kakao_${userResult.id}@nbbang.com`; // 가상 이메일 포맷
+        console.log("⚠️ 카카오 이메일 권한 없음 -> 가상 이메일 사용:", email);
+      }
+
+      // 비밀번호는 카카오 고유 ID를 이용해 생성
+      const fakePassword = `kakao_pw_${userResult.id}`; 
+      
+      try {
+        // 이미 가입된 유저라면 로그인 시도
+        await signInWithEmailAndPassword(auth, email, fakePassword);
+      } catch (error) {
+        // 가입되지 않은 유저라면(auth/user-not-found) 회원가입 진행
+        if (error.code === "auth/user-not-found" || error.code === "auth/invalid-credential") {
+          const userCredential = await createUserWithEmailAndPassword(auth, email, fakePassword);
+          await updateProfile(userCredential.user, { displayName: nickname });
+          
+          // Firestore에 유저 정보 저장 (loginMethod: kakao)
+          await setDoc(doc(db, "users", userCredential.user.uid), {
+            premiumUntil: null,
+            isPremium: false,
+            isAdmin: false,
+            dailyPostCount: 0,
+            dailyPostCountDate: getTodayKST(),
+            createdAt: new Date().toISOString(),
+            blockedUsers: [],
+            email: email,
+            loginMethod: "kakao"
+          });
+          
+          await initRevenueCatForUser(userCredential.user.uid);
+        } else {
+          throw error;
+        }
+      }
+    } catch (e) {
+      console.error("Kakao Login Logic Error:", e);
+      throw e;
+    }
+  };
+
   const signup = async (email, password, nickname) => {
     const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+
     if (nickname) {
-        await updateProfile(userCredential.user, { displayName: nickname });
-        setUser({ ...userCredential.user, displayName: nickname });
+      await updateProfile(userCredential.user, { displayName: nickname });
+      setUser({ ...userCredential.user, displayName: nickname });
     }
+
+    await setDoc(doc(db, "users", userCredential.user.uid), {
+      premiumUntil: null,
+      isPremium: false,
+      isAdmin: false,
+      dailyPostCount: 0,
+      dailyPostCountDate: getTodayKST(),
+      createdAt: new Date().toISOString(),
+      blockedUsers: [], // ✅ 초기 차단 목록
+      email: email,
+    });
+
+    await initRevenueCatForUser(userCredential.user.uid);
+    await refreshPremiumFromRevenueCat();
+
     return userCredential;
   };
 
-  const logout = () => signOut(auth);
+  const logout = async () => {
+    try {
+      await Purchases.logOut();
+    } catch (e) {
+      console.warn("RevenueCat logOut 실패(무시 가능):", e);
+    }
+    return signOut(auth);
+  };
+
   const resetPassword = (email) => sendPasswordResetEmail(auth, email);
 
+  /* =========================
+      작성 카운트 증가
+  ========================= */
+  const incrementDailyPostCount = async () => {
+    if (!user) return;
+
+    const today = getTodayKST();
+    let nextCount = 1;
+
+    if (dailyPostCountDate === today) {
+      nextCount = dailyPostCount + 1;
+    }
+
+    await updateDoc(doc(db, "users", user.uid), {
+      dailyPostCount: nextCount,
+      dailyPostCountDate: today,
+    });
+
+    setDailyPostCount(nextCount);
+    setDailyPostCountDate(today);
+  };
+
+  /* =========================
+      posts CRUD
+  ========================= */
   const addPost = async (newPostData) => {
     if (!user) return;
-    try {
-        await addDoc(collection(db, "posts"), {
-        ...newPostData,
-        ownerId: user.uid,
-        ownerEmail: user.email,
-        createdAt: new Date().toISOString(),
-        location: currentLocation
-        });
-    } catch (e) {
-        console.error("게시글 작성 실패:", e);
-        throw e;
-    }
+    await addDoc(collection(db, "posts"), {
+      ...newPostData,
+      ownerId: user.uid,
+      ownerEmail: user.email,
+      createdAt: new Date().toISOString(),
+      location: currentLocation,
+    });
   };
 
   const updatePost = async (postId, updatedData) => {
     if (!postId) return;
-    console.log(`[AppContext] 업데이트 시도: ${postId}`);
-    try {
-        const postRef = doc(db, "posts", postId);
-        await updateDoc(postRef, updatedData);
-        console.log(`[AppContext] 업데이트 성공!`);
-    } catch (e) {
-        console.error(`[AppContext] 업데이트 실패 원인:`, e);
-        throw e;
-    }
+    await updateDoc(doc(db, "posts", postId), updatedData);
   };
 
   const deletePost = async (postId) => {
-    console.log(`[AppContext] 삭제 시도: ${postId}`);
-    try {
-        await deleteDoc(doc(db, "posts", postId));
-        console.log(`[AppContext] 삭제 성공!`);
-    } catch (e) {
-        console.error(`[AppContext] 삭제 실패 원인:`, e);
-        throw e;
-    }
+    await deleteDoc(doc(db, "posts", postId));
   };
 
   return (
-    <AppContext.Provider value={{ 
-      user, login, signup, logout, resetPassword,
-      currentLocation, myCoords, posts, addPost, updatePost, deletePost, 
-      getDistanceFromLatLonInKm, verifyLocation, isVerified 
-    }}>
+    <AppContext.Provider
+      value={{
+        user,
+        login,
+        loginWithGoogle, // ✅ 외부 노출
+        loginWithKakao,  // ✅ [신규] 카카오 로그인 함수 노출
+        signup,
+        logout,
+        resetPassword,
+
+        currentLocation,
+        myCoords,
+        posts,
+        addPost,
+        updatePost,
+        deletePost,
+        
+        loadMorePosts,
+
+        getDistanceFromLatLonInKm,
+        verifyLocation,
+        isVerified,
+
+        isPremium,
+        premiumUntil,
+        dailyPostCount,
+        dailyPostCountDate,
+        incrementDailyPostCount,
+
+        isAdmin,
+
+        // ✅ 신고 및 차단 기능 노출
+        blockedUsers,
+        reportUser,
+        blockUser,
+        sendNotificationToReporter,
+
+        activatePremium,
+        refreshPremiumFromRevenueCat,
+        restorePurchases,
+      }}
+    >
       {children}
     </AppContext.Provider>
   );

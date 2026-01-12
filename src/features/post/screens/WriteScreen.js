@@ -13,7 +13,18 @@ import { ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage
 const WRITABLE_CATEGORIES = ["마트/식품", "생활용품", "기타"];
 
 export default function WriteScreen({ navigation, route }) {
-  const { addPost, updatePost, currentLocation, myCoords, posts } = useAppContext();
+  const {
+    addPost,
+    updatePost,
+    currentLocation,
+    myCoords,
+    posts,
+    // ✅ 프리미엄 제한 로직용 (AppContext에서 제공한다고 가정)
+    isPremium,
+    dailyPostCount,
+    dailyPostCountDate,
+    incrementDailyPostCount,
+  } = useAppContext();
   
   const editPostData = route.params?.post;
   const isEditMode = !!editPostData;
@@ -79,6 +90,32 @@ export default function WriteScreen({ navigation, route }) {
   const showAlert = (msg) => {
     setAlertMsg(msg);
     setAlertVisible(true);
+  };
+
+  // ✅ KST 기준 YYYY-MM-DD
+  const getTodayKST = () => {
+    const now = new Date();
+    const kst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+    return kst.toISOString().slice(0, 10);
+  };
+
+  // ✅ 프리미엄 제한: 일반 유저 하루 1개
+  const checkDailyWriteLimit = () => {
+    if (isEditMode) return true; // 수정은 제한 없음(작성 제한만)
+    if (isPremium) return true;  // 프리미엄은 제한 없음
+
+    const today = getTodayKST();
+    const cnt = typeof dailyPostCount === "number" ? dailyPostCount : 0;
+    const date = typeof dailyPostCountDate === "string" ? dailyPostCountDate : "";
+
+    // 날짜가 다르면 0으로 취급(새날)
+    const effectiveCount = date === today ? cnt : 0;
+
+    if (effectiveCount >= 1) {
+      showAlert("일반 유저는 하루 1개까지만 작성 가능합니다.\n프리미엄(월 2,900원)으로 제한 없이 작성할 수 있어요.");
+      return false;
+    }
+    return true;
   };
 
   const toggleParticipantsDropdown = () => {
@@ -155,18 +192,21 @@ export default function WriteScreen({ navigation, route }) {
       if (isDirectInput) setSelectedTip(0);
       return;
     }
-    const price = buyPrice ? parseInt(buyPrice.replace(/,/g, ""), 10) : 0;
 
+    const price = buyPrice ? parseInt(buyPrice.replace(/,/g, ""), 10) : 0;
     const payers = Math.max(participants - 1, 0);
     const totalTip = tipAmount * payers;
 
-    const limit = price * 0.1;
+    const limitRate = isPremium ? 0.15 : 0.1;
+    const limit = price * limitRate;
 
     if (tipAmount > 0 && totalTip > limit) {
       showAlert(
         "수고비 합계(" +
           totalTip.toLocaleString() +
-          "원)가\n구매 금액의 10%(" +
+          "원)가\n구매 금액의 " +
+          Math.round(limitRate * 100) +
+          "%(" +
           limit.toLocaleString() +
           "원)를\n초과할 수 없습니다."
       );
@@ -260,6 +300,10 @@ export default function WriteScreen({ navigation, route }) {
 
   const handleSubmit = async () => {
     if (isEditMode && !editPostData?.id) { showAlert("수정할 게시글 정보가 없습니다."); return; }
+
+    // ✅ 프리미엄 작성 제한(일반: 하루 1개) - 업로드/저장 전에 차단
+    if (!checkDailyWriteLimit()) return;
+
     if (!title) { showAlert("상품명을 입력해주세요."); return; }
     if (!buyPrice) { showAlert("구매 금액을 입력해주세요."); return; }
 
@@ -314,6 +358,17 @@ export default function WriteScreen({ navigation, route }) {
         ...postData
       };
       addPost(newPost);
+
+      // ✅ 작성 성공 후에만 카운트 +1 (AppContext에 구현되어 있으면)
+      try {
+        if (!isPremium && typeof incrementDailyPostCount === "function") {
+          await incrementDailyPostCount();
+        }
+      } catch (e) {
+        // 카운트 실패는 글 작성 자체를 막지 않음(UX 유지)
+        console.warn("incrementDailyPostCount failed:", e);
+      }
+
       navigation.goBack();
     }
   };
