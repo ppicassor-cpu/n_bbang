@@ -10,8 +10,9 @@ import {
   onAuthStateChanged,
   sendPasswordResetEmail,
   updateProfile,
-  GoogleAuthProvider, // ✅ 구글 인증 프로바이더
-  signInWithCredential, // ✅ 자격 증명으로 로그인
+  GoogleAuthProvider, 
+  signInWithCredential,
+  OAuthProvider, 
 } from "firebase/auth";
 import {
   collection,
@@ -478,62 +479,23 @@ export const AppProvider = ({ children }) => {
   };
 
   // ✅ [신규] 카카오 로그인 함수 (가상 이메일 지원)
-  const loginWithKakao = async (accessToken) => {
-    try {
-      // 1. 카카오 API로 유저 정보 가져오기
-      const response = await fetch("https://kapi.kakao.com/v2/user/me", {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/x-www-form-urlencoded;charset=utf-8",
-        },
-      });
-      const userResult = await response.json();
-      
-      const kakaoAccount = userResult.kakao_account;
-      const nickname = kakaoAccount?.profile?.nickname || "카카오유저";
-      
-      // 💡 [핵심] 실제 이메일이 없으면 '가상 이메일' 생성! (사업자 없어도 됨)
-      let email = kakaoAccount?.email;
-      if (!email) {
-        email = `kakao_${userResult.id}@nbbang.com`; // 가상 이메일 포맷
-        console.log("⚠️ 카카오 이메일 권한 없음 -> 가상 이메일 사용:", email);
-      }
+  const loginWithKakao = async (idToken) => {
+  try {
+    // 1. 파이어베이스 콘솔에 등록한 "oidc.kakao" 프로바이더 생성
+    const provider = new OAuthProvider("oidc.kakao");
 
-      // 비밀번호는 카카오 고유 ID를 이용해 생성
-      const fakePassword = `kakao_pw_${userResult.id}`; 
-      
-      try {
-        // 이미 가입된 유저라면 로그인 시도
-        await signInWithEmailAndPassword(auth, email, fakePassword);
-      } catch (error) {
-        // 가입되지 않은 유저라면(auth/user-not-found) 회원가입 진행
-        if (error.code === "auth/user-not-found" || error.code === "auth/invalid-credential") {
-          const userCredential = await createUserWithEmailAndPassword(auth, email, fakePassword);
-          await updateProfile(userCredential.user, { displayName: nickname });
-          
-          // Firestore에 유저 정보 저장 (loginMethod: kakao)
-          await setDoc(doc(db, "users", userCredential.user.uid), {
-            premiumUntil: null,
-            isPremium: false,
-            isAdmin: false,
-            dailyPostCount: 0,
-            dailyPostCountDate: getTodayKST(),
-            createdAt: new Date().toISOString(),
-            blockedUsers: [],
-            email: email,
-            loginMethod: "kakao"
-          });
-          
-          await initRevenueCatForUser(userCredential.user.uid);
-        } else {
-          throw error;
-        }
-      }
-    } catch (e) {
-      console.error("Kakao Login Logic Error:", e);
-      throw e;
-    }
-  };
+    // 2. 카카오 로그인 결과로 받은 idToken으로 자격 증명 생성
+    const credential = provider.credential({
+      idToken: idToken,
+    });
+
+    // 3. 파이어베이스에 로그인 시도 (가입/로그인 자동 처리)
+    return await signInWithCredential(auth, credential);
+  } catch (e) {
+    console.error("Kakao OIDC Login Error:", e);
+    throw e;
+  }
+};
 
   const signup = async (email, password, nickname) => {
     const userCredential = await createUserWithEmailAndPassword(auth, email, password);

@@ -1,36 +1,54 @@
 {
   "expo": {
-    "name": "n_bbang",
-    "slug": "n_bbang",
-    "scheme": "n_bbang",
+    "name": "nbbang",
+    "slug": "nbbang",
+    "owner": "sunghyun78",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
-    "userInterfaceStyle": "dark",
-    "newArchEnabled": true,
+    "userInterfaceStyle": "light",
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#000000"
+      "backgroundColor": "#ffffff"
     },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": true,
-      "backgroundColor": "#000000"
+      "bundleIdentifier": "com.sonsunghyun.nbbang"
     },
     "android": {
-      "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#000000"
-      },
-      "backgroundColor": "#000000",
-      "edgeToEdgeEnabled": true
-    },
-    "web": {
-      "favicon": "./assets/favicon.png",
-      "backgroundColor": "#000000"
+      "package": "com.sonsunghyun.nbbang",
+      "googleServicesFile": "./google-services.json",
+      "permissions": [
+        "INTERNET",
+        "ACCESS_NETWORK_STATE",
+        "POST_NOTIFICATIONS"
+      ]
     },
     "plugins": [
-      "expo-web-browser"
-    ]
+      "@react-native-google-signin/google-signin",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
+      [
+        "@react-native-seoul/kakao-login",
+        {
+          "kakaoAppKey": "a4b53cefa332f8588fe8ca526b44420e",
+          "kotlinVersion": "2.1.0"
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "fa5ccf8e-90e3-4b41-928f-b0ec5ff99eb4"
+      }
+    }
   }
 }

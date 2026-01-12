@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from "react";
+﻿import React, { useState, useEffect, useRef } from "react";
 import { View, Text, StyleSheet, TouchableOpacity, TextInput, KeyboardAvoidingView, Platform, ActivityIndicator } from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import { useAppContext } from "../../../app/providers/AppContext"; 
@@ -7,134 +7,95 @@ import { theme } from "../../../theme";
 import CustomModal from "../../../components/CustomModal";
 import { Ionicons } from "@expo/vector-icons";
 
-// ✅ 소셜 로그인을 위한 라이브러리
-import * as WebBrowser from "expo-web-browser";
-import * as Google from "expo-auth-session/providers/google";
-import * as AuthSession from "expo-auth-session"; // ✅ 카카오 로그인을 위해 추가
+// ❌ [삭제] 기존 웹 방식 라이브러리 제거
+// import * as WebBrowser from "expo-web-browser";
+// import * as Google from "expo-auth-session/providers/google";
+// import * as AuthSession from "expo-auth-session"; 
 
-// ✅ 웹 브라우저 리다이렉트 처리 (필수)
-WebBrowser.maybeCompleteAuthSession();
-
-// ✅ 카카오 디스커버리 설정
-const kakaoDiscovery = {
-  authorizationEndpoint: "https://kauth.kakao.com/oauth/authorize",
-  tokenEndpoint: "https://kauth.kakao.com/oauth/token",
-};
+// ✅ [추가] 네이티브 로그인 라이브러리 (SDK 방식)
+import { login as kakaoLogin } from "@react-native-seoul/kakao-login";
+import { GoogleSignin } from "@react-native-google-signin/google-signin";
 
 export default function LoginScreen() {
   const navigation = useNavigation();
-  // ✅ loginWithKakao 함수 가져오기
   const { login, signup, resetPassword, loginWithGoogle, loginWithKakao } = useAppContext();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [nickname, setNickname] = useState("");
 
-  const [mode, setMode] = useState("login"); // "login" | "signup" | "reset"
+  const [mode, setMode] = useState("login");
   const [loading, setLoading] = useState(false);
   
   const [modalVisible, setModalVisible] = useState(false);
   const [modalMsg, setModalMsg] = useState("");
 
-  /* ============================================================
-     🔵 [구글] 로그인 설정 (성공했던 설정 유지)
-  ============================================================ */
-  const [googleRequest, googleResponse, promptGoogleAsync] = Google.useIdTokenAuthRequest({
-    iosClientId: "1060639718995-m6l2vuims8lrt4endto85hkr3k69k8a7.apps.googleusercontent.com",
-    androidClientId: "1060639718995-m6l2vuims8lrt4endto85hkr3k69k8a7.apps.googleusercontent.com",
-    webClientId: "1060639718995-m6l2vuims8lrt4endto85hkr3k69k8a7.apps.googleusercontent.com",
-    // ✅ 400 오류 해결했던 강제 리디렉션 주소 유지
-    redirectUri: "https://auth.expo.io/@sonsunghyun1978/n_bbang"
-  });
-
-  useEffect(() => {
-    if (googleResponse?.type === "success") {
-      const { id_token } = googleResponse.params;
-      handleGoogleLogin(id_token);
-    } else if (googleResponse?.type === "error") {
-      console.error("Google Auth Error:", googleResponse.error);
-      showAlert("구글 로그인 설정 오류가 발생했습니다.");
-    }
-  }, [googleResponse]);
-
-  const handleGoogleLogin = async (idToken) => {
-    setLoading(true);
-    try {
-      await loginWithGoogle(idToken);
-      navigation.reset({ index: 0, routes: [{ name: ROUTES.HOME }] });
-    } catch (error) {
-      console.error("Google Login Error:", error);
-      showAlert("구글 로그인에 실패했습니다.\n다시 시도해주세요.");
-    } finally {
-      setLoading(false);
-    }
-  };
+  // ✅ 중복 클릭 완전 방지 락 (디자인/스타일/레이아웃 변경 없음)
+  const lockRef = useRef(false);
 
   /* ============================================================
-     🟡 [카카오] 로그인 설정
+      🔵 [구글] 로그인 설정 (네이티브 SDK 방식)
   ============================================================ */
-  const [kakaoRequest, kakaoResponse, promptKakaoAsync] = AuthSession.useAuthRequest(
-    {
-      clientId: "e39bd5a53cd9855ab05af1ad5f8656f1", // ✅ 사용자님의 REST API 키
-      scopes: ["profile_nickname", "account_email"], // 이메일 권한 요청
-      redirectUri: "https://auth.expo.io/@sonsunghyun1978/n_bbang", // ✅ 설정한 리디렉션 주소
-      responseType: "code",
-    },
-    kakaoDiscovery
-  );
-
-  // 🔥 [중요] KOE205 해결을 위한 주소 확인 로그
   useEffect(() => {
-    if (kakaoRequest) {
-      console.log("\n🔥 [카카오 리디렉션 확인] 아래 주소를 카카오 콘솔에 정확히 등록하세요:");
-      console.log(kakaoRequest.redirectUri);
-      console.log("----------------------------------------------------------\n");
-    }
-  }, [kakaoRequest]);
+    // ✅ 앱이 켜질 때 구글 설정 한 번만 실행
+    GoogleSignin.configure({
+      // 파이어베이스 콘솔의 Web Client ID (google-services.json과 일치)
+      webClientId: "1060639718995-fia3i2djnoe0vjum2afd1js2i6iruejg.apps.googleusercontent.com", 
+    });
+  }, []);
 
-  // 카카오 응답 처리
-  useEffect(() => {
-    if (kakaoResponse?.type === "success") {
-      const { code } = kakaoResponse.params;
-      handleKakaoTokenExchange(code);
-    } else if (kakaoResponse?.type === "error") {
-      console.error("Kakao Login Error:", kakaoResponse.error);
-      showAlert("카카오 로그인 중 오류가 발생했습니다.\n(KOE205: 리디렉션 주소 불일치)");
-    }
-  }, [kakaoResponse]);
-
-  // 카카오 토큰 교환 및 로그인 실행
-  const handleKakaoTokenExchange = async (code) => {
+  const handleGoogleLogin = async () => {
     setLoading(true);
     try {
-      const response = await fetch("https://kauth.kakao.com/oauth/token", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded;charset=utf-8",
-        },
-        body: `grant_type=authorization_code&client_id=${kakaoRequest.clientId}&redirect_uri=${kakaoRequest.redirectUri}&code=${code}`,
-      });
-      const data = await response.json();
-      
-      if (data.access_token) {
-        console.log("카카오 토큰 획득 성공!");
-        // AppContext의 로그인 함수 호출
-        await loginWithKakao(data.access_token);
+      await GoogleSignin.hasPlayServices();
+      const userInfo = await GoogleSignin.signIn();
+      const idToken = userInfo.data?.idToken; // 최신 라이브러리 문법
+
+      if (idToken) {
+        await loginWithGoogle(idToken);
         navigation.reset({ index: 0, routes: [{ name: ROUTES.HOME }] });
       } else {
-        console.error("Token Exchange Failed:", data);
-        throw new Error("카카오 토큰 교환 실패");
+        throw new Error("Google ID Token이 없습니다.");
       }
-    } catch (e) {
-      console.error(e);
-      showAlert("카카오 로그인 처리에 실패했습니다.");
+    } catch (error) {
+      console.error("Google Login Error:", error);
+      if (error.code !== 'SIGN_IN_CANCELLED') { // 사용자가 취소한 건 에러 아님
+        showAlert("구글 로그인에 실패했습니다.\n다시 시도해주세요.");
+      }
     } finally {
       setLoading(false);
     }
   };
 
   /* ============================================================
-     📧 기존 이메일 로그인 로직
+      🟡 [카카오] 로그인 설정 (네이티브 SDK 방식)
+  ============================================================ */
+  const handleKakaoLogin = async () => {
+  setLoading(true);
+  try {
+    const token = await kakaoLogin();
+    // console.log("카카오 로그인 성공, 토큰:", token.accessToken); // 확인용
+
+    // ⚠️ 수정 포인트: token.accessToken이 아니라 token.idToken을 넘겨야 합니다!
+    if (token.idToken) {
+      await loginWithKakao(token.idToken); 
+      navigation.reset({ index: 0, routes: [{ name: ROUTES.HOME }] });
+    } else {
+      throw new Error("카카오 ID 토큰이 없습니다. 설정에서 OpenID Connect를 확인하세요.");
+    }
+    
+  } catch (e) {
+    console.error("Kakao Login Error:", e);
+    if (e.message !== "user cancelled") { 
+        showAlert("카카오 로그인에 실패했습니다.");
+    }
+  } finally {
+    setLoading(false);
+  }
+};
+
+  /* ============================================================
+      📧 기존 이메일 로그인 로직 (100% 유지)
   ============================================================ */
   const showAlert = (msg) => {
     setModalMsg(msg);
@@ -180,20 +141,19 @@ export default function LoginScreen() {
     }
   };
 
-  // ✅ 소셜 로그인 핸들러 분기 처리 (구글 & 카카오)
+  // ✅ 소셜 로그인 버튼 연결 (네이티브 함수로 연결)
   const handleSocialLogin = (platform) => {
+    if (lockRef.current) return; // ✅ 즉시 차단
+    lockRef.current = true;
+
+    const done = () => { lockRef.current = false; };
+
     if (platform === "카카오") {
-      if (kakaoRequest) {
-        promptKakaoAsync();
-      } else {
-        showAlert("카카오 로그인 초기화 중입니다.\n잠시 후 다시 시도해주세요.");
-      }
+      handleKakaoLogin().finally(done);
     } else if (platform === "구글") {
-      if (googleRequest) {
-        promptGoogleAsync();
-      } else {
-        showAlert("구글 로그인 초기화 중입니다.\n잠시 후 다시 시도해주세요.");
-      }
+      handleGoogleLogin().finally(done);
+    } else {
+      done();
     }
   };
 
@@ -204,6 +164,9 @@ export default function LoginScreen() {
     if (mode === "reset") return "비밀번호 재설정 메일 보내기";
   };
 
+  /* ============================================================
+      🎨 UI 레이아웃 (주인님 원본 그대로 유지)
+  ============================================================ */
   return (
     <KeyboardAvoidingView 
       behavior={Platform.OS === "ios" ? "padding" : undefined}
@@ -295,11 +258,11 @@ export default function LoginScreen() {
                 <Text style={styles.kakaoText}>카카오로 시작하기</Text>
               </TouchableOpacity>
 
-              {/* ✅ 구글 로그인 버튼 */}
+              {/* ✅ 구글 로그인 버튼 (disabled 조건만 수정) */}
               <TouchableOpacity 
                 style={[styles.socialBtn, styles.googleBtn]} 
                 onPress={() => handleSocialLogin("구글")}
-                disabled={!googleRequest || loading}
+                disabled={loading} // 로딩 중에만 비활성화
               >
                 <Ionicons name="logo-google" size={20} color="#555" />
                 <Text style={styles.googleText}>구글로 시작하기</Text>
