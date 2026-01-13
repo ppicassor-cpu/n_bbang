@@ -12,9 +12,17 @@ import CustomModal from "../../../components/CustomModal";
 
 const SCREEN_WIDTH = Dimensions.get("window").width;
 
+// ✅ [추가] 신고 사유 목록 정의
+const REPORT_REASONS = [
+  "광고 / 홍보성 게시글",
+  "거래 금지 품목",
+  "사기 / 허위 정보",
+  "욕설 / 비하 발언",
+  "기타 부적절한 내용"
+];
+
 export default function DetailScreen({ route, navigation }) {
   const { post: initialPost } = route.params || {};
-  // ✅ [수정] 신고(reportUser), 차단(blockUser) 함수 추가 가져오기
   const { user, deletePost, posts, updatePost, reportUser, blockUser } = useAppContext(); 
   const insets = useSafeAreaInsets();
   
@@ -27,7 +35,7 @@ export default function DetailScreen({ route, navigation }) {
   const [errorModalVisible, setErrorModalVisible] = useState(false);
   const [alertMsg, setAlertMsg] = useState("");
 
-  // ✅ [추가] 신고, 차단, 샘플 데이터 안내용 모달 상태
+  // 신고, 차단, 샘플 데이터 안내용 모달 상태
   const [reportModalVisible, setReportModalVisible] = useState(false);
   const [blockModalVisible, setBlockModalVisible] = useState(false);
   const [sampleModalVisible, setSampleModalVisible] = useState(false);
@@ -61,7 +69,7 @@ export default function DetailScreen({ route, navigation }) {
   const roomName = post.title || "공동구매 채팅방";
 
   const onPressChat = () => {
-    // ✅ [추가] 샘플 데이터인지 확인하여 커스텀 모달 띄우기
+    // 샘플 데이터인지 확인하여 커스텀 모달 띄우기
     if (post.ownerId === "SAMPLE_DATA") {
       setSampleModalVisible(true);
       return;
@@ -109,25 +117,25 @@ export default function DetailScreen({ route, navigation }) {
     }
   };
 
-  // ✅ [수정] 신고 핸들러 (Alert -> CustomModal)
+  // 신고 핸들러
   const handleReport = () => {
     setIsDropdownOpen(false);
     setReportModalVisible(true);
   };
 
-  // ✅ [추가] 신고 확정 처리
-  const confirmReport = () => {
-    reportUser(post.ownerId, post.id, "부적절한 게시글(N빵)", "post");
+  // ✅ [수정] 신고 확정 처리 (사유 선택 시 실행)
+  const confirmReport = (selectedReason) => {
+    reportUser(post.ownerId, post.id, selectedReason, "post");
     setReportModalVisible(false);
   };
 
-  // ✅ [수정] 차단 핸들러 (Alert -> CustomModal)
+  // 차단 핸들러
   const handleBlock = () => {
     setIsDropdownOpen(false);
     setBlockModalVisible(true);
   };
 
-  // ✅ [추가] 차단 확정 처리
+  // 차단 확정 처리
   const confirmBlock = async () => {
     await blockUser(post.ownerId);
     setBlockModalVisible(false);
@@ -177,7 +185,6 @@ export default function DetailScreen({ route, navigation }) {
             <Text style={styles.title} numberOfLines={1}>{post.title}</Text>
             
             <View style={styles.dropdownContainer}>
-              {/* ✅ [수정] 내 글이면 상태버튼, 남의 글이면 메뉴(점 세개) 버튼 */}
               {isMyPost ? (
                 <TouchableOpacity 
                   style={[styles.statusBtn, isFull && { borderColor: theme.danger }]}
@@ -194,7 +201,7 @@ export default function DetailScreen({ route, navigation }) {
                 </TouchableOpacity>
               )}
 
-              {/* ✅ [수정] 드롭다운 메뉴 (분기 처리) */}
+              {/* 드롭다운 메뉴 */}
               {isDropdownOpen && (
                 <View style={[styles.dropdownMenu, !isMyPost && { width: 160 }]}>
                   {isMyPost ? (
@@ -289,12 +296,12 @@ export default function DetailScreen({ route, navigation }) {
         )}
       </View>
 
-      {/* ✅ 기존 모달들 */}
+      {/* 기본 모달들 */}
       <CustomModal visible={successModalVisible} title="알림" message={alertMsg} onConfirm={() => setSuccessModalVisible(false)} />
       <CustomModal visible={errorModalVisible} title="오류" message={alertMsg} onConfirm={() => setErrorModalVisible(false)} />
       <CustomModal visible={deleteModalVisible} title="삭제" message="정말로 삭제하시겠습니까?" type="confirm" onConfirm={handleDelete} onCancel={() => setDeleteModalVisible(false)} />
 
-      {/* ✅ [추가] 신규 적용된 모달들 */}
+      {/* 안내용 모달들 */}
       <CustomModal 
         visible={sampleModalVisible} 
         title="체험용 게시글" 
@@ -302,15 +309,34 @@ export default function DetailScreen({ route, navigation }) {
         onConfirm={() => setSampleModalVisible(false)}
       />
 
+      {/* ✅ [수정] 신고 모달 (버튼 목록형) */}
       <CustomModal 
         visible={reportModalVisible} 
-        title="신고하기" 
-        message="이 게시글을 부적절한 콘텐츠로 신고하시겠습니까?" 
-        type="confirm" 
-        onConfirm={confirmReport} 
-        onCancel={() => setReportModalVisible(false)} 
-      />
+        title="신고 사유 선택" 
+        message="신고하시는 사유를 선택해주세요."
+        onCancel={() => setReportModalVisible(false)}
+      >
+        <View style={{ gap: 8, marginTop: 10, width: '100%' }}>
+          {REPORT_REASONS.map((reason) => (
+            <TouchableOpacity 
+              key={reason}
+              style={styles.reportReasonBtn}
+              onPress={() => confirmReport(reason)}
+            >
+              <Text style={styles.reportReasonText}>{reason}</Text>
+            </TouchableOpacity>
+          ))}
+          
+          <TouchableOpacity 
+            style={[styles.reportReasonBtn, { backgroundColor: '#333', marginTop: 8 }]}
+            onPress={() => setReportModalVisible(false)}
+          >
+            <Text style={{ color: '#BBB', fontWeight: 'bold' }}>취소</Text>
+          </TouchableOpacity>
+        </View>
+      </CustomModal>
 
+      {/* 차단 모달 */}
       <CustomModal 
         visible={blockModalVisible} 
         title="차단하기" 
@@ -353,5 +379,19 @@ const styles = StyleSheet.create({
   price: { color: "white", fontSize: 20, fontWeight: "bold" },
   chatBtn: { backgroundColor: theme.primary, paddingHorizontal: 20, paddingVertical: 14, borderRadius: 12, minWidth: 80, alignItems: "center" },
   chatBtnText: { fontWeight: "bold", fontSize: 16, color: "black" },
-  actionBtn: { paddingHorizontal: 20, paddingVertical: 14, borderRadius: 12, backgroundColor: "#333", minWidth: 70, alignItems: "center" }
+  actionBtn: { paddingHorizontal: 20, paddingVertical: 14, borderRadius: 12, backgroundColor: "#333", minWidth: 70, alignItems: "center" },
+  
+  // ✅ [추가] 신고 사유 버튼 스타일
+  reportReasonBtn: {
+    backgroundColor: '#2A2A2A',
+    paddingVertical: 14,
+    borderRadius: 8,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#444'
+  },
+  reportReasonText: {
+    color: 'white',
+    fontSize: 14
+  }
 });

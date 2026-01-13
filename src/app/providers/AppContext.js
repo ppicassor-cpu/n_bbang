@@ -99,31 +99,41 @@ export const AppProvider = ({ children }) => {
     isAdminRef.current = isAdmin;
   }, [isAdmin]);
 
-  const ENTITLEMENT_ID = "premium";
+  // ✅ Entitlement Identifier (RevenueCat 대시보드 Identifier)
+  const ENTITLEMENT_ID = "Nbbang Premium";
 
-  const REVENUECAT_IOS_API_KEY = process.env.EXPO_PUBLIC_REVENUECAT_IOS_API_KEY || "";
-  const REVENUECAT_ANDROID_API_KEY = process.env.EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY || "";
+  // ✅ (통일) Public SDK Key는 EXPO_PUBLIC 하나만 사용
+  const REVENUECAT_PUBLIC_SDK_KEY = process.env.EXPO_PUBLIC_REVENUECAT_PUBLIC_SDK_KEY || "";
 
   const getRevenueCatApiKey = () => {
-    if (Platform.OS === "ios") return REVENUECAT_IOS_API_KEY;
-    if (Platform.OS === "android") return REVENUECAT_ANDROID_API_KEY;
-    return "";
+    // 공용 키만 사용 (App.js에서 configure에 사용)
+    return REVENUECAT_PUBLIC_SDK_KEY || "";
   };
 
-  const rcConfiguredRef = useRef(false);
+  // ✅ AppContext에서는 절대 configure 하지 않음
+  const rcLoggedInUidRef = useRef(null);
 
   const initRevenueCatForUser = async (uid) => {
     try {
       const apiKey = getRevenueCatApiKey();
-      if (!apiKey || !uid) {
-        rcConfiguredRef.current = false;
+      if (!apiKey) {
+        rcLoggedInUidRef.current = null;
         return;
       }
-      await Purchases.configure({ apiKey, appUserID: uid });
-      rcConfiguredRef.current = true;
+
+      // ✅ 로그인(identify) 연결: uid가 있고, 현재 로그인 uid와 다르면 logIn
+      if (uid && rcLoggedInUidRef.current !== uid && Purchases.logIn) {
+        try {
+          await Purchases.logIn(uid);
+          rcLoggedInUidRef.current = uid;
+        } catch (e) {
+          // logIn 실패해도 앱은 계속 동작해야 함
+          console.warn("RevenueCat logIn 실패(무시 가능):", e);
+        }
+      }
     } catch (e) {
-      rcConfiguredRef.current = false;
-      console.warn("RevenueCat configure 실패:", e);
+      rcLoggedInUidRef.current = null;
+      console.warn("RevenueCat logIn 실패:", e);
     }
   };
 
@@ -164,6 +174,9 @@ export const AppProvider = ({ children }) => {
         return;
       }
 
+      // ✅ 혹시 아직 logIn 안 된 상태면 먼저 보장 (configure는 App.js에서만)
+      await initRevenueCatForUser(user.uid);
+
       const info = await Purchases.getCustomerInfo();
       await applyCustomerInfoToStateAndDb(user.uid, info);
     } catch (e) {
@@ -174,6 +187,10 @@ export const AppProvider = ({ children }) => {
   const restorePurchases = async () => {
     try {
       if (isAdminRef.current) return "RESTORE_OK";
+
+      if (user?.uid) {
+        await initRevenueCatForUser(user.uid);
+      }
 
       const info = await Purchases.restorePurchases();
       const entitlement = info?.entitlements?.active?.[ENTITLEMENT_ID];
@@ -199,13 +216,15 @@ export const AppProvider = ({ children }) => {
     if (!current) throw new Error("NO_OFFERINGS");
 
     let targetPackage = null;
+
     if (selectedPlan === "yearly") {
-      targetPackage =
-        current.annual || current.availablePackages?.find((p) => p.packageType === "ANNUAL");
+      targetPackage = current.annual || current.availablePackages?.find((p) => p.packageType === "ANNUAL");
+    } else if (selectedPlan === "lifetime") {
+      targetPackage = current.lifetime || current.availablePackages?.find((p) => p.packageType === "LIFETIME");
     } else {
-      targetPackage =
-        current.monthly || current.availablePackages?.find((p) => p.packageType === "MONTHLY");
+      targetPackage = current.monthly || current.availablePackages?.find((p) => p.packageType === "MONTHLY");
     }
+
     if (!targetPackage) throw new Error("NO_MATCHED_PACKAGE");
 
     const purchaseResult = await Purchases.purchasePackage(targetPackage);
@@ -242,7 +261,7 @@ export const AppProvider = ({ children }) => {
         isAdminRef.current = false;
         setBlockedUsers([]);
         setPostLimit(20);
-        rcConfiguredRef.current = false;
+        rcLoggedInUidRef.current = null;
         return;
       }
 
@@ -525,13 +544,14 @@ export const AppProvider = ({ children }) => {
 
   const logout = async () => {
     try {
-      if (rcConfiguredRef.current) {
+      // ✅ RevenueCat user detach
+      if (Purchases.logOut) {
         await Purchases.logOut();
       }
     } catch (e) {
       console.warn("RevenueCat logOut 실패(무시 가능):", e);
     }
-    rcConfiguredRef.current = false;
+    rcLoggedInUidRef.current = null;
     return signOut(auth);
   };
 
@@ -594,7 +614,9 @@ export const AppProvider = ({ children }) => {
         resetPassword,
 
         currentLocation,
+        setCurrentLocation,
         myCoords,
+        setMyCoords,
         posts,
         addPost,
         updatePost,

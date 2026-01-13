@@ -5,18 +5,27 @@
   "build": {
     "development": {
       "developmentClient": true,
-      "distribution": "internal"
+      "distribution": "internal",
+      "env": {
+        "REVENUECAT_PUBLIC_SDK_KEY": "$(REVENUECAT_PUBLIC_SDK_KEY)"
+      }
     },
     "preview": {
       "distribution": "internal",
       "android": {
         "buildType": "apk"
+      },
+      "env": {
+        "REVENUECAT_PUBLIC_SDK_KEY": "$(REVENUECAT_PUBLIC_SDK_KEY)"
       }
     },
     "production": {
       "distribution": "store",
       "android": {
         "buildType": "app-bundle"
+      },
+      "env": {
+        "REVENUECAT_PUBLIC_SDK_KEY": "$(REVENUECAT_PUBLIC_SDK_KEY)"
       }
     }
   },

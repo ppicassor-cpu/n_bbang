@@ -1,7 +1,3 @@
-// ================================================================================
-//  FILE: src/features/profile/screens/NotificationScreen.js
-// ================================================================================
-
 import React, { useState, useEffect } from "react";
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from "react-native";
 import { MaterialIcons, Ionicons } from "@expo/vector-icons";
@@ -50,10 +46,6 @@ export default function NotificationScreen() {
       return;
     }
 
-    // ✅ createdAt 누락 문서가 섞여도 쿼리가 "깨지지" 않게:
-    // 1) orderBy(createdAt) 구독을 먼저 시도
-    // 2) 실패하면(권한/인덱스/필드누락 등으로) orderBy 없이 구독으로 폴백
-    // 3) 폴백에서는 클라이언트에서 createdAt 기준 정렬(없으면 맨 아래)
     const colRef = collection(db, "users", user.uid, "notifications");
     const q = query(colRef, orderBy("createdAt", "desc"));
 
@@ -73,7 +65,6 @@ export default function NotificationScreen() {
         (error) => {
           console.error("알림 구독 에러:", error);
 
-          // ✅ 폴백 구독(정렬 없이)
           try {
             unsubscribe = onSnapshot(
               colRef,
@@ -84,7 +75,6 @@ export default function NotificationScreen() {
                     ...d.data(),
                   }))
                   .sort((a, b) => {
-                    // createdAt이 없으면 가장 아래로
                     const ad =
                       typeof a?.createdAt?.toDate === "function"
                         ? a.createdAt.toDate()
@@ -106,7 +96,7 @@ export default function NotificationScreen() {
                     const at = ad && !Number.isNaN(ad.getTime()) ? ad.getTime() : -Infinity;
                     const bt = bd && !Number.isNaN(bd.getTime()) ? bd.getTime() : -Infinity;
 
-                    return bt - at; // desc
+                    return bt - at;
                   });
 
                 setNotifications(loaded2);
@@ -197,7 +187,7 @@ export default function NotificationScreen() {
   };
 
   const onPressNoti = async (item) => {
-    await handleRead(item);   // ✅ UX 안정성: 읽음 처리 완료 후 이동
+    await handleRead(item);
     if (item?.type === "chat" && item?.roomId) {
       navigation.navigate(ROUTES.CHAT_ROOM, {
         roomId: item.roomId,

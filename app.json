@@ -6,7 +6,9 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
-    "scheme": "kakaoa4b53cefa332f8588fe8ca526b44420e",
+
+    "scheme": "exp+nbbang",
+
     "icon": "./assets/icon.png",
     "splash": {
       "image": "./assets/splash-icon.png",
@@ -14,6 +16,7 @@
       "backgroundColor": "#ffffff"
     },
     "assetBundlePatterns": ["**/*"],
+
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.sonsunghyun.nbbang",
@@ -23,32 +26,74 @@
         "backgroundColor": "#ffffff"
       }
     },
+
     "android": {
       "package": "com.sonsunghyun.nbbang",
       "googleServicesFile": "./google-services.json",
-      "permissions": ["INTERNET", "ACCESS_NETWORK_STATE", "POST_NOTIFICATIONS"],
+
+      "permissions": [
+        "INTERNET",
+        "ACCESS_NETWORK_STATE",
+        "POST_NOTIFICATIONS",
+
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE",
+
+        "READ_MEDIA_AUDIO",
+        "READ_MEDIA_IMAGES",
+        "READ_MEDIA_VIDEO",
+        "READ_MEDIA_VISUAL_USER_SELECTED",
+
+        "RECORD_AUDIO",
+        "SYSTEM_ALERT_WINDOW",
+        "VIBRATE"
+      ],
+
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": false,
+          "category": ["DEFAULT", "BROWSABLE"],
+          "data": [
+            {
+              "scheme": "exp+nbbang"
+            }
+          ]
+        }
+      ],
+
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#ffffff"
       },
+
       "splash": {
         "image": "./assets/splash-icon.png",
         "resizeMode": "contain",
         "backgroundColor": "#ffffff"
       },
+
       "config": {
         "googleMaps": {
           "apiKey": "AIzaSyAXEC--KNqOk_JgpXu9iu1QTlT58TKOpdk"
         }
       }
     },
+
     "plugins": [
       "@react-native-google-signin/google-signin",
       [
         "expo-build-properties",
         {
           "android": {
-            "usesCleartextTraffic": true
+            "usesCleartextTraffic": false,
+            "extraDependencies": [
+              "com.revenuecat.purchases:purchases:9.19.0",
+              "com.revenuecat.purchases:purchases-ui:9.19.0"
+            ]
           }
         }
       ],
@@ -60,14 +105,30 @@
         }
       ],
       [
+        "./plugins/withKakaoAppKeyMetaData",
+        {
+          "kakaoAppKey": "a4b53cefa332f8588fe8ca526b44420e"
+        }
+      ],
+      [
         "react-native-permissions",
         {
-          "android": {
-            "notifications": true
-          }
+          "iosPermissions": [
+            "LOCATION_WHEN_IN_USE",
+            "PHOTO_LIBRARY",
+            "MICROPHONE",
+            "NOTIFICATIONS"
+          ],
+          "androidPermissions": [
+            "ACCESS_FINE_LOCATION",
+            "POST_NOTIFICATIONS",
+            "READ_MEDIA_IMAGES",
+            "RECORD_AUDIO"
+          ]
         }
       ]
     ],
+
     "extra": {
       "eas": {
         "projectId": "fa5ccf8e-90e3-4b41-928f-b0ec5ff99eb4"

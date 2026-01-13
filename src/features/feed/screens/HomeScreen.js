@@ -1,34 +1,57 @@
 ﻿import React, { useState, useEffect } from "react";
-import { View, Text, FlatList, TouchableOpacity, Image, StyleSheet } from "react-native";
+// ✅ [필수] 화면 표시용 컴포넌트들
+import { View, Text, FlatList, TouchableOpacity, Image, StyleSheet, ActivityIndicator } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { MaterialIcons, Ionicons } from "@expo/vector-icons"; 
 import { theme } from "../../../theme";
 import { ROUTES } from "../../../app/navigation/routes";
 import { useAppContext } from "../../../app/providers/AppContext";
 import CustomModal from "../../../components/CustomModal";
-// ✅ [추가] 샘플 데이터 생성기 가져오기
 import { checkAndGenerateSamples } from "../../../utils/autoSampleGenerator";
 
 const CATEGORIES = ["전체", "마트/식품", "생활용품", "기타", "무료나눔"];
 
 export default function HomeScreen({ navigation }) {
-  // ✅ loadMorePosts 함수 가져오기
-  const { posts, currentLocation, myCoords, getDistanceFromLatLonInKm, loadMorePosts } = useAppContext();
+  // ✅ [수정] AppContext에 이미 있는 'verifyLocation' 함수를 가져옵니다.
+  const { 
+    posts, 
+    currentLocation, 
+    myCoords, 
+    getDistanceFromLatLonInKm, 
+    loadMorePosts,
+    verifyLocation // 위치 갱신 및 저장까지 해주는 핵심 함수
+  } = useAppContext();
+  
   const insets = useSafeAreaInsets();
   
   const [selectedCategory, setSelectedCategory] = useState("전체");
   const [writeModalVisible, setWriteModalVisible] = useState(false);
+  // ✅ [추가] 로딩 상태 관리
+  const [isLocationLoading, setIsLocationLoading] = useState(false);
 
-  // ✅ [추가] 내 위치(myCoords)가 잡히면 -> 주변에 샘플 데이터 생성 시도 (최초 1회만 동작)
   useEffect(() => {
     if (myCoords && myCoords.latitude) {
       checkAndGenerateSamples(myCoords);
     }
   }, [myCoords]);
 
+  // ✅ [추가] 위치 갱신 핸들러 (AppContext의 verifyLocation 활용)
+  const handleRefreshLocation = async () => {
+    if (isLocationLoading) return;
+    setIsLocationLoading(true);
+    try {
+      // verifyLocation이 권한 확인, 좌표 갱신, 주소 변환, 저장까지 다 처리해줍니다.
+      await verifyLocation(); 
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsLocationLoading(false);
+    }
+  };
+
   /* =========================
-     ✅ 1시간 부스트 최상단 정렬 로직
-  ========================= */
+      1시간 부스트 최상단 정렬 로직
+   ========================= */
   const now = Date.now();
 
   const boostedPosts = [];
@@ -96,10 +119,9 @@ export default function HomeScreen({ navigation }) {
             <Image 
               source={{ uri: item.images[0] }} 
               style={styles.image} 
-              // ✅ [이미지 최적화] 리사이징 및 메모리 관리
               resizeMode="cover"
-              resizeMethod="resize" // 안드로이드 메모리 최적화
-              fadeDuration={0} // 리스트 스크롤 시 깜빡임 줄이기
+              resizeMethod="resize"
+              fadeDuration={0}
             />
           ) : (
             <MaterialIcons name="receipt-long" size={40} color="grey" />
@@ -145,7 +167,20 @@ export default function HomeScreen({ navigation }) {
     <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
       {/* 헤더 */}
       <View style={styles.header}>
-        <Text style={styles.location}>{currentLocation} </Text>
+        {/* ✅ [수정] 터치 시 위치 갱신 기능 연결 */}
+        <TouchableOpacity 
+          onPress={handleRefreshLocation} 
+          style={{ flexDirection: "row", alignItems: "center" }}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.location}>{currentLocation} </Text>
+          {isLocationLoading ? (
+            <ActivityIndicator size="small" color="white" style={{ marginLeft: 4 }} />
+          ) : (
+            <MaterialIcons name="keyboard-arrow-down" size={24} color="white" />
+          )}
+        </TouchableOpacity>
+
         <View style={{ flexDirection: "row", gap: 14, alignItems: "center" }}>
           
           <TouchableOpacity onPress={() => navigation.navigate(ROUTES.CHAT_ROOMS)}>
@@ -181,7 +216,7 @@ export default function HomeScreen({ navigation }) {
         ))}
       </View>
 
-      {/* 게시글 리스트 (최적화 적용) */}
+      {/* 게시글 리스트 */}
       <FlatList
         data={filteredPosts}
         renderItem={renderItem}
@@ -195,17 +230,15 @@ export default function HomeScreen({ navigation }) {
             <Text style={{ color: "grey" }}>해당 카테고리의 글이 없습니다.</Text>
           </View>
         }
-        // ✅ [핵심] 무한 스크롤 및 성능 최적화 옵션
         onEndReached={() => {
-          // '전체' 보기일 때만 더 불러오기 (필터링 중에는 헷갈릴 수 있음)
           if (selectedCategory === "전체") {
              loadMorePosts();
           }
         }}
-        onEndReachedThreshold={0.5} // 스크롤이 절반 남았을 때 미리 로딩
-        initialNumToRender={6}      // 처음에 렌더링할 아이템 수 (화면 높이 고려)
-        windowSize={5}              // 렌더링 창 크기 (작을수록 메모리 절약)
-        removeClippedSubviews={true} // 화면 밖 아이템 메모리 해제 (안드로이드 필수)
+        onEndReachedThreshold={0.5}
+        initialNumToRender={6}
+        windowSize={5}
+        removeClippedSubviews={true}
       />
 
       {/* 글쓰기 버튼 */}
