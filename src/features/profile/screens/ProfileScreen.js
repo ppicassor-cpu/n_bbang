@@ -1,29 +1,61 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, SafeAreaView, Linking, Platform } from 'react-native';
+// FILE: src\features\profile\screens\ProfileScreen.js
+
+import React, { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Linking, Platform } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
+import { checkNotifications, requestNotifications } from 'react-native-permissions';
+import { collection, query, where, onSnapshot } from "firebase/firestore";
 
 // ✅ 프로젝트 파일 구조에 맞춘 import
-import { theme } from '../../../theme'; 
-import { ROUTES } from '../../../app/navigation/routes'; 
-import { useAppContext } from '../../../app/providers/AppContext'; 
-import CustomModal from '../../../components/CustomModal'; 
+import { theme } from '../../../theme';
+import { ROUTES } from '../../../app/navigation/routes';
+import { useAppContext } from '../../../app/providers/AppContext';
+import CustomModal from '../../../components/CustomModal';
+import { db } from "../../../firebaseConfig";
 
 export default function ProfileScreen() {
   const navigation = useNavigation();
 
   // ✅ Context 데이터
-  const { 
-    user, 
-    logout, 
+  const {
+    user,
+    logout,
     currentLocation = "위치 미지정",
-    isVerified = false, 
-    isPremium = false, 
+    isVerified = false,
+    isPremium = false,
     dailyPostCount = 0,
     posts = [],
     isAdmin // ✅ 관리자 여부
   } = useAppContext();
+
+  const [unreadNotiCount, setUnreadNotiCount] = useState(0);
+
+  useEffect(() => {
+    if (!user?.uid) {
+      setUnreadNotiCount(0);
+      return;
+    }
+
+    const q = query(
+      collection(db, "users", user.uid, "notifications"),
+      where("isRead", "==", false)
+    );
+
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        setUnreadNotiCount(snap.size || 0);
+      },
+      () => {
+        setUnreadNotiCount(0);
+      }
+    );
+
+    return () => unsub();
+  }, [user?.uid]);
 
   // ✅ 내가 쓴 글 개수 계산
   const myPosts = Array.isArray(posts) ? posts.filter(p => p.ownerId === user?.uid) : [];
@@ -47,13 +79,12 @@ export default function ProfileScreen() {
   // 1. 로그아웃 핸들러
   const handleLogoutPress = () => {
     openModal(
-      "로그아웃", 
-      "정말 로그아웃 하시겠습니까?", 
-      "confirm", 
+      "로그아웃",
+      "정말 로그아웃 하시겠습니까?",
+      "confirm",
       async () => {
         setModalVisible(false);
         await logout();
-        navigation.reset({ index: 0, routes: [{ name: ROUTES.LOGIN }] });
       }
     );
   };
@@ -63,15 +94,94 @@ export default function ProfileScreen() {
     navigation.navigate(ROUTES.MY_LISTINGS);
   };
 
-  // 3. 알림 설정 핸들러 (권한 체크 시늉 + 설정 이동)
-  const handleNotificationSettings = () => {
+  // ✅ 알림 권한 요청(런타임) + 설정 이동 처리
+  const requestNotiPermission = async () => {
+    try {
+      // iOS는 옵션 전달, Android는 무시되어도 문제 없음
+      const res = await requestNotifications(['alert', 'sound', 'badge']);
+      const nextStatus = res?.status || null;
+
+      if (nextStatus === "granted") {
+        openModal(
+          "알림 설정",
+          "알림이 허용되었습니다.\n이제 새로운 채팅 알림이나 소식을 받을 수 있습니다.",
+          "alert",
+          () => setModalVisible(false)
+        );
+        return;
+      }
+
+      // denied/blocked/기타면 설정으로 안내
+      openModal(
+        "알림 설정",
+        "알림 허용이 필요합니다.\n기기 설정 화면으로 이동하시겠습니까?",
+        "confirm",
+        () => {
+          setModalVisible(false);
+          Linking.openSettings();
+        }
+      );
+    } catch {
+      openModal(
+        "알림 설정",
+        "알림 권한 요청 중 문제가 발생했습니다.\n기기 설정 화면으로 이동하시겠습니까?",
+        "confirm",
+        () => {
+          setModalVisible(false);
+          Linking.openSettings();
+        }
+      );
+    }
+  };
+
+  // 3. 알림 설정 핸들러 (check → 필요 시 request → 그래도 안되면 settings)
+  const handleNotificationSettings = async () => {
+    let status = null;
+
+    try {
+      const res = await checkNotifications();
+      status = res?.status || null;
+    } catch {
+      status = null;
+    }
+
+    // granted면: 설정으로 안 보내고 커스텀 확인 모달
+    if (status === "granted") {
+      openModal(
+        "알림 설정",
+        "현재 알림이 허용되어 있습니다.\n새로운 채팅 알림이나 소식을 받으시겠습니까?",
+        "confirm",
+        () => {
+          setModalVisible(false);
+        }
+      );
+      return;
+    }
+
+    // denied면: 런타임 요청 먼저
+    if (status === "denied") {
+      openModal(
+        "알림 설정",
+        Platform.OS === "android"
+          ? "현재 알림이 허용되지 않았습니다.\n지금 알림을 허용하시겠습니까?"
+          : "현재 알림이 허용되지 않았습니다.\n지금 알림을 허용하시겠습니까?",
+        "confirm",
+        async () => {
+          setModalVisible(false);
+          await requestNotiPermission();
+        }
+      );
+      return;
+    }
+
+    // blocked/limited/unavailable/null 등: 설정으로 이동
     openModal(
       "알림 설정",
-      "알림 권한 설정을 위해\n기기 설정 화면으로 이동하시겠습니까?",
+      "알림이 꺼져 있거나(또는 차단됨)\n설정에서 변경이 필요합니다.\n기기 설정 화면으로 이동하시겠습니까?",
       "confirm",
       () => {
         setModalVisible(false);
-        Linking.openSettings(); // 기기 설정 화면 열기
+        Linking.openSettings();
       }
     );
   };
@@ -81,7 +191,7 @@ export default function ProfileScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        
+
         {/* 1. 프로필 + 통계 통합 섹션 (슬림형) */}
         <View style={styles.profileHeader}>
           {/* 상단: 프사 + 이름 */}
@@ -94,11 +204,29 @@ export default function ProfileScreen() {
                 <Text style={styles.nickname} numberOfLines={1}>
                   {user?.displayName || user?.email?.split('@')[0] || "사용자"}
                 </Text>
+
                 {isPremium && (
                   <View style={styles.premiumBadge}>
                     <Text style={styles.premiumText}>PREMIUM</Text>
                   </View>
                 )}
+
+                <View style={{ flex: 1 }} />
+
+                <TouchableOpacity
+                  onPress={() => navigation.navigate(ROUTES.NOTIFICATION)}
+                  activeOpacity={0.8}
+                  style={styles.notiBtn}
+                >
+                  <Ionicons name="notifications-outline" size={20} color="#CCC" />
+                  {unreadNotiCount > 0 && (
+                    <View style={styles.notiBadge}>
+                      <Text style={styles.notiBadgeText} numberOfLines={1}>
+                        {unreadNotiCount > 99 ? "99+" : String(unreadNotiCount)}
+                      </Text>
+                    </View>
+                  )}
+                </TouchableOpacity>
               </View>
               <Text style={styles.locationText}>
                 {isVerified ? `${currentLocation} 인증됨` : "위치 미인증"}
@@ -116,8 +244,8 @@ export default function ProfileScreen() {
             <View style={styles.statItem}>
               <Text style={styles.statLabel}>오늘 작성</Text>
               <Text style={[
-                 styles.statValue, 
-                 (!isPremium && dailyPostCount >= 1) && { color: theme.danger }
+                styles.statValue,
+                (!isPremium && dailyPostCount >= 1) && { color: theme.danger }
               ]}>
                 {dailyPostCount} / {isPremium ? "∞" : "1"}회
               </Text>
@@ -127,7 +255,7 @@ export default function ProfileScreen() {
 
         {/* 2. 프리미엄 배너 (연녹색 테두리 + 투명 배경) */}
         {!isPremium && (
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.premiumOutlineBanner}
             onPress={() => navigation.navigate(ROUTES.PREMIUM)}
             activeOpacity={0.7}
@@ -143,48 +271,48 @@ export default function ProfileScreen() {
         {/* 3. 메뉴 리스트 */}
         <View style={styles.menuContainer}>
           <Text style={styles.sectionTitle}>활동</Text>
-          
+
           {/* ✅ [추가] 알림 센터 버튼 */}
-          <MenuLink 
-            icon="notifications-outline" 
-            label="알림 센터" 
+          <MenuLink
+            icon="notifications-outline"
+            label="알림 센터"
             onPress={() => navigation.navigate(ROUTES.NOTIFICATION)}
           />
 
-          <MenuLink 
-            icon="chatbubble-outline" 
-            label="채팅 목록" 
+          <MenuLink
+            icon="chatbubble-outline"
+            label="채팅 목록"
             onPress={() => navigation.navigate(ROUTES.CHAT_ROOMS)}
           />
-          <MenuLink 
-            icon="receipt-outline" 
-            label="내가 쓴 글 보기" 
-            onPress={handleMyPosts} 
+          <MenuLink
+            icon="receipt-outline"
+            label="내가 쓴 글 보기"
+            onPress={handleMyPosts}
           />
 
           {/* 관리자 전용 메뉴 */}
           {isAdmin && (
             <>
               <Text style={[styles.sectionTitle, { marginTop: 24, color: '#FF6B6B' }]}>관리자 전용</Text>
-              <MenuLink 
-                icon="shield-checkmark-outline" 
-                label="신고 내역 관리" 
+              <MenuLink
+                icon="shield-checkmark-outline"
+                label="신고 내역 관리"
                 color="#FF6B6B"
-                onPress={() => navigation.navigate(ROUTES.ADMIN_REPORT)} 
+                onPress={() => navigation.navigate(ROUTES.ADMIN_REPORT)}
               />
             </>
           )}
-          
+
           <Text style={[styles.sectionTitle, { marginTop: 24 }]}>설정</Text>
-          <MenuLink 
-            icon="settings-outline" 
-            label="알림 설정" 
-            onPress={handleNotificationSettings} 
+          <MenuLink
+            icon="settings-outline"
+            label="알림 설정"
+            onPress={handleNotificationSettings}
           />
-          <MenuLink 
-            icon="log-out-outline" 
-            label="로그아웃" 
-            color="white" 
+          <MenuLink
+            icon="log-out-outline"
+            label="로그아웃"
+            color="white"
             onPress={handleLogoutPress}
           />
         </View>
@@ -194,7 +322,7 @@ export default function ProfileScreen() {
       </ScrollView>
 
       {/* ✅ 커스텀 모달 */}
-      <CustomModal 
+      <CustomModal
         visible={modalVisible}
         title={modalConfig.title}
         message={modalConfig.message}
@@ -236,7 +364,7 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   avatar: {
-    width: 54, 
+    width: 54,
     height: 54,
     borderRadius: 27,
     backgroundColor: theme.primary,
@@ -246,7 +374,7 @@ const styles = StyleSheet.create({
   },
   nickname: {
     color: 'white',
-    fontSize: 18, 
+    fontSize: 18,
     fontWeight: 'bold',
     marginRight: 6,
   },
@@ -266,11 +394,36 @@ const styles = StyleSheet.create({
     fontSize: 13,
     marginTop: 2,
   },
-  
+
+  notiBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    alignItems: "center",
+    justifyContent: "center",
+    position: "relative",
+  },
+  notiBadge: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: theme.danger,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 4,
+  },
+  notiBadgeText: {
+    color: "white",
+    fontSize: 10,
+    fontWeight: "bold",
+  },
+
   // 통계 행
   statsRow: {
     flexDirection: 'row',
-    backgroundColor: '#252525', 
+    backgroundColor: '#252525',
     borderRadius: 12,
     paddingVertical: 12,
     alignItems: 'center',
@@ -305,7 +458,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 16,
     marginBottom: 24,
-    backgroundColor: 'transparent', 
+    backgroundColor: 'transparent',
   },
   outlineBannerTitle: {
     color: theme.primary,

@@ -6,26 +6,41 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
+    "scheme": "kakaoa4b53cefa332f8588fe8ca526b44420e",
+    "icon": "./assets/icon.png",
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
-    "assetBundlePatterns": [
-      "**/*"
-    ],
+    "assetBundlePatterns": ["**/*"],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.sonsunghyun.nbbang"
+      "bundleIdentifier": "com.sonsunghyun.nbbang",
+      "splash": {
+        "image": "./assets/splash-icon.png",
+        "resizeMode": "contain",
+        "backgroundColor": "#ffffff"
+      }
     },
     "android": {
       "package": "com.sonsunghyun.nbbang",
       "googleServicesFile": "./google-services.json",
-      "permissions": [
-        "INTERNET",
-        "ACCESS_NETWORK_STATE",
-        "POST_NOTIFICATIONS"
-      ]
+      "permissions": ["INTERNET", "ACCESS_NETWORK_STATE", "POST_NOTIFICATIONS"],
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "splash": {
+        "image": "./assets/splash-icon.png",
+        "resizeMode": "contain",
+        "backgroundColor": "#ffffff"
+      },
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyAXEC--KNqOk_JgpXu9iu1QTlT58TKOpdk"
+        }
+      }
     },
     "plugins": [
       "@react-native-google-signin/google-signin",
@@ -42,6 +57,14 @@
         {
           "kakaoAppKey": "a4b53cefa332f8588fe8ca526b44420e",
           "kotlinVersion": "2.1.0"
+        }
+      ],
+      [
+        "react-native-permissions",
+        {
+          "android": {
+            "notifications": true
+          }
         }
       ]
     ],

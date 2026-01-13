@@ -1,4 +1,4 @@
-﻿import React, { useState } from "react";
+﻿import React, { useState, useEffect } from "react";
 import { View, Text, FlatList, TouchableOpacity, Image, StyleSheet } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { MaterialIcons, Ionicons } from "@expo/vector-icons"; 
@@ -6,6 +6,8 @@ import { theme } from "../../../theme";
 import { ROUTES } from "../../../app/navigation/routes";
 import { useAppContext } from "../../../app/providers/AppContext";
 import CustomModal from "../../../components/CustomModal";
+// ✅ [추가] 샘플 데이터 생성기 가져오기
+import { checkAndGenerateSamples } from "../../../utils/autoSampleGenerator";
 
 const CATEGORIES = ["전체", "마트/식품", "생활용품", "기타", "무료나눔"];
 
@@ -16,6 +18,13 @@ export default function HomeScreen({ navigation }) {
   
   const [selectedCategory, setSelectedCategory] = useState("전체");
   const [writeModalVisible, setWriteModalVisible] = useState(false);
+
+  // ✅ [추가] 내 위치(myCoords)가 잡히면 -> 주변에 샘플 데이터 생성 시도 (최초 1회만 동작)
+  useEffect(() => {
+    if (myCoords && myCoords.latitude) {
+      checkAndGenerateSamples(myCoords);
+    }
+  }, [myCoords]);
 
   /* =========================
      ✅ 1시간 부스트 최상단 정렬 로직

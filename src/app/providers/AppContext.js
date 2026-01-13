@@ -1,4 +1,6 @@
-﻿import React, { createContext, useState, useContext, useEffect, useRef } from "react";
+﻿// FILE: src/app/providers/AppContext.js
+
+import React, { createContext, useState, useContext, useEffect, useRef } from "react";
 import { Platform, Alert } from "react-native";
 import * as Location from "expo-location";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -10,9 +12,10 @@ import {
   onAuthStateChanged,
   sendPasswordResetEmail,
   updateProfile,
-  GoogleAuthProvider, 
+  GoogleAuthProvider,
   signInWithCredential,
-  OAuthProvider, 
+  signInWithCustomToken,
+  OAuthProvider,
 } from "firebase/auth";
 import {
   collection,
@@ -27,11 +30,15 @@ import {
   setDoc,
   limit,
   arrayUnion,
+  serverTimestamp,
 } from "firebase/firestore";
 import Purchases from "react-native-purchases";
 
 const AppContext = createContext();
 const STORAGE_KEY = "user_location_auth_v3";
+
+// ✅ [추가] API BASE URL (cleartext/도메인 분리용)
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || "http://152.67.213.225:4000";
 
 function getDistanceFromLatLonInKm(lat1, lon1, lat2, lon2) {
   if (lat1 == null || lon1 == null || lat2 == null || lon2 == null) return 9999;
@@ -74,11 +81,9 @@ export const AppProvider = ({ children }) => {
   const [currentLocation, setCurrentLocation] = useState("위치 찾는 중...");
   const [myCoords, setMyCoords] = useState(null);
   const [posts, setPosts] = useState([]);
-  
-  // ✅ 게시글 조회 개수 제한 (기본 20개)
+
   const [postLimit, setPostLimit] = useState(20);
 
-  // ✅ 차단한 사용자 ID 목록
   const [blockedUsers, setBlockedUsers] = useState([]);
 
   const [isVerified, setIsVerified] = useState(false);
@@ -88,7 +93,6 @@ export const AppProvider = ({ children }) => {
   const [dailyPostCount, setDailyPostCount] = useState(0);
   const [dailyPostCountDate, setDailyPostCountDate] = useState(null);
 
-  // ✅ 관리자(영구 프리미엄)
   const [isAdmin, setIsAdmin] = useState(false);
   const isAdminRef = useRef(false);
   useEffect(() => {
@@ -106,19 +110,25 @@ export const AppProvider = ({ children }) => {
     return "";
   };
 
+  const rcConfiguredRef = useRef(false);
+
   const initRevenueCatForUser = async (uid) => {
     try {
       const apiKey = getRevenueCatApiKey();
-      if (!apiKey || !uid) return;
+      if (!apiKey || !uid) {
+        rcConfiguredRef.current = false;
+        return;
+      }
       await Purchases.configure({ apiKey, appUserID: uid });
+      rcConfiguredRef.current = true;
     } catch (e) {
+      rcConfiguredRef.current = false;
       console.warn("RevenueCat configure 실패:", e);
     }
   };
 
   const applyCustomerInfoToStateAndDb = async (uid, customerInfo) => {
     try {
-      // ✅ 관리자는 RevenueCat/DB 값과 무관하게 영구 프리미엄 유지
       if (isAdminRef.current) {
         setPremiumUntil("2099-12-31T23:59:59.999Z");
         setIsPremium(true);
@@ -148,7 +158,6 @@ export const AppProvider = ({ children }) => {
     try {
       if (!user?.uid) return;
 
-      // ✅ 관리자는 동기화 호출해도 영구 프리미엄
       if (isAdminRef.current) {
         setPremiumUntil("2099-12-31T23:59:59.999Z");
         setIsPremium(true);
@@ -164,7 +173,6 @@ export const AppProvider = ({ children }) => {
 
   const restorePurchases = async () => {
     try {
-      // ✅ 관리자는 복원 불필요
       if (isAdminRef.current) return "RESTORE_OK";
 
       const info = await Purchases.restorePurchases();
@@ -178,7 +186,6 @@ export const AppProvider = ({ children }) => {
   };
 
   const activatePremium = async (selectedPlan = "monthly") => {
-    // ✅ 관리자는 결제 진입 자체를 막거나(원하면) 그냥 true로 처리
     if (isAdminRef.current) return true;
 
     if (!user?.uid) throw new Error("NO_USER");
@@ -233,16 +240,16 @@ export const AppProvider = ({ children }) => {
         setDailyPostCountDate(null);
         setIsAdmin(false);
         isAdminRef.current = false;
-        setBlockedUsers([]); // ✅ 차단 목록 초기화
+        setBlockedUsers([]);
         setPostLimit(20);
+        rcConfiguredRef.current = false;
         return;
       }
 
-      // ✅ [소셜 로그인 지원] 사용자 문서가 없으면 자동 생성 (구글/카카오 로그인 시 필수)
       try {
         const userRef = doc(db, "users", currentUser.uid);
         const snap = await getDoc(userRef);
-        
+
         if (snap.exists()) {
           const data = snap.data();
           const adminFlag = !!data.isAdmin;
@@ -250,7 +257,6 @@ export const AppProvider = ({ children }) => {
           setIsAdmin(adminFlag);
           isAdminRef.current = adminFlag;
 
-          // 차단 목록 로드
           setBlockedUsers(data.blockedUsers || []);
 
           setPremiumUntil(data.premiumUntil || null);
@@ -263,7 +269,6 @@ export const AppProvider = ({ children }) => {
             setIsPremium(true);
           }
         } else {
-          // 문서가 없으면(소셜로그인 최초 진입 시) 생성
           await setDoc(userRef, {
             premiumUntil: null,
             isPremium: false,
@@ -274,7 +279,7 @@ export const AppProvider = ({ children }) => {
             blockedUsers: [],
             email: currentUser.email,
           });
-          
+
           setIsAdmin(false);
           isAdminRef.current = false;
           setBlockedUsers([]);
@@ -309,21 +314,15 @@ export const AppProvider = ({ children }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ✅ 게시글 구독 (차단 필터링 적용)
   useEffect(() => {
     let unsub = null;
     if (user) {
-      const q = query(
-        collection(db, "posts"),
-        orderBy("createdAt", "desc"),
-        limit(postLimit)
-      );
+      const q = query(collection(db, "posts"), orderBy("createdAt", "desc"), limit(postLimit));
 
       unsub = onSnapshot(q, (querySnapshot) => {
         const loaded = [];
         querySnapshot.forEach((d) => {
           const postData = d.data();
-          // ✅ [핵심] 차단한 사용자의 글은 리스트에 담지 않음
           if (!blockedUsers.includes(postData.ownerId)) {
             loaded.push({ ...postData, id: d.id });
           }
@@ -337,7 +336,7 @@ export const AppProvider = ({ children }) => {
     return () => {
       if (unsub) unsub();
     };
-  }, [user, postLimit, blockedUsers]); // ✅ blockedUsers 변경 시 리스트 갱신
+  }, [user, postLimit, blockedUsers]);
 
   const loadMorePosts = () => {
     setPostLimit((prev) => prev + 5);
@@ -346,24 +345,22 @@ export const AppProvider = ({ children }) => {
   /* =========================
       신고 / 차단 / 알림
   ========================= */
-  
-  // ✅ [신규] 신고자에게 알림 발송 함수
+
   const sendNotificationToReporter = async (reporterId, title, body) => {
     if (!reporterId) return;
     try {
       await addDoc(collection(db, "users", reporterId, "notifications"), {
         title,
         body,
-        type: "report_result", 
+        type: "report_result",
         isRead: false,
-        createdAt: new Date().toISOString()
+        createdAt: serverTimestamp(),
       });
     } catch (e) {
       console.error("알림 발송 실패:", e);
     }
   };
 
-  // ✅ 사용자 신고
   const reportUser = async (targetUserId, contentId, reason, type = "post") => {
     if (!user) {
       Alert.alert("알림", "로그인이 필요합니다.");
@@ -374,11 +371,11 @@ export const AppProvider = ({ children }) => {
         reporterId: user.uid,
         reporterEmail: user.email,
         targetUserId,
-        contentId, // postId or roomId
+        contentId,
         reason,
-        type, // 'post', 'chat', 'user'
-        createdAt: new Date().toISOString(),
-        status: "pending"
+        type,
+        createdAt: serverTimestamp(),
+        status: "pending",
       });
       Alert.alert("신고 완료", "신고가 접수되었습니다. 검토 후 조치하겠습니다.");
     } catch (e) {
@@ -387,21 +384,18 @@ export const AppProvider = ({ children }) => {
     }
   };
 
-  // ✅ 사용자 차단
   const blockUser = async (targetUserId) => {
     if (!user) return;
     if (targetUserId === user.uid) {
       Alert.alert("알림", "자기 자신은 차단할 수 없습니다.");
       return;
     }
-    
+
     try {
-      // 1. Firestore 내 정보에 차단 목록 업데이트
       await updateDoc(doc(db, "users", user.uid), {
-        blockedUsers: arrayUnion(targetUserId)
+        blockedUsers: arrayUnion(targetUserId),
       });
 
-      // 2. 로컬 상태 즉시 업데이트 (리렌더링 유발 -> 게시글 필터링 적용)
       setBlockedUsers((prev) => [...prev, targetUserId]);
 
       Alert.alert("차단 완료", "해당 사용자를 차단했습니다.\n이제 이 사용자의 글과 채팅이 보이지 않습니다.");
@@ -472,30 +466,37 @@ export const AppProvider = ({ children }) => {
   ========================= */
   const login = (email, password) => signInWithEmailAndPassword(auth, email, password);
 
-  // ✅ [추가] 구글 로그인 (ID 토큰 받아서 Firebase 인증)
   const loginWithGoogle = async (idToken) => {
     const credential = GoogleAuthProvider.credential(idToken);
     return signInWithCredential(auth, credential);
   };
 
-  // ✅ [신규] 카카오 로그인 함수 (가상 이메일 지원)
-  const loginWithKakao = async (idToken) => {
-  try {
-    // 1. 파이어베이스 콘솔에 등록한 "oidc.kakao" 프로바이더 생성
-    const provider = new OAuthProvider("oidc.kakao");
+  // ✅ [수정] API_BASE_URL 사용
+  const loginWithKakao = async (accessToken) => {
+    try {
+      const resp = await fetch(`${API_BASE_URL}/nbbang/auth/kakao`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ accessToken }),
+      });
 
-    // 2. 카카오 로그인 결과로 받은 idToken으로 자격 증명 생성
-    const credential = provider.credential({
-      idToken: idToken,
-    });
+      const data = await resp.json().catch(() => null);
 
-    // 3. 파이어베이스에 로그인 시도 (가입/로그인 자동 처리)
-    return await signInWithCredential(auth, credential);
-  } catch (e) {
-    console.error("Kakao OIDC Login Error:", e);
-    throw e;
-  }
-};
+      if (!resp.ok || !data?.customToken) {
+        const msg = data?.error ? String(data.error) : "KAKAO_SERVER_LOGIN_FAILED";
+        const err = new Error(msg);
+        err.status = resp.status;
+        throw err;
+      }
+
+      return await signInWithCustomToken(auth, data.customToken);
+    } catch (e) {
+      console.error("Kakao Server Login Error:", e);
+      throw e;
+    }
+  };
 
   const signup = async (email, password, nickname) => {
     const userCredential = await createUserWithEmailAndPassword(auth, email, password);
@@ -512,7 +513,7 @@ export const AppProvider = ({ children }) => {
       dailyPostCount: 0,
       dailyPostCountDate: getTodayKST(),
       createdAt: new Date().toISOString(),
-      blockedUsers: [], // ✅ 초기 차단 목록
+      blockedUsers: [],
       email: email,
     });
 
@@ -524,10 +525,13 @@ export const AppProvider = ({ children }) => {
 
   const logout = async () => {
     try {
-      await Purchases.logOut();
+      if (rcConfiguredRef.current) {
+        await Purchases.logOut();
+      }
     } catch (e) {
       console.warn("RevenueCat logOut 실패(무시 가능):", e);
     }
+    rcConfiguredRef.current = false;
     return signOut(auth);
   };
 
@@ -583,8 +587,8 @@ export const AppProvider = ({ children }) => {
       value={{
         user,
         login,
-        loginWithGoogle, // ✅ 외부 노출
-        loginWithKakao,  // ✅ [신규] 카카오 로그인 함수 노출
+        loginWithGoogle,
+        loginWithKakao,
         signup,
         logout,
         resetPassword,
@@ -595,7 +599,7 @@ export const AppProvider = ({ children }) => {
         addPost,
         updatePost,
         deletePost,
-        
+
         loadMorePosts,
 
         getDistanceFromLatLonInKm,
@@ -610,7 +614,6 @@ export const AppProvider = ({ children }) => {
 
         isAdmin,
 
-        // ✅ 신고 및 차단 기능 노출
         blockedUsers,
         reportUser,
         blockUser,

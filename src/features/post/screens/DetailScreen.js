@@ -21,10 +21,16 @@ export default function DetailScreen({ route, navigation }) {
   const [post, setPost] = useState(initialPost || null);
   const [imgPage, setImgPage] = useState(1);
   
+  // 기존 모달 상태
   const [deleteModalVisible, setDeleteModalVisible] = useState(false);
   const [successModalVisible, setSuccessModalVisible] = useState(false);
   const [errorModalVisible, setErrorModalVisible] = useState(false);
   const [alertMsg, setAlertMsg] = useState("");
+
+  // ✅ [추가] 신고, 차단, 샘플 데이터 안내용 모달 상태
+  const [reportModalVisible, setReportModalVisible] = useState(false);
+  const [blockModalVisible, setBlockModalVisible] = useState(false);
+  const [sampleModalVisible, setSampleModalVisible] = useState(false);
 
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [tempStatus, setTempStatus] = useState(""); 
@@ -55,6 +61,12 @@ export default function DetailScreen({ route, navigation }) {
   const roomName = post.title || "공동구매 채팅방";
 
   const onPressChat = () => {
+    // ✅ [추가] 샘플 데이터인지 확인하여 커스텀 모달 띄우기
+    if (post.ownerId === "SAMPLE_DATA") {
+      setSampleModalVisible(true);
+      return;
+    }
+
     if (isFull) return;
     ensureRoom(roomId, roomName, "group", post.ownerId).catch(() => {});
     navigation.navigate(ROUTES.CHAT_ROOM, { roomId, roomName });
@@ -97,32 +109,29 @@ export default function DetailScreen({ route, navigation }) {
     }
   };
 
-  // ✅ [신규] 신고 핸들러
+  // ✅ [수정] 신고 핸들러 (Alert -> CustomModal)
   const handleReport = () => {
     setIsDropdownOpen(false);
-    Alert.alert("신고하기", "이 게시글을 부적절한 콘텐츠로 신고하시겠습니까?", [
-      { text: "취소", style: "cancel" },
-      { 
-        text: "신고", 
-        onPress: () => reportUser(post.ownerId, post.id, "부적절한 게시글(N빵)", "post") 
-      }
-    ]);
+    setReportModalVisible(true);
   };
 
-  // ✅ [신규] 차단 핸들러
+  // ✅ [추가] 신고 확정 처리
+  const confirmReport = () => {
+    reportUser(post.ownerId, post.id, "부적절한 게시글(N빵)", "post");
+    setReportModalVisible(false);
+  };
+
+  // ✅ [수정] 차단 핸들러 (Alert -> CustomModal)
   const handleBlock = () => {
     setIsDropdownOpen(false);
-    Alert.alert("차단하기", "이 사용자를 차단하시겠습니까?\n차단 후에는 이 사용자의 글이 보이지 않습니다.", [
-      { text: "취소", style: "cancel" },
-      { 
-        text: "차단", 
-        style: "destructive",
-        onPress: async () => {
-          await blockUser(post.ownerId);
-          navigation.goBack(); // 차단했으니 글 안 보이게 나감
-        }
-      }
-    ]);
+    setBlockModalVisible(true);
+  };
+
+  // ✅ [추가] 차단 확정 처리
+  const confirmBlock = async () => {
+    await blockUser(post.ownerId);
+    setBlockModalVisible(false);
+    navigation.goBack(); // 차단했으니 글 안 보이게 나감
   };
 
   const handleScroll = (event) => {
@@ -280,9 +289,36 @@ export default function DetailScreen({ route, navigation }) {
         )}
       </View>
 
+      {/* ✅ 기존 모달들 */}
       <CustomModal visible={successModalVisible} title="알림" message={alertMsg} onConfirm={() => setSuccessModalVisible(false)} />
       <CustomModal visible={errorModalVisible} title="오류" message={alertMsg} onConfirm={() => setErrorModalVisible(false)} />
       <CustomModal visible={deleteModalVisible} title="삭제" message="정말로 삭제하시겠습니까?" type="confirm" onConfirm={handleDelete} onCancel={() => setDeleteModalVisible(false)} />
+
+      {/* ✅ [추가] 신규 적용된 모달들 */}
+      <CustomModal 
+        visible={sampleModalVisible} 
+        title="체험용 게시글" 
+        message={"이 글은 체험용 샘플 데이터입니다.\n실제 참여는 불가능합니다."}
+        onConfirm={() => setSampleModalVisible(false)}
+      />
+
+      <CustomModal 
+        visible={reportModalVisible} 
+        title="신고하기" 
+        message="이 게시글을 부적절한 콘텐츠로 신고하시겠습니까?" 
+        type="confirm" 
+        onConfirm={confirmReport} 
+        onCancel={() => setReportModalVisible(false)} 
+      />
+
+      <CustomModal 
+        visible={blockModalVisible} 
+        title="차단하기" 
+        message={"이 사용자를 차단하시겠습니까?\n차단 후에는 이 사용자의 글이 보이지 않습니다."} 
+        type="confirm" 
+        onConfirm={confirmBlock} 
+        onCancel={() => setBlockModalVisible(false)} 
+      />
     </View>
   );
 }

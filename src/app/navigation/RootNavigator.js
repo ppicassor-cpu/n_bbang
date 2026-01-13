@@ -1,10 +1,13 @@
-﻿import React from "react";
+﻿import React, { useEffect, useState } from "react";
 import { View } from "react-native";
 import { NavigationContainer, DarkTheme } from "@react-navigation/native";
 import { createStackNavigator } from "@react-navigation/stack";
 import { MaterialIcons } from "@expo/vector-icons";
 import { ROUTES } from "./routes";
 import { StatusBar } from "expo-status-bar";
+
+import { onAuthStateChanged } from "firebase/auth";
+import { auth } from "../../firebaseConfig";
 
 import LoginScreen from "../../features/auth/screens/LoginScreen";
 import HomeScreen from "../../features/feed/screens/HomeScreen";
@@ -36,11 +39,29 @@ const AppDarkTheme = {
 };
 
 export default function RootNavigator() {
+  const [initializing, setInitializing] = useState(true);
+  const [user, setUser] = useState(null);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser || null);
+      setInitializing(false);
+    });
+    return unsubscribe;
+  }, []);
+
+  if (initializing) {
+    return (
+      <View style={{ flex: 1, backgroundColor: "black" }}>
+        <StatusBar style="light" />
+      </View>
+    );
+  }
+
   return (
     <NavigationContainer theme={AppDarkTheme}>
       <StatusBar style="light" /> 
       <Stack.Navigator
-        initialRouteName={ROUTES.LOGIN}
         screenOptions={{
           headerStyle: { backgroundColor: "black", shadowColor: "transparent" },
           headerTintColor: "white",
@@ -60,44 +81,48 @@ export default function RootNavigator() {
           ),
         }}
       >
-        <Stack.Screen name={ROUTES.LOGIN} component={LoginScreen} options={{ headerShown: false }} />
-        <Stack.Screen name={ROUTES.HOME} component={HomeScreen} options={{ headerShown: false }} />
-        <Stack.Screen name={ROUTES.WRITE} component={WriteScreen} options={{ title: "N빵 모집하기" }} />
-        <Stack.Screen name={ROUTES.WRITE_FREE} component={WriteFreeScreen} options={{ title: "무료나눔 하기" }} />
-        <Stack.Screen name={ROUTES.DETAIL} component={DetailScreen} options={{ title: "상세 정보" }} />
-        <Stack.Screen name={ROUTES.FREE_DETAIL} component={FreeDetailScreen} options={{ title: "무료나눔 상세" }} />
-        <Stack.Screen name={ROUTES.PROFILE} component={ProfileScreen} options={{ title: "내 정보" }} />
-        <Stack.Screen name={ROUTES.CHAT_ROOMS} component={ChatRoomsScreen} options={{ title: "채팅" }} />
-        <Stack.Screen name={ROUTES.CHAT_ROOM} component={ChatRoomScreen} options={{ title: "채팅방" }} />
+        {!user ? (
+          <Stack.Screen name={ROUTES.LOGIN} component={LoginScreen} options={{ headerShown: false }} />
+        ) : (
+          <>
+            <Stack.Screen name={ROUTES.HOME} component={HomeScreen} options={{ headerShown: false }} />
+            <Stack.Screen name={ROUTES.WRITE} component={WriteScreen} options={{ title: "N빵 모집하기" }} />
+            <Stack.Screen name={ROUTES.WRITE_FREE} component={WriteFreeScreen} options={{ title: "무료나눔 하기" }} />
+            <Stack.Screen name={ROUTES.DETAIL} component={DetailScreen} options={{ title: "상세 정보" }} />
+            <Stack.Screen name={ROUTES.FREE_DETAIL} component={FreeDetailScreen} options={{ title: "무료나눔 상세" }} />
+            <Stack.Screen name={ROUTES.PROFILE} component={ProfileScreen} options={{ title: "내 정보" }} />
+            <Stack.Screen name={ROUTES.CHAT_ROOMS} component={ChatRoomsScreen} options={{ title: "채팅" }} />
+            <Stack.Screen name={ROUTES.CHAT_ROOM} component={ChatRoomScreen} options={{ title: "채팅방" }} />
 
-        {/* 프리미엄 화면 */}
-        <Stack.Screen
-          name={ROUTES.PREMIUM}
-          component={PremiumScreen}
-          options={{ title: "프리미엄" }}
-        />
-        
-        {/* 내가 쓴 글 관리 */}
-        <Stack.Screen 
-          name={ROUTES.MY_LISTINGS} 
-          component={MyListingsScreen} 
-          options={{ headerShown: false }} 
-        />
+            {/* 프리미엄 화면 */}
+            <Stack.Screen
+              name={ROUTES.PREMIUM}
+              component={PremiumScreen}
+              options={{ title: "프리미엄" }}
+            />
+            
+            {/* 내가 쓴 글 관리 */}
+            <Stack.Screen 
+              name={ROUTES.MY_LISTINGS} 
+              component={MyListingsScreen} 
+              options={{ headerShown: false }} 
+            />
 
-        {/* 관리자 신고 내역 화면 */}
-        <Stack.Screen 
-          name={ROUTES.ADMIN_REPORT} 
-          component={AdminReportScreen} 
-          options={{ headerShown: false }} 
-        />
+            {/* 관리자 신고 내역 화면 */}
+            <Stack.Screen 
+              name={ROUTES.ADMIN_REPORT} 
+              component={AdminReportScreen} 
+              options={{ headerShown: false }} 
+            />
 
-        {/* ✅ [추가] 알림 센터 화면 (커스텀 헤더 사용으로 headerShown: false) */}
-        <Stack.Screen 
-          name={ROUTES.NOTIFICATION} 
-          component={NotificationScreen} 
-          options={{ headerShown: false }} 
-        />
-
+            {/* ✅ [추가] 알림 센터 화면 (커스텀 헤더 사용으로 headerShown: false) */}
+            <Stack.Screen 
+              name={ROUTES.NOTIFICATION} 
+              component={NotificationScreen} 
+              options={{ headerShown: false }} 
+            />
+          </>
+        )}
       </Stack.Navigator>
     </NavigationContainer>
   );

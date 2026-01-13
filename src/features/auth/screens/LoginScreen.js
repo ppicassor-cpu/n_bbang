@@ -1,16 +1,11 @@
 ﻿import React, { useState, useEffect, useRef } from "react";
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, KeyboardAvoidingView, Platform, ActivityIndicator } from "react-native";
+import { View, Text, StyleSheet, TouchableOpacity, TextInput, KeyboardAvoidingView, Platform, ActivityIndicator, Image } from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import { useAppContext } from "../../../app/providers/AppContext"; 
 import { ROUTES } from "../../../app/navigation/routes";
 import { theme } from "../../../theme";
 import CustomModal from "../../../components/CustomModal";
 import { Ionicons } from "@expo/vector-icons";
-
-// ❌ [삭제] 기존 웹 방식 라이브러리 제거
-// import * as WebBrowser from "expo-web-browser";
-// import * as Google from "expo-auth-session/providers/google";
-// import * as AuthSession from "expo-auth-session"; 
 
 // ✅ [추가] 네이티브 로그인 라이브러리 (SDK 방식)
 import { login as kakaoLogin } from "@react-native-seoul/kakao-login";
@@ -53,7 +48,7 @@ export default function LoginScreen() {
 
       if (idToken) {
         await loginWithGoogle(idToken);
-        navigation.reset({ index: 0, routes: [{ name: ROUTES.HOME }] });
+        // ✅ RootNavigator(user 상태 기반 분기)가 화면 전환을 담당하므로 reset 호출 제거
       } else {
         throw new Error("Google ID Token이 없습니다.");
       }
@@ -71,28 +66,28 @@ export default function LoginScreen() {
       🟡 [카카오] 로그인 설정 (네이티브 SDK 방식)
   ============================================================ */
   const handleKakaoLogin = async () => {
-  setLoading(true);
-  try {
-    const token = await kakaoLogin();
-    // console.log("카카오 로그인 성공, 토큰:", token.accessToken); // 확인용
+    setLoading(true);
+    try {
+      const token = await kakaoLogin();
+      // console.log("카카오 로그인 성공, 토큰:", token.accessToken); // 확인용
 
-    // ⚠️ 수정 포인트: token.accessToken이 아니라 token.idToken을 넘겨야 합니다!
-    if (token.idToken) {
-      await loginWithKakao(token.idToken); 
-      navigation.reset({ index: 0, routes: [{ name: ROUTES.HOME }] });
-    } else {
-      throw new Error("카카오 ID 토큰이 없습니다. 설정에서 OpenID Connect를 확인하세요.");
-    }
-    
-  } catch (e) {
-    console.error("Kakao Login Error:", e);
-    if (e.message !== "user cancelled") { 
+      // ✅ 수정 포인트: idToken이 아니라 accessToken을 넘겨야 합니다!
+      if (token.accessToken) {
+        await loginWithKakao(token.accessToken); 
+        // ✅ RootNavigator(user 상태 기반 분기)가 화면 전환을 담당하므로 reset 호출 제거
+      } else {
+        throw new Error("카카오 Access 토큰이 없습니다. 로그인 토큰을 확인하세요.");
+      }
+      
+    } catch (e) {
+      console.error("Kakao Login Error:", e);
+      if (e.message !== "user cancelled") { 
         showAlert("카카오 로그인에 실패했습니다.");
+      }
+    } finally {
+      setLoading(false);
     }
-  } finally {
-    setLoading(false);
-  }
-};
+  };
 
   /* ============================================================
       📧 기존 이메일 로그인 로직 (100% 유지)
@@ -110,15 +105,15 @@ export default function LoginScreen() {
       if (mode === "login") {
         if (!password) { showAlert("비밀번호를 입력해주세요."); setLoading(false); return; }
         await login(email, password);
-        navigation.reset({ index: 0, routes: [{ name: ROUTES.HOME }] });
+        // ✅ RootNavigator(user 상태 기반 분기)가 화면 전환을 담당하므로 reset 호출 제거
 
       } else if (mode === "signup") {
-        if (!nickname) { showAlert("닉네임을 입력해주세요."); setLoading(false); return; }
+        if (!nickname) { showAlert("닉네임 (활동명)을 입력해주세요."); setLoading(false); return; }
         if (!password) { showAlert("비밀번호를 입력해주세요."); setLoading(false); return; }
         
         await signup(email, password, nickname);
         showAlert("회원가입 성공! 환영합니다.");
-        navigation.reset({ index: 0, routes: [{ name: ROUTES.HOME }] });
+        // ✅ RootNavigator(user 상태 기반 분기)가 화면 전환을 담당하므로 reset 호출 제거
 
       } else if (mode === "reset") {
         await resetPassword(email);
@@ -131,6 +126,7 @@ export default function LoginScreen() {
       if (error.code === "auth/invalid-email") msg = "이메일 형식이 올바르지 않습니다.";
       else if (error.code === "auth/user-not-found") msg = "가입되지 않은 이메일입니다.";
       else if (error.code === "auth/wrong-password") msg = "비밀번호가 틀렸습니다.";
+      else if (error.code === "auth/invalid-credential") msg = "비밀번호가 틀렸습니다.";
       else if (error.code === "auth/email-already-in-use") msg = "이미 사용 중인 이메일입니다.";
       else if (error.code === "auth/weak-password") msg = "비밀번호는 6자리 이상이어야 합니다.";
       else if (error.message) msg = error.message;
@@ -175,8 +171,7 @@ export default function LoginScreen() {
       <View style={styles.overlay}>
         
         <View style={styles.logoContainer}>
-            <Text style={styles.logoTextMain}>N-BBANG</Text>
-            <Text style={styles.logoTextSub}>Premium Joint Purchase</Text>
+          <Image source={require("../../../../assets/icon.png")} style={styles.logoImage} resizeMode="contain" />
         </View>
 
         <Text style={styles.subtitle}>
@@ -218,9 +213,9 @@ export default function LoginScreen() {
 
           <TouchableOpacity style={styles.mainButton} onPress={handleAuthAction} disabled={loading}>
             {loading ? (
-                 <ActivityIndicator color="black" /> 
+              <ActivityIndicator color="black" /> 
             ) : (
-                 <Text style={styles.mainButtonText}>{getButtonText()}</Text>
+              <Text style={styles.mainButtonText}>{getButtonText()}</Text>
             )}
           </TouchableOpacity>
         </View>
@@ -233,7 +228,7 @@ export default function LoginScreen() {
               </TouchableOpacity>
               <Text style={styles.bar}>|</Text>
               <TouchableOpacity style={styles.textLink} onPress={() => setMode("reset")}>
-                  <Text style={styles.linkText}>비밀번호 찾기</Text>
+                <Text style={styles.linkText}>비밀번호 찾기</Text>
               </TouchableOpacity>
             </>
           ) : (
@@ -258,13 +253,13 @@ export default function LoginScreen() {
                 <Text style={styles.kakaoText}>카카오로 시작하기</Text>
               </TouchableOpacity>
 
-              {/* ✅ 구글 로그인 버튼 (disabled 조건만 수정) */}
+              {/* ✅ 구글 로그인 버튼 (구글 로고 컬러) */}
               <TouchableOpacity 
                 style={[styles.socialBtn, styles.googleBtn]} 
                 onPress={() => handleSocialLogin("구글")}
                 disabled={loading} // 로딩 중에만 비활성화
               >
-                <Ionicons name="logo-google" size={20} color="#555" />
+                <Ionicons name="logo-google" size={20} color="#4285F4" />
                 <Text style={styles.googleText}>구글로 시작하기</Text>
               </TouchableOpacity>
             </View>
@@ -286,8 +281,7 @@ const styles = StyleSheet.create({
   overlay: { width: "90%", padding: 25, backgroundColor: "rgba(30, 30, 30, 0.95)", borderRadius: 20, alignItems: "center", borderWidth: 1, borderColor: "#333", elevation: 10 },
   
   logoContainer: { alignItems: "center", marginBottom: 20 },
-  logoTextMain: { fontSize: 42, fontWeight: "900", color: theme.primary, letterSpacing: 2, fontStyle: "italic" },
-  logoTextSub: { fontSize: 12, color: "#888", marginTop: -5, letterSpacing: 1 },
+  logoImage: { width: 120, height: 120 },
 
   subtitle: { fontSize: 16, color: "#AAA", marginBottom: 25, fontWeight: "600" },
   
@@ -318,5 +312,5 @@ const styles = StyleSheet.create({
   kakaoBtn: { backgroundColor: "#FEE500" },
   kakaoText: { color: "#3C1E1E", fontWeight: "bold", fontSize: 15 },
   googleBtn: { backgroundColor: "#FFF" },
-  googleText: { color: "#555", fontWeight: "bold", fontSize: 15 },
+  googleText: { color: "#555", fontWeight: "bold", fontSize: 15 }
 });
