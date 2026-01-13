@@ -1,3 +1,7 @@
+// ================================================================================
+//  FILE: src/features/profile/screens/NotificationScreen.js
+// ================================================================================
+
 import React, { useState, useEffect } from "react";
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from "react-native";
 import { MaterialIcons, Ionicons } from "@expo/vector-icons";
