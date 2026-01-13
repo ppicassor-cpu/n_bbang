@@ -7,7 +7,6 @@ import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, 
 import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-// ✅ [확인 1] writeBatch가 확실히 import 되어 있습니다.
 import { collection, query, orderBy, onSnapshot, doc, updateDoc, deleteDoc, writeBatch } from "firebase/firestore";
 
 import { db } from "../../../firebaseConfig";
@@ -45,30 +44,88 @@ export default function NotificationScreen() {
   };
 
   useEffect(() => {
-    // ✅ [보완 2] user가 없으면 데이터 초기화 + 로딩 해제 (잔상 방지)
     if (!user) {
-      setNotifications([]); 
+      setNotifications([]);
       setLoading(false);
       return;
     }
 
-    const q = query(collection(db, "users", user.uid, "notifications"), orderBy("createdAt", "desc"));
+    // ✅ createdAt 누락 문서가 섞여도 쿼리가 "깨지지" 않게:
+    // 1) orderBy(createdAt) 구독을 먼저 시도
+    // 2) 실패하면(권한/인덱스/필드누락 등으로) orderBy 없이 구독으로 폴백
+    // 3) 폴백에서는 클라이언트에서 createdAt 기준 정렬(없으면 맨 아래)
+    const colRef = collection(db, "users", user.uid, "notifications");
+    const q = query(colRef, orderBy("createdAt", "desc"));
 
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        const loaded = snapshot.docs.map((d) => ({
-          id: d.id,
-          ...d.data(),
-        }));
-        setNotifications(loaded);
-        setLoading(false);
-      },
-      (error) => {
-        console.error("알림 구독 에러:", error);
-        setLoading(false);
-      }
-    );
+    let unsubscribe = () => {};
+
+    const attachWithOrder = () =>
+      onSnapshot(
+        q,
+        (snapshot) => {
+          const loaded = snapshot.docs.map((d) => ({
+            id: d.id,
+            ...d.data(),
+          }));
+          setNotifications(loaded);
+          setLoading(false);
+        },
+        (error) => {
+          console.error("알림 구독 에러:", error);
+
+          // ✅ 폴백 구독(정렬 없이)
+          try {
+            unsubscribe = onSnapshot(
+              colRef,
+              (snapshot2) => {
+                const loaded2 = snapshot2.docs
+                  .map((d) => ({
+                    id: d.id,
+                    ...d.data(),
+                  }))
+                  .sort((a, b) => {
+                    // createdAt이 없으면 가장 아래로
+                    const ad =
+                      typeof a?.createdAt?.toDate === "function"
+                        ? a.createdAt.toDate()
+                        : typeof a?.createdAt === "string"
+                          ? new Date(a.createdAt)
+                          : a?.createdAt instanceof Date
+                            ? a.createdAt
+                            : null;
+
+                    const bd =
+                      typeof b?.createdAt?.toDate === "function"
+                        ? b.createdAt.toDate()
+                        : typeof b?.createdAt === "string"
+                          ? new Date(b.createdAt)
+                          : b?.createdAt instanceof Date
+                            ? b.createdAt
+                            : null;
+
+                    const at = ad && !Number.isNaN(ad.getTime()) ? ad.getTime() : -Infinity;
+                    const bt = bd && !Number.isNaN(bd.getTime()) ? bd.getTime() : -Infinity;
+
+                    return bt - at; // desc
+                  });
+
+                setNotifications(loaded2);
+                setLoading(false);
+              },
+              (error2) => {
+                console.error("알림 폴백 구독 에러:", error2);
+                setNotifications([]);
+                setLoading(false);
+              }
+            );
+          } catch (e2) {
+            setNotifications([]);
+            setLoading(false);
+          }
+        }
+      );
+
+    unsubscribe = attachWithOrder();
 
     return () => unsubscribe();
   }, [user]);
@@ -79,9 +136,7 @@ export default function NotificationScreen() {
     try {
       const notiRef = doc(db, "users", user.uid, "notifications", noti.id);
       await updateDoc(notiRef, { isRead: true });
-    } catch (e) {
-      // 읽음 처리는 실패해도 조용히 넘어감 (UX 방해 X)
-    }
+    } catch (e) {}
   };
 
   const handleDelete = async (id) => {
@@ -99,7 +154,7 @@ export default function NotificationScreen() {
     try {
       const batch = writeBatch(db);
       let updateCount = 0;
-      
+
       notifications.forEach((noti) => {
         if (!noti.isRead) {
           const ref = doc(db, "users", user.uid, "notifications", noti.id);
@@ -125,7 +180,6 @@ export default function NotificationScreen() {
         text: "삭제",
         style: "destructive",
         onPress: async () => {
-          // ✅ [보완] 배치 작업 안정성 강화 (try-catch 추가)
           try {
             const batch = writeBatch(db);
             notifications.forEach((noti) => {
@@ -143,11 +197,7 @@ export default function NotificationScreen() {
   };
 
   const onPressNoti = async (item) => {
-    // 1. 읽음 처리 (비동기, 기다리지 않고 이동)
-    handleRead(item);
-
-    // 2. 채팅방 이동
-    // ✅ [확인 3] RootNavigator 구조상 ChatRoom은 같은 Stack 내에 있으므로 안전하게 이동됨
+    await handleRead(item);   // ✅ UX 안정성: 읽음 처리 완료 후 이동
     if (item?.type === "chat" && item?.roomId) {
       navigation.navigate(ROUTES.CHAT_ROOM, {
         roomId: item.roomId,
@@ -175,29 +225,38 @@ export default function NotificationScreen() {
       iconColor = theme.primary;
     }
 
+    const displayTitle = item.title || "알림";
+    const displayBody = item.body || "내용이 없습니다.";
+
     return (
-      <TouchableOpacity style={[styles.card, isRead && styles.readCard]} onPress={() => onPressNoti(item)} activeOpacity={0.8}>
-        <View style={styles.iconBox}>
-          <MaterialIcons name={iconName} size={24} color={isRead ? "#555" : iconColor} />
-          {!isRead && <View style={styles.dot} />}
-        </View>
-
-        <View style={styles.contentBox}>
-          <View style={styles.headerRow}>
-            <Text style={[styles.title, isRead && styles.readText]} numberOfLines={1}>
-              {item.title}
-            </Text>
-            <Text style={styles.date}>{dateStr}</Text>
+      <View style={[styles.card, isRead && styles.readCard]}>
+        <TouchableOpacity style={styles.contentTouchable} onPress={() => onPressNoti(item)} activeOpacity={0.7}>
+          <View style={styles.iconBox}>
+            <MaterialIcons name={iconName} size={24} color={isRead ? "#555" : iconColor} />
+            {!isRead && <View style={styles.dot} />}
           </View>
-          <Text style={[styles.body, isRead && styles.readText]} numberOfLines={2}>
-            {item.body}
-          </Text>
-        </View>
 
-        <TouchableOpacity style={styles.deleteBtn} onPress={() => handleDelete(item.id)} activeOpacity={0.8}>
-          <Ionicons name="close" size={18} color="#666" />
+          <View style={styles.contentBox}>
+            <View style={styles.headerRow}>
+              <Text style={[styles.title, isRead && styles.readText]} numberOfLines={1}>
+                {displayTitle}
+              </Text>
+              <Text style={styles.date}>{dateStr}</Text>
+            </View>
+            <Text style={[styles.body, isRead && styles.readText]} numberOfLines={2}>
+              {displayBody}
+            </Text>
+          </View>
         </TouchableOpacity>
-      </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.deleteBtn}
+          onPress={() => handleDelete(item.id)}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <Ionicons name="close" size={20} color="#666" />
+        </TouchableOpacity>
+      </View>
     );
   };
 
@@ -254,8 +313,10 @@ const styles = StyleSheet.create({
   headerTitle: { color: "white", fontSize: 18, fontWeight: "bold" },
   center: { flex: 1, justifyContent: "center", alignItems: "center", marginTop: 50 },
 
-  card: { flexDirection: "row", backgroundColor: "#252525", borderRadius: 12, padding: 16, marginBottom: 12, alignItems: "flex-start" },
+  card: { flexDirection: "row", backgroundColor: "#252525", borderRadius: 12, marginBottom: 12, overflow: "hidden" },
   readCard: { backgroundColor: "#1A1A1A" },
+
+  contentTouchable: { flex: 1, flexDirection: "row", padding: 16, alignItems: "flex-start" },
 
   iconBox: { marginRight: 14, marginTop: 2, position: "relative" },
   dot: { position: "absolute", top: -2, right: -2, width: 8, height: 8, borderRadius: 4, backgroundColor: theme.danger },
@@ -267,5 +328,5 @@ const styles = StyleSheet.create({
   body: { color: "#CCC", fontSize: 13, lineHeight: 18 },
   readText: { color: "#666" },
 
-  deleteBtn: { padding: 4 },
+  deleteBtn: { width: 50, justifyContent: "center", alignItems: "center", borderLeftWidth: 1, borderLeftColor: "#333" },
 });

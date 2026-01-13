@@ -1,4 +1,6 @@
-﻿// FILE: src/features/chat/screens/ChatRoomScreen.js
+﻿// ================================================================================
+//  FILE: src/features/chat/screens/ChatRoomScreen.js
+// ================================================================================
 
 import React, { useState, useEffect, useRef } from "react";
 import {
@@ -208,8 +210,12 @@ export default function ChatRoomScreen({ route, navigation }) {
       item.createdAt instanceof Date
         ? item.createdAt.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })
         : "";
-    const readCount = item.readBy ? item.readBy.length : 0;
-    const unreadCount = totalParticipants - readCount;
+
+    // ✅ (문제2) unreadCount 음수 방지: readCount가 participants를 넘거나 participants가 0일 때도 0 이상으로 클램프
+    const safeTotal = Number.isFinite(totalParticipants) ? totalParticipants : 0;
+    const readCountRaw = Array.isArray(item.readBy) ? item.readBy.length : 0;
+    const readCount = Math.max(0, Math.min(readCountRaw, safeTotal));
+    const unreadCount = Math.max(0, safeTotal - readCount);
 
     return (
       <View style={[styles.msgContainer, isMy ? styles.myMsgContainer : styles.otherMsgContainer]}>
