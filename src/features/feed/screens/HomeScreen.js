@@ -12,35 +12,26 @@ import { checkAndGenerateSamples } from "../../../utils/autoSampleGenerator";
 const CATEGORIES = ["전체", "마트/식품", "생활용품", "기타", "무료나눔"];
 
 export default function HomeScreen({ navigation }) {
-  // ✅ [수정] AppContext에 이미 있는 'verifyLocation' 함수를 가져옵니다.
   const { 
     posts, 
     currentLocation, 
     myCoords, 
     getDistanceFromLatLonInKm, 
     loadMorePosts,
-    verifyLocation // 위치 갱신 및 저장까지 해주는 핵심 함수
+    verifyLocation 
   } = useAppContext();
   
   const insets = useSafeAreaInsets();
   
   const [selectedCategory, setSelectedCategory] = useState("전체");
   const [writeModalVisible, setWriteModalVisible] = useState(false);
-  // ✅ [추가] 로딩 상태 관리
   const [isLocationLoading, setIsLocationLoading] = useState(false);
 
-  useEffect(() => {
-    if (myCoords && myCoords.latitude) {
-      checkAndGenerateSamples(myCoords);
-    }
-  }, [myCoords]);
-
-  // ✅ [추가] 위치 갱신 핸들러 (AppContext의 verifyLocation 활용)
+  // ✅ [복구완료] 위치 갱신 핸들러
   const handleRefreshLocation = async () => {
     if (isLocationLoading) return;
     setIsLocationLoading(true);
     try {
-      // verifyLocation이 권한 확인, 좌표 갱신, 주소 변환, 저장까지 다 처리해줍니다.
       await verifyLocation(); 
     } catch (e) {
       console.error(e);
@@ -48,6 +39,18 @@ export default function HomeScreen({ navigation }) {
       setIsLocationLoading(false);
     }
   };
+
+  // ✅ [복구완료] 앱이 켜지자마자(마운트 될 때) 자동으로 위치 찾기 실행
+  useEffect(() => {
+    handleRefreshLocation();
+  }, []);
+
+  // ✅ 좌표가 잡히면 샘플 데이터 생성 체크
+  useEffect(() => {
+    if (myCoords && myCoords.latitude) {
+      checkAndGenerateSamples(myCoords);
+    }
+  }, [myCoords]);
 
   /* =========================
       1시간 부스트 최상단 정렬 로직
@@ -167,7 +170,6 @@ export default function HomeScreen({ navigation }) {
     <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
       {/* 헤더 */}
       <View style={styles.header}>
-        {/* ✅ [수정] 터치 시 위치 갱신 기능 연결 */}
         <TouchableOpacity 
           onPress={handleRefreshLocation} 
           style={{ flexDirection: "row", alignItems: "center" }}
@@ -182,7 +184,6 @@ export default function HomeScreen({ navigation }) {
         </TouchableOpacity>
 
         <View style={{ flexDirection: "row", gap: 14, alignItems: "center" }}>
-          
           <TouchableOpacity onPress={() => navigation.navigate(ROUTES.CHAT_ROOMS)}>
             <Ionicons name="chatbubbles-outline" size={26} color="white" />
           </TouchableOpacity>

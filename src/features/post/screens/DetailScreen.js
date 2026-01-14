@@ -304,8 +304,8 @@ export default function DetailScreen({ route, navigation }) {
       {/* 안내용 모달들 */}
       <CustomModal 
         visible={sampleModalVisible} 
-        title="체험용 게시글" 
-        message={"이 글은 체험용 샘플 데이터입니다.\n실제 참여는 불가능합니다."}
+        title="SAMPLE 게시글" 
+        message={"이 글은 샘플 데이터입니다.\n실제 참여는 불가능합니다."}
         onConfirm={() => setSampleModalVisible(false)}
       />
 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Image, Dimensions, Alert } from "react-native";
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Image, Dimensions } from "react-native";
 import MapView, { Marker } from "react-native-maps";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { MaterialIcons } from "@expo/vector-icons";
@@ -12,7 +12,7 @@ import CustomModal from "../../../components/CustomModal";
 
 const SCREEN_WIDTH = Dimensions.get("window").width;
 
-// ✅ [추가] 신고 사유 목록 정의
+// ✅ 신고 사유 목록 정의
 const REPORT_REASONS = [
   "광고 / 홍보성 게시글",
   "거래 금지 품목",
@@ -23,7 +23,6 @@ const REPORT_REASONS = [
 
 export default function FreeDetailScreen({ route, navigation }) {
   const { post: initialPost } = route.params || {};
-  // 신고(reportUser), 차단(blockUser) 함수 추가 가져오기
   const { user, deletePost, posts, updatePost, reportUser, blockUser } = useAppContext(); 
   const insets = useSafeAreaInsets();
   
@@ -36,6 +35,7 @@ export default function FreeDetailScreen({ route, navigation }) {
 
   // 신고, 차단, 샘플 데이터 안내용 모달 상태
   const [reportModalVisible, setReportModalVisible] = useState(false);
+  const [reportSuccessModalVisible, setReportSuccessModalVisible] = useState(false); // ✅ 신고 완료 모달
   const [blockModalVisible, setBlockModalVisible] = useState(false);
   const [sampleModalVisible, setSampleModalVisible] = useState(false);
   
@@ -83,10 +83,30 @@ export default function FreeDetailScreen({ route, navigation }) {
     setReportModalVisible(true);
   };
 
-  // ✅ [수정] 신고 확정 처리 (사유 선택 시 실행)
-  const confirmReport = (selectedReason) => {
-    reportUser(post.ownerId, post.id, selectedReason, "post");
+  // ✅ 신고 확정 처리 (사유 선택 시 실행 -> 성공 모달 띄움)
+  const confirmReport = async (selectedReason) => {
     setReportModalVisible(false);
+    if (!post.ownerId) return;
+
+    await reportUser(post.ownerId, post.id, selectedReason, "post");
+    setReportSuccessModalVisible(true);
+  };
+
+  // ✅ 신고 완료 모달 확인 버튼 -> 차단 후 홈으로 이동
+  const handleReportSuccess = async () => {
+    setReportSuccessModalVisible(false);
+    
+    // 1. 해당 유저 차단 (홈 리스트에서 안 보이게)
+    if (post.ownerId && post.ownerId !== user?.uid) {
+        try {
+            await blockUser(post.ownerId);
+        } catch (e) {
+            console.log("차단 실패:", e);
+        }
+    }
+
+    // 2. 홈 화면으로 이동
+    navigation.navigate(ROUTES.HOME); 
   };
 
   // 차단 핸들러
@@ -196,7 +216,7 @@ export default function FreeDetailScreen({ route, navigation }) {
       </ScrollView>
 
       {/* 하단 고정 바 */}
-      <View style={[styles.bottomBar, { paddingBottom: Math.max(insets.bottom, 20) }]}>
+      <View style={[styles.bottomBar, { paddingBottom: Math.max(insets.bottom, 20) + 20 }]}>
         <Text style={[styles.freeLabel, isClosed && { color: "grey" }]}>{isClosed ? "나눔이 완료되었습니다" : "무료나눔 🎁"}</Text>
         <View style={{ flex: 1 }} />
         {isMyPost ? (
@@ -222,7 +242,7 @@ export default function FreeDetailScreen({ route, navigation }) {
         onConfirm={() => setSampleModalVisible(false)}
       />
 
-      {/* ✅ [수정] 신고 모달 (버튼 목록형) */}
+      {/* ✅ 신고 모달 (버튼 목록형) */}
       <CustomModal 
         visible={reportModalVisible} 
         title="신고 사유 선택" 
@@ -248,6 +268,14 @@ export default function FreeDetailScreen({ route, navigation }) {
           </TouchableOpacity>
         </View>
       </CustomModal>
+
+      {/* ✅ 신고 완료 알림 모달 */}
+      <CustomModal
+        visible={reportSuccessModalVisible}
+        title="신고 완료"
+        message={"신고가 접수되었습니다.\n확인을 누르면 홈으로 이동합니다."}
+        onConfirm={handleReportSuccess}
+      />
 
       <CustomModal 
         visible={blockModalVisible} 
@@ -282,14 +310,28 @@ const styles = StyleSheet.create({
   mapWrap: { height: 200, borderRadius: 15, overflow: "hidden", marginBottom: 10 },
   map: { flex: 1 },
   locationText: { color: "#888", fontSize: 14 },
-  bottomBar: { position: "absolute", bottom: 0, width: "100%", backgroundColor: theme.cardBg, flexDirection: "row", alignItems: "center", padding: 20, borderTopWidth: 1, borderTopColor: "#333" },
+  
+  // ✅ bottomBar 스타일
+  bottomBar: { 
+    position: "absolute", 
+    bottom: 0, 
+    width: "100%", 
+    backgroundColor: theme.cardBg, 
+    flexDirection: "row", 
+    alignItems: "center", 
+    paddingHorizontal: 20,
+    paddingTop: 20, // 상단 패딩은 고정
+    borderTopWidth: 1, 
+    borderTopColor: "#333" 
+  },
+  
   freeLabel: { color: theme.primary, fontSize: 18, fontWeight: "bold" },
   chatBtn: { backgroundColor: theme.primary, paddingHorizontal: 25, paddingVertical: 12, borderRadius: 10 },
   chatBtnText: { color: "black", fontWeight: "bold", fontSize: 16 },
   row: { flexDirection: "row", gap: 10 },
   actionBtn: { paddingHorizontal: 20, paddingVertical: 12, borderRadius: 10, backgroundColor: "#222" },
 
-  // ✅ [추가] 신고 사유 버튼 스타일
+  // ✅ 신고 사유 버튼 스타일
   reportReasonBtn: {
     backgroundColor: '#2A2A2A',
     paddingVertical: 14,

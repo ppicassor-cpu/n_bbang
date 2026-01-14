@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, TouchableOpacity, StyleSheet, Platform, Alert, ActivityIndicator } from "react-native";
+import { View, Text, TouchableOpacity, StyleSheet, Platform, ActivityIndicator, Linking } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import Constants from "expo-constants";
 import { useAppContext } from "../../../app/providers/AppContext";
 import { theme } from "../../../theme";
 import { MaterialIcons } from "@expo/vector-icons";
 import Purchases from "react-native-purchases";
+import CustomModal from "../../../components/CustomModal"; // ✅ 커스텀 모달 import
 
 export default function PremiumScreen({ navigation }) {
   const { activatePremium, refreshPremiumFromRevenueCat, isPremium, restorePurchases } = useAppContext();
@@ -15,6 +17,16 @@ export default function PremiumScreen({ navigation }) {
   // ✅ 기본 표시는 기존 문구 그대로 유지 (가격만 나중에 치환)
   const [monthlyPriceText, setMonthlyPriceText] = useState("2,900원 / 월");
   const [yearlyPriceText, setYearlyPriceText] = useState("24,900원 / 년");
+
+  // ✅ [추가] 모달 상태 관리
+  const [modalVisible, setModalVisible] = useState(false);
+  const [modalConfig, setModalConfig] = useState({ title: "", message: "" });
+
+  // ✅ [추가] 모달 띄우기 헬퍼 함수
+  const showModal = (title, message) => {
+    setModalConfig({ title, message });
+    setModalVisible(true);
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -49,10 +61,46 @@ export default function PremiumScreen({ navigation }) {
     };
   }, []);
 
+  // ✅ [추가] 구독 관리(안드로이드): RevenueCat managementURL 우선, 없으면 Play 구독 페이지로 fallback
+  const handleManageSubscription = async () => {
+    if (Platform.OS !== "android") {
+      showModal("안내", "안드로이드에서만 구독 관리 화면으로 이동할 수 있습니다.");
+      return;
+    }
+
+    try {
+      // 1) RevenueCat이 제공하는 관리 URL 우선
+      const info = await Purchases.getCustomerInfo();
+      const url = info?.managementURL;
+      if (url) {
+        const canOpen = await Linking.canOpenURL(url);
+        if (canOpen) {
+          await Linking.openURL(url);
+          return;
+        }
+      }
+
+      // 2) fallback: Play 구독 관리 페이지
+      const pkg =
+        Constants?.expoConfig?.android?.package ||
+        Constants?.manifest?.android?.package ||
+        Constants?.expoConfig?.android?.packageName ||
+        Constants?.manifest?.android?.packageName;
+
+      const fallbackUrl = pkg
+        ? `https://play.google.com/store/account/subscriptions?package=${encodeURIComponent(pkg)}`
+        : "https://play.google.com/store/account/subscriptions";
+
+      await Linking.openURL(fallbackUrl);
+    } catch (e) {
+      showModal("오류", "구독 관리 화면을 여는 중 문제가 발생했습니다.");
+    }
+  };
+
   // ①② 구매 버튼 흐름
   const handlePurchase = async () => {
     if (isPremium) {
-      Alert.alert("프리미엄 이용 중", "이미 프리미엄 이용 중입니다.");
+      showModal("프리미엄 이용 중", "이미 프리미엄 이용 중입니다."); // ✅ Alert 대체
       return;
     }
 
@@ -60,10 +108,10 @@ export default function PremiumScreen({ navigation }) {
     try {
       await activatePremium(selectedPlan);
       await refreshPremiumFromRevenueCat();
-      Alert.alert("결제 완료", "프리미엄이 활성화되었습니다.");
+      showModal("결제 완료", "프리미엄이 활성화되었습니다."); // ✅ Alert 대체
     } catch (e) {
       if (e?.userCancelled) return;
-      Alert.alert("결제 실패", "결제 중 오류가 발생했습니다.\n네트워크 상태를 확인해주세요.");
+      showModal("결제 실패", "결제 중 오류가 발생했습니다.\n네트워크 상태를 확인해주세요."); // ✅ Alert 대체
     } finally {
       setLoading(false);
     }
@@ -76,12 +124,12 @@ export default function PremiumScreen({ navigation }) {
       const result = await restorePurchases();
 
       if (result === "NO_PURCHASE") {
-        Alert.alert("복원 실패", "복원할 구매 내역이 없습니다.");
+        showModal("복원 실패", "복원할 구매 내역이 없습니다."); // ✅ Alert 대체
       } else {
-        Alert.alert("복원 완료", "프리미엄이 복원되었습니다.");
+        showModal("복원 완료", "프리미엄이 복원되었습니다."); // ✅ Alert 대체
       }
     } catch (e) {
-      Alert.alert("오류", "구매 복원 중 문제가 발생했습니다.");
+      showModal("오류", "구매 복원 중 문제가 발생했습니다."); // ✅ Alert 대체
     } finally {
       setLoading(false);
     }
@@ -128,7 +176,20 @@ export default function PremiumScreen({ navigation }) {
         <TouchableOpacity style={styles.restoreBtn} onPress={handleRestore} disabled={loading}>
           <Text style={styles.restoreText}>구매 복원</Text>
         </TouchableOpacity>
+
+        {/* ✅ [추가] 구독 관리 버튼 (디자인 톤 유지: restore와 동일한 스타일) */}
+        <TouchableOpacity style={styles.manageBtn} onPress={handleManageSubscription} disabled={loading}>
+          <Text style={styles.manageText}>구독 관리</Text>
+        </TouchableOpacity>
       </View>
+
+      {/* ✅ 커스텀 모달 컴포넌트 추가 */}
+      <CustomModal
+        visible={modalVisible}
+        title={modalConfig.title}
+        message={modalConfig.message}
+        onConfirm={() => setModalVisible(false)} // 확인 버튼 누르면 닫기
+      />
     </SafeAreaView>
   );
 }
@@ -233,6 +294,17 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
   },
   restoreText: {
+    color: "#aaa",
+    fontSize: 14,
+    fontWeight: "bold",
+  },
+
+  // ✅ [추가] 구독 관리 버튼(restore와 동일 톤)
+  manageBtn: {
+    alignItems: "center",
+    paddingVertical: 14,
+  },
+  manageText: {
     color: "#aaa",
     fontSize: 14,
     fontWeight: "bold",

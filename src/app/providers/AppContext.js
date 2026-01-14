@@ -99,8 +99,9 @@ export const AppProvider = ({ children }) => {
     isAdminRef.current = isAdmin;
   }, [isAdmin]);
 
-  // ✅ Entitlement Identifier (RevenueCat 대시보드 Identifier)
-  const ENTITLEMENT_ID = "Nbbang Premium";
+  // ✅ [점검 1] 프리미엄 판별은 "entitlements.active"로만 통일
+  // ✅ [확정] RevenueCat Entitlement Identifier: "Nbbang Premium"
+  const ENTITLEMENT_IDS = ["Nbbang Premium"];
 
   // ✅ (통일) Public SDK Key는 EXPO_PUBLIC 하나만 사용
   const REVENUECAT_PUBLIC_SDK_KEY = process.env.EXPO_PUBLIC_REVENUECAT_PUBLIC_SDK_KEY || "";
@@ -110,8 +111,20 @@ export const AppProvider = ({ children }) => {
     return REVENUECAT_PUBLIC_SDK_KEY || "";
   };
 
-  // ✅ AppContext에서는 절대 configure 하지 않음
+  // ✅ [점검 2] AppContext에서는 절대 configure 하지 않음 (유지)
   const rcLoggedInUidRef = useRef(null);
+
+  const getActiveEntitlement = (customerInfo) => {
+    try {
+      const active = customerInfo?.entitlements?.active || {};
+      for (const id of ENTITLEMENT_IDS) {
+        if (active?.[id]) return active[id];
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  };
 
   const initRevenueCatForUser = async (uid) => {
     try {
@@ -122,12 +135,12 @@ export const AppProvider = ({ children }) => {
       }
 
       // ✅ 로그인(identify) 연결: uid가 있고, 현재 로그인 uid와 다르면 logIn
+      // (configure는 App.js에서 선행되어야 함)
       if (uid && rcLoggedInUidRef.current !== uid && Purchases.logIn) {
         try {
           await Purchases.logIn(uid);
           rcLoggedInUidRef.current = uid;
         } catch (e) {
-          // logIn 실패해도 앱은 계속 동작해야 함
           console.warn("RevenueCat logIn 실패(무시 가능):", e);
         }
       }
@@ -145,7 +158,7 @@ export const AppProvider = ({ children }) => {
         return;
       }
 
-      const entitlement = customerInfo?.entitlements?.active?.[ENTITLEMENT_ID] || null;
+      const entitlement = getActiveEntitlement(customerInfo);
       const nextPremiumUntil = entitlement?.expirationDate || null;
       const nextIsPremium = !!entitlement || !!isAdminRef.current;
 
@@ -164,6 +177,7 @@ export const AppProvider = ({ children }) => {
     }
   };
 
+  // ✅ [점검 3] 갱신 타이밍 보강: 가능한 경우에만 syncPurchases -> getCustomerInfo
   const refreshPremiumFromRevenueCat = async () => {
     try {
       if (!user?.uid) return;
@@ -176,6 +190,15 @@ export const AppProvider = ({ children }) => {
 
       // ✅ 혹시 아직 logIn 안 된 상태면 먼저 보장 (configure는 App.js에서만)
       await initRevenueCatForUser(user.uid);
+
+      // ✅ 안드로이드에서 테스트/해지/만료 반영 지연 케이스 완화 (지원될 때만)
+      if (Platform.OS === "android" && Purchases.syncPurchases) {
+        try {
+          await Purchases.syncPurchases();
+        } catch (e) {
+          console.warn("RevenueCat syncPurchases 실패(무시 가능):", e);
+        }
+      }
 
       const info = await Purchases.getCustomerInfo();
       await applyCustomerInfoToStateAndDb(user.uid, info);
@@ -192,8 +215,17 @@ export const AppProvider = ({ children }) => {
         await initRevenueCatForUser(user.uid);
       }
 
+      // ✅ restore 전에도 sync를 한 번 시도 (지원될 때만)
+      if (Platform.OS === "android" && Purchases.syncPurchases) {
+        try {
+          await Purchases.syncPurchases();
+        } catch (e) {
+          console.warn("RevenueCat syncPurchases 실패(무시 가능):", e);
+        }
+      }
+
       const info = await Purchases.restorePurchases();
-      const entitlement = info?.entitlements?.active?.[ENTITLEMENT_ID];
+      const entitlement = getActiveEntitlement(info);
       if (!entitlement) return "NO_PURCHASE";
       if (user?.uid) await applyCustomerInfoToStateAndDb(user.uid, info);
       return "RESTORE_OK";
@@ -417,8 +449,7 @@ export const AppProvider = ({ children }) => {
 
       setBlockedUsers((prev) => [...prev, targetUserId]);
 
-      Alert.alert("차단 완료", "해당 사용자를 차단했습니다.\n이제 이 사용자의 글과 채팅이 보이지 않습니다.");
-    } catch (e) {
+          } catch (e) {
       console.error("차단 실패:", e);
       Alert.alert("오류", "차단 처리 중 문제가 발생했습니다.");
     }

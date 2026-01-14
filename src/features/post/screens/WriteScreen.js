@@ -52,6 +52,9 @@ export default function WriteScreen({ navigation, route }) {
   const [alertMsg, setAlertMsg] = useState("");
   const [galleryVisible, setGalleryVisible] = useState(false);
 
+  // ✅ [수정] 로딩 상태 추가 (중복 방지 및 모달 제어용)
+  const [loading, setLoading] = useState(false);
+
   const [region, setRegion] = useState({
     latitude: 37.5665, longitude: 126.9780,
     latitudeDelta: 0.005, longitudeDelta: 0.005,
@@ -298,78 +301,89 @@ export default function WriteScreen({ navigation, route }) {
       }, 200);
     });
 
+  // ✅ [수정] handleSubmit: 중복 클릭 방지 및 로딩 처리 적용
   const handleSubmit = async () => {
     if (isEditMode && !editPostData?.id) { showAlert("수정할 게시글 정보가 없습니다."); return; }
 
-    // ✅ 프리미엄 작성 제한(일반: 하루 1개) - 업로드/저장 전에 차단
+    // ✅ 프리미엄 작성 제한(일반: 하루 1개)
     if (!checkDailyWriteLimit()) return;
 
     if (!title) { showAlert("상품명을 입력해주세요."); return; }
     if (!buyPrice) { showAlert("구매 금액을 입력해주세요."); return; }
 
-    const priceInt = buyPrice ? parseInt(buyPrice.replace(/,/g, ""), 10) : 0;
-    const perPerson = Math.ceil(priceInt / participants);
+    // ✅ 로딩 시작: 버튼 비활성화 & 모달 띄우기
+    setLoading(true);
 
-    let uploadedImages = images;
     try {
-      uploadedImages = await uploadImagesIfNeeded(images);
-    } catch (e) {
-      if (String(e && e.message) === "NO_USER") {
-        showAlert("로그인이 필요합니다.");
-      } else {
-        showAlert("이미지 업로드에 실패했습니다.");
-      }
-      return;
-    }
+      const priceInt = buyPrice ? parseInt(buyPrice.replace(/,/g, ""), 10) : 0;
+      const perPerson = Math.ceil(priceInt / participants);
 
-    const nextUpdatedAt = new Date().toISOString();
-
-    const postData = {
-      category,
-      title,
-      content,
-      location: isEditMode ? editPostData.location : currentLocation,
-      coords: { latitude: region.latitude, longitude: region.longitude },
-      pickup_point: pickupPoint,
-      price: priceInt,
-      pricePerPerson: perPerson,
-      tip: selectedTip,
-      maxParticipants: participants,
-      images: uploadedImages,
-      status: isEditMode ? editPostData.status : "모집중",
-      currentParticipants: isEditMode ? editPostData.currentParticipants : 1,
-      updatedAt: nextUpdatedAt,
-    };
-
-    if (isEditMode) {
+      let uploadedImages = images;
       try {
-        await updatePost(editPostData.id, postData);
-        await waitForUpdate(editPostData.id, nextUpdatedAt);
-        setAlertMsg("게시글이 성공적으로 수정되었습니다.");
-        setAlertVisible(true);
+        uploadedImages = await uploadImagesIfNeeded(images);
       } catch (e) {
-        console.error("수정 오류:", e);
-        showAlert("저장에 실패했습니다.");
-      }
-    } else {
-      const newPost = {
-        id: Date.now().toString(),
-        ownerId: "me",
-        ...postData
-      };
-      addPost(newPost);
-
-      // ✅ 작성 성공 후에만 카운트 +1 (AppContext에 구현되어 있으면)
-      try {
-        if (!isPremium && typeof incrementDailyPostCount === "function") {
-          await incrementDailyPostCount();
+        if (String(e && e.message) === "NO_USER") {
+          showAlert("로그인이 필요합니다.");
+        } else {
+          showAlert("이미지 업로드에 실패했습니다.");
         }
-      } catch (e) {
-        // 카운트 실패는 글 작성 자체를 막지 않음(UX 유지)
-        console.warn("incrementDailyPostCount failed:", e);
+        return; // finally 블록으로 이동하여 로딩 해제됨
       }
 
-      navigation.goBack();
+      const nextUpdatedAt = new Date().toISOString();
+
+      const postData = {
+        category,
+        title,
+        content,
+        location: isEditMode ? editPostData.location : currentLocation,
+        coords: { latitude: region.latitude, longitude: region.longitude },
+        pickup_point: pickupPoint,
+        price: priceInt,
+        pricePerPerson: perPerson,
+        tip: selectedTip,
+        maxParticipants: participants,
+        images: uploadedImages,
+        status: isEditMode ? editPostData.status : "모집중",
+        currentParticipants: isEditMode ? editPostData.currentParticipants : 1,
+        updatedAt: nextUpdatedAt,
+      };
+
+      if (isEditMode) {
+        try {
+          await updatePost(editPostData.id, postData);
+          await waitForUpdate(editPostData.id, nextUpdatedAt);
+          setAlertMsg("게시글이 성공적으로 수정되었습니다.");
+          setAlertVisible(true);
+        } catch (e) {
+          console.error("수정 오류:", e);
+          showAlert("저장에 실패했습니다.");
+        }
+      } else {
+        const newPost = {
+          id: Date.now().toString(),
+          ownerId: "me",
+          ...postData
+        };
+        addPost(newPost);
+
+        // ✅ 작성 성공 후에만 카운트 +1
+        try {
+          if (!isPremium && typeof incrementDailyPostCount === "function") {
+            await incrementDailyPostCount();
+          }
+        } catch (e) {
+          console.warn("incrementDailyPostCount failed:", e);
+        }
+
+        navigation.goBack();
+      }
+    } catch (e) {
+        console.error("Submit Error:", e);
+        showAlert("처리 중 오류가 발생했습니다.");
+    } finally {
+        // ✅ 작업 완료(성공/실패) 후 로딩 해제 (모달 닫기 & 버튼 활성화)
+        setLoading(false);
     }
   };
 
@@ -555,7 +569,8 @@ export default function WriteScreen({ navigation, route }) {
               />
           </View>
 
-          <TouchableOpacity style={styles.submitBtn} onPress={handleSubmit}>
+          {/* ✅ [수정] disabled={loading} 추가하여 중복 클릭 방지 */}
+          <TouchableOpacity style={styles.submitBtn} onPress={handleSubmit} disabled={loading}>
             <Text style={{ fontSize: 18, fontWeight: "bold" }}>
                 {isEditMode ? "수정 완료" : "작성 완료"}
             </Text>
@@ -621,6 +636,13 @@ export default function WriteScreen({ navigation, route }) {
           setAlertVisible(false);
           if (alertMsg.includes("수정되었습니다")) navigation.goBack();
         }} 
+      />
+
+      {/* ✅ [추가] 업로드 중 모달 (loading 상태일 때만 표시) */}
+      <CustomModal
+        visible={loading}
+        loading={true}
+        message="업로드 중입니다..."
       />
     </View>
   );

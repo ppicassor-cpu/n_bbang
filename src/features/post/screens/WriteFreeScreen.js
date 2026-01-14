@@ -48,6 +48,8 @@ export default function WriteFreeScreen({ navigation, route }) {
       ? editPostData.coords
       : myCoords || { latitude: 37.5665, longitude: 126.9780 }
   );
+  // ✅ 상세 위치(픽업 장소) 상태
+  const [pickupPoint, setPickupPoint] = useState(isEditMode ? editPostData?.pickup_point || "" : "");
 
   const [images, setImages] = useState(isEditMode ? editPostData?.images || [] : []);
 
@@ -89,6 +91,7 @@ export default function WriteFreeScreen({ navigation, route }) {
     setTitle("");
     setContent(DEFAULT_DESC);
     setCoords(myCoords || { latitude: 37.5665, longitude: 126.9780 });
+    setPickupPoint("");
     setImages([]);
   };
 
@@ -253,6 +256,8 @@ export default function WriteFreeScreen({ navigation, route }) {
         content: content.trim(),
         coords,
         location: currentLocation || "위치 미지정",
+        // ✅ 상세 픽업 장소 저장
+        pickup_point: pickupPoint,
         images: uploadedImages,
         isFree: true,
         updatedAt: nowIso,
@@ -339,11 +344,19 @@ export default function WriteFreeScreen({ navigation, route }) {
 
         <Text style={styles.label}>나눔 설명</Text>
         <TextInput
-          style={styles.textarea}
+          // ✅ [수정] 안내 문구일 때 글자색을 흐릿하게 (#888) 처리
+          style={[styles.textarea, content === DEFAULT_DESC && { color: "#888" }]}
           multiline
           placeholderTextColor="#666"
           value={content}
           onChangeText={setContent}
+          // ✅ 포커스 시 예시 문구 삭제, 비우고 나가면 다시 예시 복구
+          onFocus={() => {
+            if (content === DEFAULT_DESC) setContent("");
+          }}
+          onBlur={() => {
+            if (content.trim() === "") setContent(DEFAULT_DESC);
+          }}
         />
 
         <Text style={styles.label}>나눔 위치</Text>
@@ -367,6 +380,18 @@ export default function WriteFreeScreen({ navigation, route }) {
             <Marker coordinate={coords} />
           </MapView>
         </View>
+
+        {/* ✅ 지도 하단 설명 문구 */}
+        <Text style={styles.helperText}>지도를 움직여 핀을 만날 장소에 맞춰주세요.</Text>
+        
+        {/* ✅ 상세 위치 입력창 */}
+        <TextInput
+          style={styles.subInput}
+          placeholder="예: 스타벅스 앞, 101동 입구"
+          placeholderTextColor="#666"
+          value={pickupPoint}
+          onChangeText={setPickupPoint}
+        />
 
         <TouchableOpacity style={styles.submitBtn} onPress={handleSubmit} disabled={loading}>
           {loading ? (
@@ -396,6 +421,13 @@ export default function WriteFreeScreen({ navigation, route }) {
             navigation.goBack();
           }
         }}
+      />
+
+      {/* ✅ 업로드 중입니다... 모달 추가 */}
+      <CustomModal
+        visible={loading}
+        loading={true}
+        message="업로드 중입니다..."
       />
     </View>
   );
@@ -468,10 +500,25 @@ const styles = StyleSheet.create({
   },
 
   mapContainer: {
-    height: 200,
+    height: 150, // ✅ [수정] 지도 높이 줄임 (200 -> 150)
     borderRadius: 10,
     overflow: "hidden",
     marginTop: 10,
+    marginBottom: 10, 
+  },
+  // ✅ 스타일
+  helperText: {
+    color: "grey",
+    fontSize: 12,
+    marginBottom: 10,
+  },
+  // ✅ 상세 위치 입력창 스타일
+  subInput: {
+    backgroundColor: "#1E1E1E",
+    color: "white",
+    padding: 12,
+    borderRadius: 10,
+    fontSize: 14,
     marginBottom: 20,
   },
   submitBtn: {
@@ -481,6 +528,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "row",
+    marginBottom: 40, // ✅ [수정] 하단 시스템 버튼과 겹치지 않도록 여백 추가
   },
   submitText: {
     color: "black",

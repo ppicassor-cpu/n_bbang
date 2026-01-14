@@ -14,6 +14,7 @@ import {
 } from "react-native";
 import * as MediaLibrary from "expo-media-library";
 import { MaterialIcons } from "@expo/vector-icons";
+import { SafeAreaView } from "react-native-safe-area-context"; // ✅ SafeAreaView 추가
 import { theme } from "../theme";
 import CustomModal from "./CustomModal";
 
@@ -218,7 +219,8 @@ const CustomImagePickerModal = ({
   return (
     <View>
       <Modal visible={visible && hasPermission === true} animationType="slide" transparent={false}>
-        <View style={styles.container}>
+        {/* ✅ View -> SafeAreaView로 변경하여 상단 침범 방지 */}
+        <SafeAreaView style={styles.container}>
           <View style={styles.header}>
             <TouchableOpacity onPress={onClose}>
               <MaterialIcons name="close" size={28} color="white" />
@@ -252,7 +254,7 @@ const CustomImagePickerModal = ({
               }
             />
           )}
-        </View>
+        </SafeAreaView>
       </Modal>
 
       <CustomModal
@@ -279,7 +281,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     borderBottomWidth: 1,
     borderBottomColor: "#333",
-    marginTop: Platform.OS === "ios" ? 40 : 10,
+    // ✅ marginTop 제거 (SafeAreaView가 자동으로 처리)
   },
   headerTitle: { color: "white", fontSize: 18, fontWeight: "bold" },
   completeText: { color: theme.primary, fontSize: 16, fontWeight: "bold" },
