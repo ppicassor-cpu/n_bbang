@@ -7,7 +7,8 @@
       "developmentClient": true,
       "distribution": "internal",
       "env": {
-        "REVENUECAT_PUBLIC_SDK_KEY": "$(REVENUECAT_PUBLIC_SDK_KEY)"
+        "REVENUECAT_PUBLIC_SDK_KEY": "$(REVENUECAT_PUBLIC_SDK_KEY)",
+        "EXPO_PUBLIC_REVENUECAT_PUBLIC_SDK_KEY": "$(EXPO_PUBLIC_REVENUECAT_PUBLIC_SDK_KEY)"
       }
     },
     "preview": {
@@ -16,7 +17,8 @@
         "buildType": "apk"
       },
       "env": {
-        "REVENUECAT_PUBLIC_SDK_KEY": "$(REVENUECAT_PUBLIC_SDK_KEY)"
+        "REVENUECAT_PUBLIC_SDK_KEY": "$(REVENUECAT_PUBLIC_SDK_KEY)",
+        "EXPO_PUBLIC_REVENUECAT_PUBLIC_SDK_KEY": "$(EXPO_PUBLIC_REVENUECAT_PUBLIC_SDK_KEY)"
       }
     },
     "production": {
@@ -25,7 +27,8 @@
         "buildType": "app-bundle"
       },
       "env": {
-        "REVENUECAT_PUBLIC_SDK_KEY": "$(REVENUECAT_PUBLIC_SDK_KEY)"
+        "REVENUECAT_PUBLIC_SDK_KEY": "$(REVENUECAT_PUBLIC_SDK_KEY)",
+        "EXPO_PUBLIC_REVENUECAT_PUBLIC_SDK_KEY": "$(EXPO_PUBLIC_REVENUECAT_PUBLIC_SDK_KEY)"
       }
     }
   },

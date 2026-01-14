@@ -23,12 +23,12 @@ const REPORT_REASONS = [
 
 export default function FreeDetailScreen({ route, navigation }) {
   const { post: initialPost } = route.params || {};
-  const { user, deletePost, posts, updatePost, reportUser, blockUser } = useAppContext(); 
+  const { user, deletePost, posts, updatePost, reportUser, blockUser } = useAppContext();
   const insets = useSafeAreaInsets();
-  
+
   const [post, setPost] = useState(initialPost || null);
   const [imgPage, setImgPage] = useState(1);
-  
+
   // 기존 모달 상태
   const [deleteModalVisible, setDeleteModalVisible] = useState(false);
   const [statusModalVisible, setStatusModalVisible] = useState(false);
@@ -38,7 +38,7 @@ export default function FreeDetailScreen({ route, navigation }) {
   const [reportSuccessModalVisible, setReportSuccessModalVisible] = useState(false); // ✅ 신고 완료 모달
   const [blockModalVisible, setBlockModalVisible] = useState(false);
   const [sampleModalVisible, setSampleModalVisible] = useState(false);
-  
+
   // 드롭다운 메뉴 상태 (내 글일 땐 상태변경, 남의 글일 땐 신고/차단 메뉴)
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [tempStatus, setTempStatus] = useState("");
@@ -88,25 +88,27 @@ export default function FreeDetailScreen({ route, navigation }) {
     setReportModalVisible(false);
     if (!post.ownerId) return;
 
-    await reportUser(post.ownerId, post.id, selectedReason, "post");
+    // ✅ [수정] 상세페이지에서만 silent=true로 호출하여 AppContext 팝업 차단
+    await reportUser(post.ownerId, post.id, selectedReason, "post", true);
+
     setReportSuccessModalVisible(true);
   };
 
   // ✅ 신고 완료 모달 확인 버튼 -> 차단 후 홈으로 이동
   const handleReportSuccess = async () => {
     setReportSuccessModalVisible(false);
-    
+
     // 1. 해당 유저 차단 (홈 리스트에서 안 보이게)
     if (post.ownerId && post.ownerId !== user?.uid) {
-        try {
-            await blockUser(post.ownerId);
-        } catch (e) {
-            console.log("차단 실패:", e);
-        }
+      try {
+        await blockUser(post.ownerId);
+      } catch (e) {
+        console.log("차단 실패:", e);
+      }
     }
 
     // 2. 홈 화면으로 이동
-    navigation.navigate(ROUTES.HOME); 
+    navigation.navigate(ROUTES.HOME);
   };
 
   // 차단 핸들러
@@ -158,7 +160,7 @@ export default function FreeDetailScreen({ route, navigation }) {
         <View style={styles.body}>
           <View style={styles.titleRow}>
             <Text style={styles.title}>{post.title}</Text>
-            
+
             {/* 내 글이면 상태변경 버튼, 남의 글이면 메뉴(점 세개) 버튼 노출 */}
             {isMyPost ? (
               <TouchableOpacity style={styles.statusBtn} onPress={() => setIsDropdownOpen(!isDropdownOpen)}>
@@ -235,23 +237,23 @@ export default function FreeDetailScreen({ route, navigation }) {
       <CustomModal visible={deleteModalVisible} title="삭제" message="정말 삭제하시겠습니까?" type="confirm" onConfirm={handleDelete} onCancel={() => setDeleteModalVisible(false)} />
 
       {/* 신규 적용된 모달들 */}
-      <CustomModal 
-        visible={sampleModalVisible} 
-        title="체험용 게시글" 
+      <CustomModal
+        visible={sampleModalVisible}
+        title="체험용 게시글"
         message={"이 글은 체험용 샘플 데이터입니다.\n실제 참여는 불가능합니다."}
         onConfirm={() => setSampleModalVisible(false)}
       />
 
       {/* ✅ 신고 모달 (버튼 목록형) */}
-      <CustomModal 
-        visible={reportModalVisible} 
-        title="신고 사유 선택" 
+      <CustomModal
+        visible={reportModalVisible}
+        title="신고 사유 선택"
         message="신고하시는 사유를 선택해주세요."
         onCancel={() => setReportModalVisible(false)}
       >
         <View style={{ gap: 8, marginTop: 10, width: '100%' }}>
           {REPORT_REASONS.map((reason) => (
-            <TouchableOpacity 
+            <TouchableOpacity
               key={reason}
               style={styles.reportReasonBtn}
               onPress={() => confirmReport(reason)}
@@ -259,8 +261,8 @@ export default function FreeDetailScreen({ route, navigation }) {
               <Text style={styles.reportReasonText}>{reason}</Text>
             </TouchableOpacity>
           ))}
-          
-          <TouchableOpacity 
+
+          <TouchableOpacity
             style={[styles.reportReasonBtn, { backgroundColor: '#333', marginTop: 8 }]}
             onPress={() => setReportModalVisible(false)}
           >
@@ -277,13 +279,13 @@ export default function FreeDetailScreen({ route, navigation }) {
         onConfirm={handleReportSuccess}
       />
 
-      <CustomModal 
-        visible={blockModalVisible} 
-        title="차단하기" 
-        message={"이 사용자를 차단하시겠습니까?\n차단 후에는 이 사용자의 글이 보이지 않습니다."} 
-        type="confirm" 
-        onConfirm={confirmBlock} 
-        onCancel={() => setBlockModalVisible(false)} 
+      <CustomModal
+        visible={blockModalVisible}
+        title="차단하기"
+        message={"이 사용자를 차단하시겠습니까?\n차단 후에는 이 사용자의 글이 보이지 않습니다."}
+        type="confirm"
+        onConfirm={confirmBlock}
+        onCancel={() => setBlockModalVisible(false)}
       />
     </View>
   );
@@ -310,21 +312,21 @@ const styles = StyleSheet.create({
   mapWrap: { height: 200, borderRadius: 15, overflow: "hidden", marginBottom: 10 },
   map: { flex: 1 },
   locationText: { color: "#888", fontSize: 14 },
-  
+
   // ✅ bottomBar 스타일
-  bottomBar: { 
-    position: "absolute", 
-    bottom: 0, 
-    width: "100%", 
-    backgroundColor: theme.cardBg, 
-    flexDirection: "row", 
-    alignItems: "center", 
+  bottomBar: {
+    position: "absolute",
+    bottom: 0,
+    width: "100%",
+    backgroundColor: theme.cardBg,
+    flexDirection: "row",
+    alignItems: "center",
     paddingHorizontal: 20,
     paddingTop: 20, // 상단 패딩은 고정
-    borderTopWidth: 1, 
-    borderTopColor: "#333" 
+    borderTopWidth: 1,
+    borderTopColor: "#333"
   },
-  
+
   freeLabel: { color: theme.primary, fontSize: 18, fontWeight: "bold" },
   chatBtn: { backgroundColor: theme.primary, paddingHorizontal: 25, paddingVertical: 12, borderRadius: 10 },
   chatBtnText: { color: "black", fontWeight: "bold", fontSize: 16 },

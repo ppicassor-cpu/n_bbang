@@ -34,6 +34,9 @@ import {
 } from "firebase/firestore";
 import Purchases from "react-native-purchases";
 
+// ✅ [추가] 커스텀 모달 import (Alert.alert 대체)
+import CustomModal from "../../components/CustomModal";
+
 const AppContext = createContext();
 const STORAGE_KEY = "user_location_auth_v3";
 
@@ -98,6 +101,16 @@ export const AppProvider = ({ children }) => {
   useEffect(() => {
     isAdminRef.current = isAdmin;
   }, [isAdmin]);
+
+  // ✅ [추가] Alert.alert 대체용 커스텀 모달 상태/헬퍼
+  const [modalVisible, setModalVisible] = useState(false);
+  const [modalTitle, setModalTitle] = useState("");
+  const [modalMessage, setModalMessage] = useState("");
+  const openModal = (title, message) => {
+    setModalTitle(title);
+    setModalMessage(message);
+    setModalVisible(true);
+  };
 
   // ✅ [점검 1] 프리미엄 판별은 "entitlements.active"로만 통일
   // ✅ [확정] RevenueCat Entitlement Identifier: "Nbbang Premium"
@@ -291,7 +304,7 @@ export const AppProvider = ({ children }) => {
         setDailyPostCountDate(null);
         setIsAdmin(false);
         isAdminRef.current = false;
-        setBlockedUsers([]);
+        setBlockedUsers([]);  // 차단된 사용자는 초기화
         setPostLimit(20);
         rcLoggedInUidRef.current = null;
         return;
@@ -308,7 +321,7 @@ export const AppProvider = ({ children }) => {
           setIsAdmin(adminFlag);
           isAdminRef.current = adminFlag;
 
-          setBlockedUsers(data.blockedUsers || []);
+          setBlockedUsers(data.blockedUsers || []); // 차단된 사용자는 불러오기
 
           setPremiumUntil(data.premiumUntil || null);
           setIsPremium(!!data.isPremium);
@@ -363,7 +376,34 @@ export const AppProvider = ({ children }) => {
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, []); 
+
+  useEffect(() => {
+    let unsubUser = null;
+
+    if (user?.uid) {
+      const userRef = doc(db, "users", user.uid);
+
+      unsubUser = onSnapshot(
+        userRef,
+        (snap) => {
+          if (snap.exists()) {
+            const data = snap.data();
+            setBlockedUsers(data.blockedUsers || []);
+          } else {
+            setBlockedUsers([]);
+          }
+        },
+        (e) => {
+          console.warn("blockedUsers onSnapshot Error:", e);
+        }
+      );
+    }
+
+    return () => {
+      if (unsubUser) unsubUser();
+    };
+  }, [user?.uid]);
 
   useEffect(() => {
     let unsub = null;
@@ -412,9 +452,10 @@ export const AppProvider = ({ children }) => {
     }
   };
 
-  const reportUser = async (targetUserId, contentId, reason, type = "post") => {
+  // ✅ [수정] 중복 팝업 방지용 옵션 추가 (기본값 false)
+  const reportUser = async (targetUserId, contentId, reason, type = "post", silent = false) => {
     if (!user) {
-      Alert.alert("알림", "로그인이 필요합니다.");
+      if (!silent) openModal("알림", "로그인이 필요합니다.");
       return;
     }
     try {
@@ -428,30 +469,41 @@ export const AppProvider = ({ children }) => {
         createdAt: serverTimestamp(),
         status: "pending",
       });
-      Alert.alert("신고 완료", "신고가 접수되었습니다. 검토 후 조치하겠습니다.");
+
+      // 신고가 완료되면 해당 게시물을 리스트에서 삭제하도록 처리
+      setPosts((prevPosts) => prevPosts.filter(post => post.id !== contentId));
+
+      if (!silent) openModal("신고 완료", "신고가 접수되었습니다. 검토 후 조치하겠습니다.");
     } catch (e) {
       console.error("신고 실패:", e);
-      Alert.alert("오류", "신고 처리 중 문제가 발생했습니다.");
+      if (!silent) openModal("오류", "신고 처리 중 문제가 발생했습니다.");
     }
   };
 
   const blockUser = async (targetUserId) => {
     if (!user) return;
     if (targetUserId === user.uid) {
-      Alert.alert("알림", "자기 자신은 차단할 수 없습니다.");
+      openModal("알림", "자기 자신은 차단할 수 없습니다.");
       return;
     }
 
     try {
+      // 차단된 사용자가 이미 포함되어 있는지 확인하고 중복을 방지
+      if (blockedUsers.includes(targetUserId)) {
+        openModal("알림", "이미 차단된 사용자입니다.");
+        return;
+      }
+
+      // Firebase Firestore에 차단된 사용자 추가
       await updateDoc(doc(db, "users", user.uid), {
         blockedUsers: arrayUnion(targetUserId),
       });
 
-      setBlockedUsers((prev) => [...prev, targetUserId]);
-
-          } catch (e) {
+      // 상태 업데이트: blockedUsers에 차단된 사용자가 이미 있으면 추가하지 않도록
+      setBlockedUsers((prev) => [...new Set([...prev, targetUserId])]); // 중복을 제거하는 방법
+    } catch (e) {
       console.error("차단 실패:", e);
-      Alert.alert("오류", "차단 처리 중 문제가 발생했습니다.");
+      openModal("오류", "차단 처리 중 문제가 발생했습니다.");
     }
   };
 
@@ -678,6 +730,16 @@ export const AppProvider = ({ children }) => {
       }}
     >
       {children}
+
+      {/* ✅ Alert.alert 대체 커스텀 모달 (문구/제목 동일 유지) */}
+      <CustomModal
+        visible={modalVisible}
+        title={modalTitle}
+        message={modalMessage}
+        type="alert"
+        onConfirm={() => setModalVisible(false)}
+        onCancel={() => setModalVisible(false)}
+      />
     </AppContext.Provider>
   );
 };

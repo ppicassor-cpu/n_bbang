@@ -44,6 +44,9 @@ export default function DetailScreen({ route, navigation }) {
   const [tempStatus, setTempStatus] = useState(""); 
   const [loading, setLoading] = useState(false);
 
+  // ✅ [추가] 신고 완료 후 홈 이동 플래그
+  const [goHomeAfterSuccess, setGoHomeAfterSuccess] = useState(false);
+
   useEffect(() => {
     if (!initialPost?.id) return;
     const updated = posts.find(p => p.id === initialPost.id);
@@ -127,6 +130,11 @@ export default function DetailScreen({ route, navigation }) {
   const confirmReport = (selectedReason) => {
     reportUser(post.ownerId, post.id, selectedReason, "post");
     setReportModalVisible(false);
+
+    // ✅ [추가] 신고 완료 안내 모달 띄우고, 확인 누르면 홈으로 이동
+    setGoHomeAfterSuccess(true);
+    setAlertMsg("신고가 접수되었습니다. 검토 후 조치하겠습니다.");
+    setSuccessModalVisible(true);
   };
 
   // 차단 핸들러
@@ -297,7 +305,20 @@ export default function DetailScreen({ route, navigation }) {
       </View>
 
       {/* 기본 모달들 */}
-      <CustomModal visible={successModalVisible} title="알림" message={alertMsg} onConfirm={() => setSuccessModalVisible(false)} />
+      <CustomModal
+        visible={successModalVisible}
+        title="알림"
+        message={alertMsg}
+        onConfirm={() => {
+          setSuccessModalVisible(false);
+
+          // ✅ [추가] 신고 완료 후 확인 누르면 홈으로 이동
+          if (goHomeAfterSuccess) {
+            setGoHomeAfterSuccess(false);
+            navigation.navigate(ROUTES.HOME);
+          }
+        }}
+      />
       <CustomModal visible={errorModalVisible} title="오류" message={alertMsg} onConfirm={() => setErrorModalVisible(false)} />
       <CustomModal visible={deleteModalVisible} title="삭제" message="정말로 삭제하시겠습니까?" type="confirm" onConfirm={handleDelete} onCancel={() => setDeleteModalVisible(false)} />
 

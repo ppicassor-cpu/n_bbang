@@ -1,6 +1,6 @@
 // FILE: src/features/profile/screens/ProfileScreen.js
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -14,6 +14,8 @@ import {
   TextInput,
   Image,
   Keyboard,
+  Modal,
+  Animated,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -23,12 +25,13 @@ import { checkNotifications, requestNotifications } from 'react-native-permissio
 // ✅ [수정] arrayRemove, doc, getDoc, updateDoc 추가 (차단 해제 및 정보 조회용)
 import { collection, query, where, onSnapshot, doc, getDoc, updateDoc, arrayRemove } from "firebase/firestore";
 import Purchases from "react-native-purchases";
-import * as ImagePicker from "expo-image-picker";
 
 import { theme } from '../../../theme';
 import { ROUTES } from '../../../app/navigation/routes';
 import { useAppContext } from '../../../app/providers/AppContext';
 import CustomModal from '../../../components/CustomModal';
+// ✅ [추가] 커스텀 이미지 피커 모달 import
+import CustomImagePickerModal from '../../../components/CustomImagePickerModal';
 import { db } from "../../../firebaseConfig";
 
 export default function ProfileScreen() {
@@ -53,6 +56,13 @@ export default function ProfileScreen() {
   // ✅ [추가] DB에서 내 정보 직접 불러오기 (닉네임 표시 확실하게)
   const [userProfile, setUserProfile] = useState(null);
 
+  // ✅ [추가] 차단 사용자 목록 로컬 캐시 (언블락 즉시 반영용)
+  const [blockedUsersLocal, setBlockedUsersLocal] = useState([]);
+
+  useEffect(() => {
+    setBlockedUsersLocal(Array.isArray(blockedUsers) ? blockedUsers : []);
+  }, [blockedUsers]);
+
   // ✅ 차단 관리 모달 상태 및 데이터
   const [blockedListModalVisible, setBlockedListModalVisible] = useState(false);
   const [blockedProfiles, setBlockedProfiles] = useState([]); // {id, nickname} 배열
@@ -65,6 +75,41 @@ export default function ProfileScreen() {
   const [profileEditModalVisible, setProfileEditModalVisible] = useState(false);
   const [nicknameEditModalVisible, setNicknameEditModalVisible] = useState(false);
   const [nicknameInput, setNicknameInput] = useState("");
+
+  // ✅ [추가] 갤러리 모달 상태
+  const [galleryVisible, setGalleryVisible] = useState(false);
+
+  // ✅ [수정] 닉네임 모달만 키보드 올라올 때 "모달 자체"가 위로 이동하도록 (CustomModal 중앙 고정 영향 제거)
+  const nicknameModalTranslateY = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const onShow = (e) => {
+      const h = e?.endCoordinates?.height || 0;
+      // 키보드 높이의 절반 정도만 위로 올리되, 너무 과하게 가지 않도록 캡
+      const moveUp = -Math.min(220, Math.floor(h * 0.55));
+      Animated.timing(nicknameModalTranslateY, {
+        toValue: moveUp,
+        duration: 180,
+        useNativeDriver: true,
+      }).start();
+    };
+
+    const onHide = () => {
+      Animated.timing(nicknameModalTranslateY, {
+        toValue: 0,
+        duration: 180,
+        useNativeDriver: true,
+      }).start();
+    };
+
+    const subShow = Keyboard.addListener(Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow", onShow);
+    const subHide = Keyboard.addListener(Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide", onHide);
+
+    return () => {
+      subShow?.remove?.();
+      subHide?.remove?.();
+    };
+  }, [nicknameModalTranslateY]);
 
   // 1. 내 DB 정보 실시간 구독 (닉네임 '사용자'로 뜨는 문제 해결)
   useEffect(() => {
@@ -130,32 +175,26 @@ export default function ProfileScreen() {
     setModalVisible(true);
   };
 
-  // ✅ [추가] 프로필 사진 선택 → 즉시 DB 저장 → 팝업 닫힘 → 실시간 구독으로 화면 반영
-  const handlePickProfileImage = async () => {
+  // ✅ [수정] "확인" 누르면 갤러리 모달 열기
+  const handlePickProfileImage = () => {
+    setProfileEditModalVisible(false);
+    setGalleryVisible(true);
+  };
+
+  // ✅ [추가] 갤러리에서 사진 선택 완료 시 호출
+  const handleGallerySelect = async (selectedUris) => {
+    // 모달 닫기
+    setGalleryVisible(false);
+
+    if (!selectedUris || selectedUris.length === 0) return;
+
     try {
-      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!perm?.granted) {
-        openModal("권한 필요", "앨범 접근 권한이 필요합니다.\n설정에서 권한을 허용해주세요.", "alert", () => setModalVisible(false));
-        return;
-      }
-
-      const res = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: true,
-        aspect: [1, 1],
-        quality: 0.8,
-      });
-
-      if (res?.canceled) return;
-
-      const uri = res?.assets?.[0]?.uri;
-      if (!uri) return;
+      // 첫 번째 사진만 사용
+      const uri = selectedUris[0];
 
       // ✅ 즉시 저장 (photoURL 필드)
       await updateDoc(doc(db, "users", user.uid), { photoURL: uri });
 
-      // ✅ 확인 팝업 닫힘
-      setProfileEditModalVisible(false);
     } catch (e) {
       console.error(e);
       openModal("오류", "프로필 사진을 변경하지 못했습니다.", "alert", () => setModalVisible(false));
@@ -184,7 +223,7 @@ export default function ProfileScreen() {
 
   // ✅ 차단 사용자 관리 버튼 핸들러 (정보 가져오기)
   const handleManageBlockedUsers = async () => {
-    if (!blockedUsers || blockedUsers.length === 0) {
+    if (!blockedUsersLocal || blockedUsersLocal.length === 0) {
       // ✅ [수정] 확인 버튼 누르면 팝업이 닫히도록 수정
       openModal("안내", "차단한 사용자가 없습니다.", "alert", () => setModalVisible(false));
       return;
@@ -196,14 +235,14 @@ export default function ProfileScreen() {
     try {
       const profiles = [];
       // 차단된 ID 순회하며 닉네임 조회
-      for (const targetId of blockedUsers) {
+      for (const targetId of blockedUsersLocal) {
         const docRef = doc(db, "users", targetId);
         const docSnap = await getDoc(docRef);
         if (docSnap.exists()) {
           const data = docSnap.data();
           profiles.push({
             id: targetId,
-            nickname: data.displayName || data.email?.split('@')[0] || "사용자"
+            nickname: data.displayName || data.email?.split('@')[0] || "닉네임을 설정해주세요"
           });
         } else {
           profiles.push({ id: targetId, nickname: "알 수 없는 사용자" });
@@ -228,6 +267,9 @@ export default function ProfileScreen() {
       await updateDoc(myUserRef, {
         blockedUsers: arrayRemove(targetId)
       });
+
+      // ✅ [추가] 로컬 차단 목록도 즉시 제거 (재진입/재조회 시 바로 반영)
+      setBlockedUsersLocal((prev) => prev.filter((id) => id !== targetId));
 
       // 2. 로컬 상태 업데이트 (모달 리스트에서 즉시 제거)
       setBlockedProfiles((prev) => prev.filter((p) => p.id !== targetId));
@@ -387,12 +429,16 @@ export default function ProfileScreen() {
   const displayName = userProfile?.displayName || user?.displayName || user?.email?.split('@')[0] || "알 수 없음";
   const photoURL = userProfile?.photoURL || null;
 
-  // ✅ [수정] 상단 SafeArea 여백을 “줄여서” 적용 (배경 잘림 방지)
-  const reducedTopInset = Math.max((insets?.top || 0) - 12, 0);
+  // ✅ [수정] 닉네임 수정 팝업이 키보드에 가리지 않도록(팝업 전체가 위로 올라가게)
+  const nicknameKeyboardOffset = Platform.OS === "ios"
+    ? (insets?.top || 0) + 160
+    : 160;
 
   return (
+    // ✅ [수정] 상단 SafeArea 여백 제거 + 배경 잘림 방지(상단만 배경 채움)
     <SafeAreaView style={styles.container} edges={['left', 'right', 'bottom']}>
-      <View style={[styles.topSafeBg, { height: reducedTopInset }]} />
+      {/* ✅ [수정] 내정보(헤더) 밑에 딱 붙게: 상단 filler 높이를 0으로 고정 */}
+      <View style={[styles.topBgFill, { height: 0 }]} />
 
       <ScrollView contentContainerStyle={styles.scrollContent}>
 
@@ -409,14 +455,13 @@ export default function ProfileScreen() {
               {photoURL ? (
                 <Image source={{ uri: photoURL }} style={styles.avatarImg} />
               ) : (
-                <>
-                  <Ionicons name="person" size={32} color="black" />
-                  {/* ✅ [추가] 기본 프로필(사진 없음) 우측하단 이미지 아이콘 오버레이 */}
-                  <View style={styles.avatarOverlay}>
-                    <Ionicons name="image-outline" size={16} color="black" />
-                  </View>
-                </>
+                <Ionicons name="person" size={32} color="black" />
               )}
+
+              {/* 👇 여기가 카메라 아이콘 뱃지 부분입니다 */}
+              <View style={styles.cameraBadge}>
+                <Ionicons name="camera" size={12} color="white" />
+              </View>
             </TouchableOpacity>
 
             <View style={{ flex: 1 }}>
@@ -428,22 +473,15 @@ export default function ProfileScreen() {
                     setNicknameInput(displayName === "알 수 없음" ? "" : displayName);
                     setNicknameEditModalVisible(true);
                   }}
+                  style={{ flexDirection: 'row', alignItems: 'center' }} // ✅ 가로 정렬 스타일 추가
                 >
                   <Text style={styles.nickname} numberOfLines={1}>
                     {displayName}
                   </Text>
-                </TouchableOpacity>
-
-                {/* ✅ [추가] 닉네임 옆 편집(연필) 아이콘 */}
-                <TouchableOpacity
-                  activeOpacity={0.8}
-                  onPress={() => {
-                    setNicknameInput(displayName === "알 수 없음" ? "" : displayName);
-                    setNicknameEditModalVisible(true);
-                  }}
-                  style={styles.nicknameEditBtn}
-                >
-                  <Ionicons name="pencil" size={16} color="#CCC" />
+                  {/* ✅ 네모난 연필 아이콘 박스 추가 */}
+                  <View style={styles.editIconBox}>
+                    <MaterialIcons name="edit" size={10} color="#CCC" />
+                  </View>
                 </TouchableOpacity>
 
                 {isPremium && (
@@ -584,68 +622,72 @@ export default function ProfileScreen() {
         onCancel={() => setModalVisible(false)}
       />
 
-      {/* ✅ [추가] 프로필 사진 수정 모달 (상단 시스템과 겹치지 않게: CustomModal 내부에서 처리) */}
+      {/* ✅ [수정] 프로필 사진 수정 모달 (상단 시스템과 겹치지 않게: CustomModal 내부에서 처리) */}
       <CustomModal
         visible={profileEditModalVisible}
         title="프로필 사진 수정"
         message="내 앨범에서 이미지를 선택하시겠습니까?"
         type="confirm"
-        onConfirm={async () => {
-          // ✅ 확인 누르면: 앨범 열기 → 저장 성공 시 닫힘
-          await handlePickProfileImage();
-        }}
+        onConfirm={handlePickProfileImage}
         onCancel={() => setProfileEditModalVisible(false)}
       />
 
-      {/* ✅ [추가] 닉네임 수정 모달 (키보드가 입력창 가리지 않게) */}
-      <CustomModal
-        visible={nicknameEditModalVisible}
-        title="닉네임 수정"
-        message={null}
-        onConfirm={undefined}
-        onCancel={() => {
-          Keyboard.dismiss();
-          setNicknameEditModalVisible(false);
-        }}
-      >
-        <KeyboardAvoidingView
-          behavior={Platform.OS === "ios" ? "padding" : "height"}
-          keyboardVerticalOffset={Platform.OS === "ios" ? 64 : 0}
-        >
-          <View style={{ width: '100%', marginTop: 8 }}>
-            <TextInput
-              value={nicknameInput}
-              onChangeText={setNicknameInput}
-              placeholder="닉네임을 입력하세요"
-              placeholderTextColor="#666"
-              style={styles.nicknameInput}
-              returnKeyType="done"
-              onSubmitEditing={handleSaveNickname}
-            />
+      {/* ✅ [추가] 커스텀 이미지 피커 모달 */}
+      <CustomImagePickerModal
+        visible={galleryVisible}
+        onClose={() => setGalleryVisible(false)}
+        onSelect={handleGallerySelect}
+        maxImages={1} // 프로필 사진은 1장만
+        currentCount={0}
+      />
 
-            <View style={styles.nicknameBtnRow}>
-              <TouchableOpacity
-                style={styles.nicknameBtnCancel}
-                activeOpacity={0.85}
-                onPress={() => {
-                  Keyboard.dismiss();
-                  setNicknameEditModalVisible(false);
-                }}
-              >
-                <Text style={styles.nicknameBtnCancelText}>취소</Text>
-              </TouchableOpacity>
+      {/* ✅ [수정] 닉네임 수정 모달만: 키보드 올라올 때 "모달 자체"를 위로 이동 */}
+      <Modal transparent={true} visible={nicknameEditModalVisible} animationType="fade">
+        <View style={styles.nicknameOverlay}>
+          <Animated.View style={[styles.nicknameModalContainer, { transform: [{ translateY: nicknameModalTranslateY }] }]}>
+            <Text style={styles.nicknameModalTitle}>닉네임 수정</Text>
 
-              <TouchableOpacity
-                style={styles.nicknameBtnConfirm}
-                activeOpacity={0.85}
-                onPress={handleSaveNickname}
-              >
-                <Text style={styles.nicknameBtnConfirmText}>확인</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </CustomModal>
+            <KeyboardAvoidingView
+              behavior={Platform.OS === "ios" ? "padding" : "height"}
+              keyboardVerticalOffset={nicknameKeyboardOffset}
+              style={{ width: "100%" }}
+            >
+              <View style={{ width: '100%', marginTop: 8 }}>
+                <TextInput
+                  value={nicknameInput}
+                  onChangeText={setNicknameInput}
+                  placeholder="닉네임을 입력하세요"
+                  placeholderTextColor="#666"
+                  style={styles.nicknameInput}
+                  returnKeyType="done"
+                  onSubmitEditing={handleSaveNickname}
+                />
+
+                <View style={styles.nicknameBtnRow}>
+                  <TouchableOpacity
+                    style={styles.nicknameBtnCancel}
+                    activeOpacity={0.85}
+                    onPress={() => {
+                      Keyboard.dismiss();
+                      setNicknameEditModalVisible(false);
+                    }}
+                  >
+                    <Text style={styles.nicknameBtnCancelText}>취소</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.nicknameBtnConfirm}
+                    activeOpacity={0.85}
+                    onPress={handleSaveNickname}
+                  >
+                    <Text style={styles.nicknameBtnConfirmText}>확인</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </KeyboardAvoidingView>
+          </Animated.View>
+        </View>
+      </Modal>
 
       {/* ✅ 차단 관리 리스트 모달 */}
       <CustomModal
@@ -714,13 +756,13 @@ function MenuLink({ icon, label, onPress, color = "#CCC" }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.background },
 
-  // ✅ [추가] 상단 배경 잘림 방지용(상단 여백 줄이기와 분리 처리)
-  topSafeBg: {
+  // ✅ [추가] 상단 배경 채움(상단 여백 제거 시 배경 잘림 방지)
+  topBgFill: {
     width: "100%",
     backgroundColor: theme.background,
   },
 
-  // ✅ [수정] 상단 여백 줄임 (요청사항 3)
+  // ✅ [수정] 상단 여백 줄임
   scrollContent: { paddingHorizontal: 20, paddingTop: 0, paddingBottom: 60 },
 
   // 1. 프로필 섹션
@@ -744,23 +786,26 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 16,
     overflow: 'hidden',
+    position: 'relative',
   },
   avatarImg: {
     width: '100%',
     height: '100%',
   },
 
-  // ✅ [추가] 기본 프로필 우측하단 이미지 아이콘 오버레이
-  avatarOverlay: {
-    position: "absolute",
-    right: 0,
-    bottom: 0,
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: theme.primary,
-    alignItems: "center",
-    justifyContent: "center",
+  // ✅ [수정] 카메라 아이콘 뱃지
+  cameraBadge: {
+    position: 'absolute',
+    right: 2,
+    bottom: 2,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: '#111',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#000',
   },
 
   nickname: {
@@ -769,16 +814,6 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     marginRight: 6,
   },
-
-  // ✅ [추가] 닉네임 편집 아이콘 버튼
-  nicknameEditBtn: {
-    paddingHorizontal: 6,
-    paddingVertical: 4,
-    marginRight: 2,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
   premiumBadge: {
     backgroundColor: theme.primary,
     paddingHorizontal: 6,
@@ -820,6 +855,17 @@ const styles = StyleSheet.create({
     color: "white",
     fontSize: 10,
     fontWeight: "bold",
+  },
+  // ✅ [추가] 연필 아이콘 박스 스타일
+  editIconBox: {
+    width: 18,
+    height: 18,
+    borderWidth: 1,
+    borderColor: '#666', // 박스 테두리 색상
+    borderRadius: 4,     // 모서리 둥글기 (0으로 하면 완전 직각)
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 2,       // 닉네임과의 간격
   },
 
   // 통계 행
@@ -941,6 +987,34 @@ const styles = StyleSheet.create({
     color: 'black',
     fontSize: 14,
     fontWeight: 'bold',
+  },
+
+  // ✅ [추가] 닉네임 모달(이 화면 전용) - 다른 모달은 그대로 CustomModal 사용
+  nicknameOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.7)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  nicknameModalContainer: {
+    width: "80%",
+    backgroundColor: theme.cardBg,
+    borderRadius: 15,
+    padding: 25,
+    elevation: 5,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.5,
+    shadowRadius: 3.84,
+    borderWidth: 1,
+    borderColor: "#333",
+  },
+  nicknameModalTitle: {
+    fontSize: 20,
+    fontWeight: "bold",
+    color: theme.primary,
+    marginBottom: 15,
+    textAlign: "center",
   },
 
   // 차단 목록 모달 스타일

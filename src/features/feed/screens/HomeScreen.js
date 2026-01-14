@@ -1,6 +1,6 @@
 ﻿import React, { useState, useEffect } from "react";
 // ✅ [필수] 화면 표시용 컴포넌트들
-import { View, Text, FlatList, TouchableOpacity, Image, StyleSheet, ActivityIndicator } from "react-native";
+import { View, Text, FlatList, TouchableOpacity, Image, StyleSheet, ActivityIndicator, RefreshControl } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { MaterialIcons, Ionicons } from "@expo/vector-icons"; 
 import { theme } from "../../../theme";
@@ -26,6 +26,7 @@ export default function HomeScreen({ navigation }) {
   const [selectedCategory, setSelectedCategory] = useState("전체");
   const [writeModalVisible, setWriteModalVisible] = useState(false);
   const [isLocationLoading, setIsLocationLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   // ✅ [복구완료] 위치 갱신 핸들러
   const handleRefreshLocation = async () => {
@@ -141,9 +142,7 @@ export default function HomeScreen({ navigation }) {
           <Text style={styles.subInfo}>{item.location}  {item.category}{distText}</Text>
 
           <View style={styles.row}>
-            <Text style={[styles.price, isClosed && { color: "grey" }]}>
-              {isFree ? "무료" : `${finalPerPerson.toLocaleString()}원`}
-            </Text>
+            <Text style={[styles.price, isClosed && { color: "grey" }]}>{isFree ? "무료" : `${finalPerPerson.toLocaleString()}원`}</Text>
             {item.tip > 0 && !isFree && (
               <View style={styles.badge}>
                 <Text style={styles.badgeText}>수고비 포함</Text>
@@ -152,10 +151,7 @@ export default function HomeScreen({ navigation }) {
           </View>
 
           <Text
-            style={[
-              styles.status,
-              { color: (isFull || isClosed) ? theme.danger : theme.primary }
-            ]}
+            style={[styles.status, { color: (isFull || isClosed) ? theme.danger : theme.primary }]}
           >
             {isFree 
               ? (item.status || "나눔중")
@@ -164,6 +160,13 @@ export default function HomeScreen({ navigation }) {
         </View>
       </TouchableOpacity>
     );
+  };
+
+  // ✅ 화면 새로고침 기능 추가
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await loadMorePosts(); // 게시글만 새로고침
+    setRefreshing(false);
   };
 
   return (
@@ -200,16 +203,10 @@ export default function HomeScreen({ navigation }) {
           <TouchableOpacity 
             key={cat} 
             onPress={() => setSelectedCategory(cat)}
-            style={[
-              styles.categoryBtn, 
-              selectedCategory === cat && styles.categoryBtnActive
-            ]}
+            style={[styles.categoryBtn, selectedCategory === cat && styles.categoryBtnActive]}
           >
             <Text
-              style={[
-                styles.categoryText, 
-                selectedCategory === cat && styles.categoryTextActive
-              ]}
+              style={[styles.categoryText, selectedCategory === cat && styles.categoryTextActive]}
             >
               {cat}
             </Text>
@@ -233,13 +230,16 @@ export default function HomeScreen({ navigation }) {
         }
         onEndReached={() => {
           if (selectedCategory === "전체") {
-             loadMorePosts();
+            loadMorePosts();
           }
         }}
         onEndReachedThreshold={0.5}
         initialNumToRender={6}
         windowSize={5}
         removeClippedSubviews={true}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
+        }
       />
 
       {/* 글쓰기 버튼 */}
