@@ -4,20 +4,24 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import {
-  View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet,
-  Platform, ActivityIndicator, Keyboard, Animated
+  View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet, Image,
+  Platform, ActivityIndicator, Keyboard, Animated, Alert
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { theme } from "../../../theme";
-import { MaterialIcons } from "@expo/vector-icons";
+import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import { useAppContext } from "../../../app/providers/AppContext";
 import { subscribeMessages, sendMessage, markAsRead, leaveRoom, leaveRoomAsOwner } from "../services/chatService";
-import { db } from "../../../firebaseConfig";
+// ✅ [추가] 스토리지 및 압축 관련 임포트
+import { db, storage } from "../../../firebaseConfig";
 import { doc, getDoc, onSnapshot, collection, addDoc, query, where, getDocs } from "firebase/firestore";
+import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import * as ImagePicker from "expo-image-picker";
+import * as ImageManipulator from "expo-image-manipulator";
+
 import { ROUTES } from "../../../app/navigation/routes";
 import CustomModal from "../../../components/CustomModal";
 
-// ✅ 신고 사유 목록 정의
 const REPORT_REASONS = [
   "광고 / 홍보성 채팅",
   "욕설 / 비하 발언",
@@ -27,7 +31,7 @@ const REPORT_REASONS = [
 ];
 
 export default function ChatRoomScreen({ route, navigation }) {
-  const { roomId, roomName } = route.params || {};
+  const { roomId, roomName, isGhost = false } = route.params || {};
   const { user, blockUser, blockedUsers } = useAppContext(); 
   const insets = useSafeAreaInsets();
 
@@ -38,13 +42,18 @@ export default function ChatRoomScreen({ route, navigation }) {
   const [roomOwnerId, setRoomOwnerId] = useState(null);
   const [isClosed, setIsClosed] = useState(false);
 
+  // 연결된 게시글 정보 상태
+  const [linkedPost, setLinkedPost] = useState(null);
+
   const [leaveModalVisible, setLeaveModalVisible] = useState(false);
   const [isHeaderMenuOpen, setIsHeaderMenuOpen] = useState(false);
   
-  // ✅ 신고 관련 모달 상태들
-  const [reportModalVisible, setReportModalVisible] = useState(false); // 사유 선택
-  const [reportSuccessModalVisible, setReportSuccessModalVisible] = useState(false); // 신고 완료
-  const [alreadyReportedModalVisible, setAlreadyReportedModalVisible] = useState(false); // 이미 신고함 (진입 차단)
+  const [reportModalVisible, setReportModalVisible] = useState(false); 
+  const [reportSuccessModalVisible, setReportSuccessModalVisible] = useState(false); 
+  const [alreadyReportedModalVisible, setAlreadyReportedModalVisible] = useState(false); 
+
+  // ✅ [추가] 이미지 업로드 로딩 상태
+  const [uploading, setUploading] = useState(false);
 
   const keyboardHeight = useRef(new Animated.Value(0)).current;
   const flatListRef = useRef(null);
@@ -56,9 +65,30 @@ export default function ChatRoomScreen({ route, navigation }) {
     return msg.senderId === "system" || !blockedList.includes(msg.senderId);
   });
 
+  // 게시글 정보 불러오기
+  useEffect(() => {
+    if (!roomId) return;
+    
+    const postId = roomId.replace("post_", "");
+    if (!postId) return;
+
+    const fetchPostData = async () => {
+      try {
+        const postRef = doc(db, "posts", postId);
+        const postSnap = await getDoc(postRef);
+        if (postSnap.exists()) {
+          setLinkedPost({ id: postSnap.id, ...postSnap.data() });
+        }
+      } catch (e) {
+        console.log("게시글 정보 로드 실패:", e);
+      }
+    };
+    fetchPostData();
+  }, [roomId]);
+
   useEffect(() => {
     navigation.setOptions({
-      title: roomName || "채팅방",
+      title: isGhost ? `👻 ${roomName} (감시)` : (roomName || "채팅방"),
       headerRight: () => (
         <TouchableOpacity
           onPress={() => setIsHeaderMenuOpen((prev) => !prev)}
@@ -68,12 +98,11 @@ export default function ChatRoomScreen({ route, navigation }) {
         </TouchableOpacity>
       ),
     });
-  }, [navigation, roomName]);
+  }, [navigation, roomName, isGhost]);
 
-  // ✅ 입장 시 이미 신고한 방인지 확인 -> 커스텀 모달로 알림
   useEffect(() => {
     const checkIfReported = async () => {
-      if (!user?.uid || !roomId) return;
+      if (!user?.uid || !roomId || isGhost) return;
       try {
         const q = query(
           collection(db, "reports"),
@@ -81,9 +110,7 @@ export default function ChatRoomScreen({ route, navigation }) {
           where("contentId", "==", roomId)
         );
         const snapshot = await getDocs(q);
-        
         if (!snapshot.empty) {
-          // Alert 대신 상태 변경 -> 아래에서 CustomModal 렌더링
           setAlreadyReportedModalVisible(true);
         }
       } catch (e) {
@@ -91,7 +118,7 @@ export default function ChatRoomScreen({ route, navigation }) {
       }
     };
     checkIfReported();
-  }, [roomId, user]);
+  }, [roomId, user, isGhost]);
 
   useEffect(() => {
     if (!roomId) {
@@ -157,7 +184,7 @@ export default function ChatRoomScreen({ route, navigation }) {
   }, [roomId, insets.bottom, keyboardHeight]);
 
   useEffect(() => {
-    if (!user || messages.length === 0 || !roomId) return;
+    if (!user || messages.length === 0 || !roomId || isGhost) return;
 
     const unreadMsgIds = messages
       .filter((m) => m.senderId !== user.uid)
@@ -167,9 +194,10 @@ export default function ChatRoomScreen({ route, navigation }) {
     if (unreadMsgIds.length > 0) {
       markAsRead(roomId, unreadMsgIds);
     }
-  }, [messages, user, roomId]);
+  }, [messages, user, roomId, isGhost]);
 
   const handleSend = async () => {
+    if (isGhost) return;
     if (!roomId) return;
     if (isClosed) return;
     if (!text.trim()) return;
@@ -182,8 +210,59 @@ export default function ChatRoomScreen({ route, navigation }) {
     }
   };
 
+  // ✅ [추가] 이미지 선택, 압축, 전송 로직
+  const handlePickAndSendImage = async () => {
+    if (isGhost || isClosed) return;
+
+    try {
+      // 1. 이미지 선택
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: false, 
+        quality: 1,
+      });
+
+      if (result.canceled) return;
+
+      setUploading(true);
+      const originalUri = result.assets[0].uri;
+
+      // 2. 이미지 압축 (600px, 0.4, WebP)
+      const manipResult = await ImageManipulator.manipulateAsync(
+        originalUri,
+        [{ resize: { width: 600 } }], 
+        { compress: 0.4, format: ImageManipulator.SaveFormat.WEBP }
+      );
+
+      // 3. Firebase Storage 업로드
+      const response = await fetch(manipResult.uri);
+      const blob = await response.blob();
+      const filename = `chat_images/${roomId}/${Date.now()}_${user.uid}.webp`;
+      const storageRef = ref(storage, filename);
+      
+      await uploadBytes(storageRef, blob);
+      const downloadUrl = await getDownloadURL(storageRef);
+
+      // 4. 메시지 전송 (텍스트는 빈 값, image 필드에 URL)
+      await sendMessage(roomId, "", downloadUrl); // chatService가 image 인자를 처리한다고 가정
+
+    } catch (e) {
+      console.error("Image upload error:", e);
+      Alert.alert("오류", "이미지 전송에 실패했습니다.");
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const handleLeave = async () => {
     if (!roomId) return;
+    
+    if (isGhost) {
+      setLeaveModalVisible(false);
+      navigation.goBack();
+      return;
+    }
+
     try {
       if (isOwner) {
         await leaveRoomAsOwner(roomId);
@@ -203,7 +282,6 @@ export default function ChatRoomScreen({ route, navigation }) {
     setReportModalVisible(true);
   };
 
-  // ✅ 신고 데이터 DB 저장 (시스템 팝업 방지)
   const confirmReport = async (selectedReason) => {
     setReportModalVisible(false);
     if (!roomOwnerId) return;
@@ -218,54 +296,39 @@ export default function ChatRoomScreen({ route, navigation }) {
         createdAt: new Date().toISOString(),
         status: "pending"
       });
-
-      // 신고 완료 커스텀 모달 표시
       setReportSuccessModalVisible(true);
-
     } catch (e) {
       console.error("Report failed:", e);
-      // 에러 상황은 커스텀 모달까지 만들기엔 과하므로 일단 로그만
     }
   };
 
-  // ✅ 신고 완료 후 확인 버튼 동작
   const handleReportSuccess = async () => {
     setReportSuccessModalVisible(false);
     
-    // 1. 해당 유저 차단
+    if (isGhost) {
+        navigation.navigate(ROUTES.HOME);
+        return;
+    }
+
     if (roomOwnerId && roomOwnerId !== user?.uid) {
-        try {
-            await blockUser(roomOwnerId);
-        } catch (e) {
-            console.log("차단 실패:", e);
-        }
+        try { await blockUser(roomOwnerId); } catch (e) {}
     }
 
-    // 2. 방 나가기
     try {
-        if (isOwner) {
-            await leaveRoomAsOwner(roomId);
-        } else {
-            await leaveRoom(roomId);
-        }
-    } catch (e) {
-        console.error("방 나가기 오류:", e);
-    }
+        if (isOwner) await leaveRoomAsOwner(roomId);
+        else await leaveRoom(roomId);
+    } catch (e) {}
 
-    // 3. 홈 화면으로 이동
     navigation.navigate(ROUTES.HOME); 
   };
 
-  // ✅ 차단하고 나가기 (메뉴에서 선택 시) - 여기도 Alert 대신 모달로 통일하면 좋겠지만, 
-  // 기존 코드 유지를 위해 요청하신 '신고' 관련 부분에 집중했습니다.
-  // (만약 이것도 바꾸길 원하시면 말씀해주세요. 현재는 Alert 유지)
   const handleBlockAndLeave = () => {
     setIsHeaderMenuOpen(false);
+    if (isGhost) return; 
+
     if (!roomId) return;
     if (!roomOwnerId || roomOwnerId === user?.uid) return;
 
-    // ※ 여기는 확인/취소 선택이 필요해서 시스템 Alert 유지 (요청하신 '신고 팝업'이 아님)
-    // 원하시면 이것도 CustomModal type="confirm"으로 바꿀 수 있습니다.
     Alert.alert("차단하고 나가기", "방장을 차단하고 채팅방을 나가시겠습니까?", [
       { text: "취소", style: "cancel" },
       {
@@ -282,6 +345,14 @@ export default function ChatRoomScreen({ route, navigation }) {
     ]);
   };
 
+  const handleGoToPost = () => {
+    if (!linkedPost) return;
+    const isFree = linkedPost.category === "무료나눔" || linkedPost.isFree === true;
+    navigation.navigate(isFree ? ROUTES.FREE_DETAIL : ROUTES.DETAIL, {
+      post: linkedPost
+    });
+  };
+
   const renderItem = ({ item }) => {
     const isSystemLeave = item.senderId === "system";
     if (isSystemLeave) {
@@ -293,8 +364,7 @@ export default function ChatRoomScreen({ route, navigation }) {
     }
 
     const isMy = item.senderId === user?.uid;
-    const timeString =
-      item.createdAt instanceof Date
+    const timeString = item.createdAt instanceof Date
         ? item.createdAt.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })
         : "";
 
@@ -312,7 +382,16 @@ export default function ChatRoomScreen({ route, navigation }) {
         )}
         <View style={{ flexDirection: isMy ? "row-reverse" : "row", alignItems: "flex-end" }}>
           <View style={[styles.bubble, isMy ? styles.myBubble : styles.otherBubble]}>
-            <Text style={[styles.msgText, isMy ? styles.myMsgText : styles.otherMsgText]}>{item.text}</Text>
+            {/* ✅ [추가] 이미지 메시지 렌더링 */}
+            {item.image ? (
+              <Image 
+                source={{ uri: item.image }} 
+                style={{ width: 200, height: 200, borderRadius: 8 }} 
+                resizeMode="cover"
+              />
+            ) : (
+              <Text style={[styles.msgText, isMy ? styles.myMsgText : styles.otherMsgText]}>{item.text}</Text>
+            )}
           </View>
           <View style={{ alignItems: isMy ? "flex-end" : "flex-start", marginHorizontal: 5 }}>
             {unreadCount > 0 && <Text style={styles.unreadCountText}>{unreadCount}</Text>}
@@ -325,6 +404,37 @@ export default function ChatRoomScreen({ route, navigation }) {
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.background }}>
+      
+      {linkedPost && (
+        <TouchableOpacity style={styles.postLinkBar} onPress={handleGoToPost} activeOpacity={0.8}>
+          {linkedPost.images && linkedPost.images.length > 0 ? (
+            <Image 
+              source={{ uri: typeof linkedPost.images[0] === 'string' ? linkedPost.images[0] : linkedPost.images[0].uri }} 
+              style={styles.postLinkImage} 
+            />
+          ) : (
+            <View style={[styles.postLinkImage, { backgroundColor: '#333', alignItems:'center', justifyContent:'center' }]}>
+                <Ionicons name="image-outline" size={20} color="#777" />
+            </View>
+          )}
+          
+          <View style={styles.postLinkInfo}>
+            <Text style={styles.postLinkTitle} numberOfLines={1}>{linkedPost.title}</Text>
+            <Text style={styles.postLinkPrice}>
+              {linkedPost.category === "무료나눔" 
+                ? "무료나눔" 
+                : `${Number(linkedPost.pricePerPerson || 0).toLocaleString()}원 (1인)`
+              }
+            </Text>
+          </View>
+          
+          <View style={styles.postLinkArrow}>
+            <Text style={{color: '#AAA', fontSize: 12, marginRight: 4}}>게시글</Text>
+            <MaterialIcons name="arrow-forward-ios" size={14} color="#AAA" />
+          </View>
+        </TouchableOpacity>
+      )}
+
       {isHeaderMenuOpen && (
         <TouchableOpacity
           style={styles.menuOverlay}
@@ -339,16 +449,20 @@ export default function ChatRoomScreen({ route, navigation }) {
                 setLeaveModalVisible(true);
               }}
             >
-              <MaterialIcons name="logout" size={20} color={theme.danger} />
-              <Text style={[styles.menuText, { color: theme.danger }]}>나가기</Text>
+              <MaterialIcons name={isGhost ? "logout" : "logout"} size={20} color={theme.danger} />
+              <Text style={[styles.menuText, { color: theme.danger }]}>
+                {isGhost ? "몰래 나가기" : "나가기"}
+              </Text>
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.menuItem} onPress={handleReportRoom}>
-              <MaterialIcons name="report-problem" size={20} color="#FFD700" />
-              <Text style={[styles.menuText, { color: "#FFD700" }]}>신고하기</Text>
-            </TouchableOpacity>
+            {!isGhost && (
+              <TouchableOpacity style={styles.menuItem} onPress={handleReportRoom}>
+                <MaterialIcons name="report-problem" size={20} color="#FFD700" />
+                <Text style={[styles.menuText, { color: "#FFD700" }]}>신고하기</Text>
+              </TouchableOpacity>
+            )}
 
-            {!isOwner && (
+            {!isOwner && !isGhost && (
               <TouchableOpacity style={styles.menuItem} onPress={handleBlockAndLeave}>
                 <MaterialIcons name="block" size={20} color="#AAA" />
                 <Text style={[styles.menuText, { color: "#AAA" }]}>차단하고 나가기</Text>
@@ -358,7 +472,7 @@ export default function ChatRoomScreen({ route, navigation }) {
         </TouchableOpacity>
       )}
 
-      <Animated.View style={{ flex: 1, paddingBottom: keyboardHeight }}>
+      <Animated.View style={{ flex: 1, paddingBottom: isGhost ? 0 : keyboardHeight }}>
         {loading ? (
           <View style={styles.center}>
             <ActivityIndicator size="large" color={theme.primary} />
@@ -374,33 +488,52 @@ export default function ChatRoomScreen({ route, navigation }) {
           />
         )}
 
-        <View style={[styles.inputContainer, { paddingBottom: Math.max(insets.bottom, 10) }]}>
-          <TextInput
-            style={styles.input}
-            value={text}
-            onChangeText={setText}
-            placeholder="메시지를 입력하세요"
-            placeholderTextColor="grey"
-            returnKeyType="send"
-            onSubmitEditing={handleSend}
-            editable={!isClosed}
-          />
-          <TouchableOpacity onPress={handleSend} style={styles.sendBtn} disabled={!text.trim() || isClosed}>
-            <MaterialIcons name="send" size={24} color={text.trim() ? "black" : "#555"} />
-          </TouchableOpacity>
-        </View>
+        {isGhost ? (
+            <View style={[styles.ghostBanner, { paddingBottom: insets.bottom + 20 }]}>
+                <MaterialIcons name="visibility" size={20} color="black" style={{marginRight: 8}}/>
+                <Text style={styles.ghostText}>👻 관리자 고스트 모드로 감시 중입니다</Text>
+            </View>
+        ) : (
+            <View style={[styles.inputContainer, { paddingBottom: insets.bottom + 10 }]}>
+              {/* ✅ [추가] 이미지 전송 버튼 */}
+              <TouchableOpacity onPress={handlePickAndSendImage} disabled={uploading || isClosed} style={{ marginRight: 10 }}>
+                {uploading ? (
+                  <ActivityIndicator size="small" color={theme.primary} />
+                ) : (
+                  <MaterialIcons name="add-photo-alternate" size={28} color="grey" />
+                )}
+              </TouchableOpacity>
+
+              <TextInput
+                style={styles.input}
+                value={text}
+                onChangeText={setText}
+                placeholder="메시지를 입력하세요"
+                placeholderTextColor="grey"
+                returnKeyType="send"
+                onSubmitEditing={handleSend}
+                editable={!isClosed}
+              />
+              <TouchableOpacity onPress={handleSend} style={styles.sendBtn} disabled={!text.trim() || isClosed}>
+                <MaterialIcons name="send" size={24} color={text.trim() ? "black" : "#555"} />
+              </TouchableOpacity>
+            </View>
+        )}
       </Animated.View>
 
       <CustomModal
         visible={leaveModalVisible}
-        title="채팅방 나가기"
-        message={isOwner ? "방장이 나가면 채팅이 종료됩니다. 계속하시겠습니까?" : "방에서 나가시겠습니까?"}
+        title={isGhost ? "감시 종료" : "채팅방 나가기"}
+        message={
+            isGhost 
+            ? "흔적 없이 조용히 나가시겠습니까?"
+            : (isOwner ? "방장이 나가면 채팅이 종료됩니다. 계속하시겠습니까?" : "방에서 나가시겠습니까?")
+        }
         type="confirm"
         onConfirm={handleLeave}
         onCancel={() => setLeaveModalVisible(false)}
       />
 
-      {/* ✅ 신고 사유 선택 모달 */}
       <CustomModal 
         visible={reportModalVisible} 
         title="신고 사유 선택" 
@@ -427,22 +560,20 @@ export default function ChatRoomScreen({ route, navigation }) {
         </View>
       </CustomModal>
 
-      {/* ✅ 신고 완료 알림 모달 */}
       <CustomModal
         visible={reportSuccessModalVisible}
         title="신고 완료"
-        message={"신고가 접수되었습니다.\n확인을 누르면 채팅방에서 나갑니다."}
+        message={"신고가 접수되었습니다.\n확인을 누르면 홈으로 이동합니다."}
         onConfirm={handleReportSuccess}
       />
 
-      {/* ✅ [추가] 이미 신고한 방 알림 모달 */}
       <CustomModal
         visible={alreadyReportedModalVisible}
         title="알림"
         message="이미 신고한 채팅방입니다."
         onConfirm={() => {
             setAlreadyReportedModalVisible(false);
-            navigation.goBack(); // 확인 누르면 뒤로가기
+            navigation.navigate(ROUTES.HOME); 
         }}
       />
 
@@ -466,16 +597,33 @@ const styles = StyleSheet.create({
   otherMsgText: { color: "white" },
   timeText: { color: "#666", fontSize: 10, marginTop: 2 },
   unreadCountText: { fontSize: 11, fontWeight: "bold", color: "#D0FFD0", marginBottom: 1 },
+  
   inputContainer: { flexDirection: "row", padding: 10, backgroundColor: theme.cardBg, alignItems: "center" },
   input: { flex: 1, backgroundColor: "#111", color: "white", borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10, marginRight: 10, borderWidth: 1, borderColor: "#333" },
   sendBtn: { backgroundColor: theme.primary, width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center" },
+
+  ghostBanner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: theme.primary, padding: 15 },
+  ghostText: { color: 'black', fontWeight: 'bold', fontSize: 16 },
+
+  postLinkBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#222',
+    padding: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#333'
+  },
+  postLinkImage: { width: 40, height: 40, borderRadius: 6, marginRight: 10 },
+  postLinkInfo: { flex: 1, justifyContent: 'center' },
+  postLinkTitle: { color: 'white', fontSize: 14, fontWeight: 'bold', marginBottom: 2 },
+  postLinkPrice: { color: theme.primary, fontSize: 13, fontWeight: '600' },
+  postLinkArrow: { flexDirection: 'row', alignItems: 'center' },
 
   menuOverlay: { position: "absolute", top: 0, bottom: 0, left: 0, right: 0, zIndex: 999 },
   menuContainer: { position: "absolute", right: 10, backgroundColor: "#222", borderRadius: 8, padding: 5, elevation: 5, borderWidth: 1, borderColor: "#333", minWidth: 150 },
   menuItem: { flexDirection: "row", alignItems: "center", paddingVertical: 12, paddingHorizontal: 10, borderBottomWidth: 0.5, borderBottomColor: "#333" },
   menuText: { fontSize: 14, fontWeight: "bold", marginLeft: 10 },
 
-  // ✅ 신고 사유 버튼 스타일
   reportReasonBtn: {
     backgroundColor: '#2A2A2A',
     paddingVertical: 14,

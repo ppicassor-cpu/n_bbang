@@ -1,4 +1,6 @@
-﻿import React, { useEffect, useState } from "react";
+﻿// FILE: src/app/navigation/AppNavigator.js
+
+import React, { useEffect, useState } from "react";
 import { View } from "react-native";
 import { NavigationContainer, DarkTheme } from "@react-navigation/native";
 import { createStackNavigator } from "@react-navigation/stack";
@@ -24,6 +26,9 @@ import AdminReportScreen from "../../features/profile/screens/AdminReportScreen"
 
 // ✅ [추가] 알림 화면 import
 import NotificationScreen from "../../features/profile/screens/NotificationScreen";
+
+// ✅ [추가] 스토어 글쓰기 화면 import
+import StoreWriteScreen from "../../features/post/screens/StoreWriteScreen";
 
 const Stack = createStackNavigator();
 
@@ -90,6 +95,10 @@ export default function RootNavigator() {
             <Stack.Screen name={ROUTES.WRITE_FREE} component={WriteFreeScreen} options={{ title: "무료나눔 하기" }} />
             <Stack.Screen name={ROUTES.DETAIL} component={DetailScreen} options={{ title: "상세 정보" }} />
             <Stack.Screen name={ROUTES.FREE_DETAIL} component={FreeDetailScreen} options={{ title: "무료나눔 상세" }} />
+
+            {/* ✅ [추가] 스토어 글쓰기 화면 */}
+            <Stack.Screen name={ROUTES.STORE_WRITE} component={StoreWriteScreen} options={{ title: "스토어 등록" }} />
+
             <Stack.Screen name={ROUTES.PROFILE} component={ProfileScreen} options={{ title: "내 정보" }} />
             <Stack.Screen name={ROUTES.CHAT_ROOMS} component={ChatRoomsScreen} options={{ title: "채팅" }} />
             <Stack.Screen name={ROUTES.CHAT_ROOM} component={ChatRoomScreen} options={{ title: "채팅방" }} />

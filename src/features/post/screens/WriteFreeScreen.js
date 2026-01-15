@@ -13,6 +13,7 @@ import {
 } from "react-native";
 import MapView, { Marker } from "react-native-maps";
 import * as ImagePicker from "expo-image-picker";
+import * as ImageManipulator from "expo-image-manipulator";
 import { MaterialIcons } from "@expo/vector-icons";
 
 import { useAppContext } from "../../../app/providers/AppContext";
@@ -173,6 +174,20 @@ export default function WriteFreeScreen({ navigation, route }) {
     });
   };
 
+  // ✅ 업로드 전 이미지 리사이즈/압축: 720px / 0.6
+  const normalizeImageForUpload = async (uri) => {
+    try {
+      const manipulated = await ImageManipulator.manipulateAsync(
+        uri,
+        [{ resize: { width: 720 } }],
+        { compress: 0.6, format: ImageManipulator.SaveFormat.JPEG }
+      );
+      return manipulated?.uri || uri;
+    } catch (e) {
+      return uri;
+    }
+  };
+
   const uploadImagesIfNeeded = async (uris) => {
     const normalized = (uris || [])
       .map((u) => (typeof u === "string" ? u : u?.uri))
@@ -188,11 +203,15 @@ export default function WriteFreeScreen({ navigation, route }) {
       }
 
       // ✅ 로컬 파일 업로드
-      const blob = await uriToBlob(uri);
+      const processedUri = await normalizeImageForUpload(uri);
+      const blob = await uriToBlob(processedUri);
       const filename = `free_posts/${Date.now()}_${Math.random().toString(36).slice(2)}.jpg`;
       const storageRef = ref(storage, filename);
 
-      await uploadBytes(storageRef, blob);
+      await uploadBytes(storageRef, blob, {
+        contentType: "image/jpeg",
+        cacheControl: "public,max-age=2592000",
+      });
       const downloadURL = await getDownloadURL(storageRef);
       uploaded.push(downloadURL);
     }
@@ -260,6 +279,8 @@ export default function WriteFreeScreen({ navigation, route }) {
         pickup_point: pickupPoint,
         images: uploadedImages,
         isFree: true,
+        // ✅ [핵심 수정] 무료나눔 분기 기준 통일용 필드 저장
+        category: "무료나눔",
         updatedAt: nowIso,
         // ✅ 생성일은 수정 모드에서는 유지
         createdAt: isEditMode ? editPostData?.createdAt : nowIso,
@@ -383,7 +404,7 @@ export default function WriteFreeScreen({ navigation, route }) {
 
         {/* ✅ 지도 하단 설명 문구 */}
         <Text style={styles.helperText}>지도를 움직여 핀을 만날 장소에 맞춰주세요.</Text>
-        
+
         {/* ✅ 상세 위치 입력창 */}
         <TextInput
           style={styles.subInput}
@@ -424,11 +445,7 @@ export default function WriteFreeScreen({ navigation, route }) {
       />
 
       {/* ✅ 업로드 중입니다... 모달 추가 */}
-      <CustomModal
-        visible={loading}
-        loading={true}
-        message="업로드 중입니다..."
-      />
+      <CustomModal visible={loading} loading={true} message="업로드 중입니다..." />
     </View>
   );
 }
@@ -504,7 +521,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     overflow: "hidden",
     marginTop: 10,
-    marginBottom: 10, 
+    marginBottom: 10,
   },
   // ✅ 스타일
   helperText: {

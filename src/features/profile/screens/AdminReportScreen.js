@@ -1,12 +1,15 @@
+// FILE: src/features/admin/screens/AdminReportScreen.js
+
 import React, { useState, useEffect } from "react";
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from "react-native";
 import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { collection, query, orderBy, getDocs, doc, updateDoc, deleteDoc, addDoc } from "firebase/firestore";
+import { collection, query, orderBy, getDocs, doc, getDoc, updateDoc, deleteDoc, addDoc } from "firebase/firestore";
 
 import { db } from "../../../firebaseConfig";
 import { theme } from "../../../theme";
+import { ROUTES } from "../../../app/navigation/routes";
 import { useAppContext } from "../../../app/providers/AppContext";
 
 export default function AdminReportScreen() {
@@ -18,16 +21,76 @@ export default function AdminReportScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  // ✅ 신고 내역 불러오기
+  // ✅ [수정] 신고 내역 + 닉네임 + 제목 불러오기 (안전장치 강화)
   const fetchReports = async () => {
     try {
       const q = query(collection(db, "reports"), orderBy("createdAt", "desc"));
       const querySnapshot = await getDocs(q);
       
-      const loadedData = [];
-      querySnapshot.forEach((doc) => {
-        loadedData.push({ id: doc.id, ...doc.data() });
-      });
+      const loadedData = await Promise.all(
+        querySnapshot.docs.map(async (reportDoc) => {
+          const data = reportDoc.data();
+          const reportId = reportDoc.id;
+
+          // ✅ 1. 기본값 설정 (ID라도 보이게 수정)
+          // DB에 reporterEmail 필드가 있다면 그걸 쓰고, 없다면 ID를 괄호에 넣어 표시
+          let reporterNickname = data.reporterEmail || `(ID: ${data.reporterId?.slice(0,5)}...)`;
+          let targetNickname = `(ID: ${data.targetUserId?.slice(0,5)}...)`;
+          let contentTitle = `(ID: ${data.contentId?.slice(0,5)}...)`;
+
+          // ✅ 2. 신고자 닉네임 조회 시도
+          if (data.reporterId) {
+            try {
+              const uRef = doc(db, "users", data.reporterId);
+              const uSnap = await getDoc(uRef);
+              if (uSnap.exists()) {
+                const uData = uSnap.data();
+                // 닉네임 > 이메일 앞자리 > 기존ID 순으로 적용
+                reporterNickname = uData.displayName || uData.email?.split("@")[0] || reporterNickname;
+              } else {
+                console.log(`❌ 신고자 문서 없음: ${data.reporterId}`);
+              }
+            } catch (e) {
+              console.warn(`⚠️ 신고자 조회 권한/에러: ${e.message}`);
+            }
+          }
+
+          // ✅ 3. 대상자(신고당한 사람) 닉네임 조회 시도
+          if (data.targetUserId) {
+            try {
+              const tRef = doc(db, "users", data.targetUserId);
+              const tSnap = await getDoc(tRef);
+              if (tSnap.exists()) {
+                const tData = tSnap.data();
+                targetNickname = tData.displayName || tData.email?.split("@")[0] || targetNickname;
+              }
+            } catch (e) {}
+          }
+
+          // ✅ 4. 콘텐츠 제목 조회 (게시글 or 채팅방)
+          if (data.contentId && data.type) {
+            try {
+              const collectionName = data.type === 'chat' ? 'chatRooms' : 'posts';
+              const cSnap = await getDoc(doc(db, collectionName, data.contentId));
+              if (cSnap.exists()) {
+                const cData = cSnap.data();
+                contentTitle = cData.title || cData.roomName || "제목 없음";
+              } else {
+                contentTitle = "(삭제된 콘텐츠)";
+              }
+            } catch (e) {}
+          }
+
+          return { 
+            id: reportId, 
+            ...data,
+            reporterNickname, 
+            targetNickname,   
+            contentTitle      
+          };
+        })
+      );
+
       setReports(loadedData);
     } catch (e) {
       console.error("신고 내역 로드 실패:", e);
@@ -47,14 +110,14 @@ export default function AdminReportScreen() {
     fetchReports();
   }, [isAdmin]);
 
-  // ✅ [핵심 기능] 신고자에게 알림 발송 함수
+  // ✅ 신고자 알림 발송
   const sendNotificationToReporter = async (reporterId, title, body) => {
     if (!reporterId) return;
     try {
       await addDoc(collection(db, "users", reporterId, "notifications"), {
         title,
         body,
-        type: "report_result", // 아이콘 구분용
+        type: "report_result",
         isRead: false,
         createdAt: new Date().toISOString()
       });
@@ -64,14 +127,35 @@ export default function AdminReportScreen() {
     }
   };
 
-  // ✅ 공통: 신고 상태 '처리 완료'로 변경
+  // ✅ 콘텐츠 바로가기
+  const handleGoToContent = (report) => {
+    if (!report.contentId) {
+      Alert.alert("오류", "콘텐츠 ID가 존재하지 않습니다.");
+      return;
+    }
+
+    if (report.type === 'post') {
+      navigation.navigate(ROUTES.DETAIL, { 
+        post: { id: report.contentId, ownerId: report.targetUserId } 
+      });
+    } else if (report.type === 'chat') {
+      navigation.navigate(ROUTES.CHAT_ROOM, {
+        roomId: report.contentId,
+        roomName: report.contentTitle || "신고된 채팅방",
+        isGhost: true 
+      });
+    } else {
+      Alert.alert("알림", "이동할 수 없는 콘텐츠 유형입니다.");
+    }
+  };
+
+  // ✅ 상태 변경 (처리 완료)
   const markAsResolved = async (reportId) => {
     try {
       await updateDoc(doc(db, "reports", reportId), {
         status: "resolved",
         resolvedAt: new Date().toISOString()
       });
-      // 로컬 상태 업데이트
       setReports(prev => prev.map(item => 
         item.id === reportId ? { ...item, status: "resolved" } : item
       ));
@@ -80,7 +164,6 @@ export default function AdminReportScreen() {
     }
   };
 
-  // 1️⃣ [단순 처리] 별도 조치 없이 완료 처리
   const handleResolve = (report) => {
     if (report.status === "resolved") return;
 
@@ -90,7 +173,6 @@ export default function AdminReportScreen() {
         text: "확인", 
         onPress: async () => {
           await markAsResolved(report.id);
-          // 🔔 알림 발송
           await sendNotificationToReporter(
             report.reporterId,
             "신고 처리 안내",
@@ -101,7 +183,6 @@ export default function AdminReportScreen() {
     ]);
   };
 
-  // 2️⃣ [강제 삭제] 게시글/채팅방 삭제
   const handleDeleteContent = (report) => {
     if (report.status === "resolved") return;
 
@@ -125,7 +206,6 @@ export default function AdminReportScreen() {
               
               await markAsResolved(report.id);
               
-              // 🔔 알림 발송
               await sendNotificationToReporter(
                 report.reporterId,
                 "신고 처리 완료",
@@ -141,13 +221,12 @@ export default function AdminReportScreen() {
     );
   };
 
-  // 3️⃣ [회원 정지] 유저 Ban 처리
   const handleBanUser = (report) => {
     if (report.status === "resolved") return;
 
     Alert.alert(
       "회원 영구 정지", 
-      `대상 사용자(${report.targetUserId})를 정지하시겠습니까?\n해당 유저는 더 이상 앱을 사용할 수 없습니다.`,
+      `대상 사용자(${report.targetNickname})를 정지하시겠습니까?\n해당 유저는 더 이상 앱을 사용할 수 없습니다.`,
       [
         { text: "취소", style: "cancel" },
         { 
@@ -163,7 +242,6 @@ export default function AdminReportScreen() {
               
               await markAsResolved(report.id);
 
-              // 🔔 알림 발송
               await sendNotificationToReporter(
                 report.reporterId,
                 "신고 처리 완료",
@@ -181,9 +259,18 @@ export default function AdminReportScreen() {
 
   const renderItem = ({ item }) => {
     const isResolved = item.status === "resolved";
-    const dateStr = item.createdAt ? item.createdAt.slice(0, 10) : "";
     
-    // 유형에 따른 아이콘/색상
+    let dateStr = "";
+    if (item.createdAt) {
+      if (typeof item.createdAt === 'string') {
+        dateStr = item.createdAt.slice(0, 10);
+      } else if (item.createdAt.toDate) {
+        dateStr = item.createdAt.toDate().toISOString().slice(0, 10);
+      } else if (item.createdAt.seconds) {
+        dateStr = new Date(item.createdAt.seconds * 1000).toISOString().slice(0, 10);
+      }
+    }
+    
     let typeIcon = "error-outline";
     let typeColor = "#AAA";
     if (item.type === "post") { typeIcon = "article"; typeColor = theme.primary; }
@@ -195,7 +282,7 @@ export default function AdminReportScreen() {
         <View style={styles.headerRow}>
           <View style={{ flexDirection: "row", alignItems: "center" }}>
             <MaterialIcons name={typeIcon} size={18} color={typeColor} style={{ marginRight: 6 }} />
-            <Text style={[styles.typeText, { color: typeColor }]}>{item.type?.toUpperCase()}</Text>
+            <Text style={[styles.typeText, { color: typeColor }]}>{item.type ? item.type.toUpperCase() : "알수없음"}</Text>
           </View>
           <Text style={styles.dateText}>{dateStr}</Text>
         </View>
@@ -204,15 +291,26 @@ export default function AdminReportScreen() {
         <Text style={styles.reasonText}>{item.reason}</Text>
 
         <View style={styles.infoBox}>
-          <Text style={styles.infoText}>신고자: {item.reporterEmail}</Text>
-          <Text style={styles.infoText}>대상ID: {item.targetUserId}</Text>
-          <Text style={styles.infoText} numberOfLines={1}>콘텐츠ID: {item.contentId || "없음"}</Text>
+          {/* 닉네임 표시 (없으면 ID 일부라도 표시) */}
+          <Text style={styles.infoText}>신고자: <Text style={{fontWeight:'bold', color:'white'}}>{item.reporterNickname}</Text></Text>
+          <Text style={styles.infoText}>대상자: <Text style={{fontWeight:'bold', color:'white'}}>{item.targetNickname}</Text></Text>
+          <Text style={styles.infoText} numberOfLines={1}>콘텐츠: {item.contentTitle}</Text>
+          
+          {(item.type === 'post' || item.type === 'chat') && (
+            <TouchableOpacity 
+              style={styles.inspectBtn} 
+              onPress={() => handleGoToContent(item)}
+            >
+              <MaterialIcons name="search" size={16} color="white" style={{ marginRight: 4 }} />
+              <Text style={styles.inspectBtnText}>
+                {item.type === 'chat' ? "채팅방 감시 입장" : "게시글 확인"}
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
 
-        {/* ✅ 관리자 조치 버튼 영역 */}
         {!isResolved ? (
           <View style={styles.actionRow}>
-            {/* 1. 콘텐츠 삭제 (post/chat 일 때만) */}
             {(item.type === "post" || item.type === "chat") && (
               <TouchableOpacity 
                 style={[styles.actionBtn, { backgroundColor: "#FF4444" }]} 
@@ -222,7 +320,6 @@ export default function AdminReportScreen() {
               </TouchableOpacity>
             )}
 
-            {/* 2. 유저 정지 (모든 경우 가능) */}
             <TouchableOpacity 
               style={[styles.actionBtn, { backgroundColor: "#CC0000" }]} 
               onPress={() => handleBanUser(item)}
@@ -230,7 +327,6 @@ export default function AdminReportScreen() {
               <Text style={styles.actionBtnText}>회원정지</Text>
             </TouchableOpacity>
 
-            {/* 3. 단순 처리 (반려/확인) */}
             <TouchableOpacity 
               style={[styles.actionBtn, { backgroundColor: theme.primary }]} 
               onPress={() => handleResolve(item)}
@@ -264,7 +360,7 @@ export default function AdminReportScreen() {
         <FlatList
           data={reports}
           renderItem={renderItem}
-          keyExtractor={item => item.id}
+          keyExtractor={item => item.id || Math.random().toString()} 
           contentContainerStyle={{ padding: 16 }}
           refreshing={refreshing}
           onRefresh={() => { setRefreshing(true); fetchReports(); }}
@@ -296,6 +392,21 @@ const styles = StyleSheet.create({
   
   infoBox: { backgroundColor: "#222", padding: 10, borderRadius: 8, marginBottom: 12 },
   infoText: { color: "#AAA", fontSize: 11, marginBottom: 2 },
+  
+  inspectBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#444',
+    marginTop: 8,
+    paddingVertical: 8,
+    borderRadius: 6
+  },
+  inspectBtnText: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: 'bold'
+  },
   
   actionRow: { flexDirection: "row", justifyContent: "flex-end", gap: 8, marginTop: 5 },
   actionBtn: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 6, minWidth: 60, alignItems: 'center' },

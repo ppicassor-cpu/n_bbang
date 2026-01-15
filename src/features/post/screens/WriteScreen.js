@@ -1,6 +1,9 @@
-﻿﻿import React, { useState, useEffect, useRef } from "react";
+﻿﻿// FILE: src/features/write/screens/WriteScreen.js
+
+import React, { useState, useEffect, useRef } from "react";
 import { View, Text, TextInput, ScrollView, TouchableOpacity, StyleSheet, Image, Modal, KeyboardAvoidingView, Platform, Keyboard } from "react-native";
 import * as ImagePicker from "expo-image-picker";
+import * as ImageManipulator from "expo-image-manipulator";
 import MapView, { Marker } from "react-native-maps";
 import { useAppContext } from "../../../app/providers/AppContext";
 import { theme } from "../../../theme";
@@ -10,7 +13,13 @@ import CustomImagePickerModal from "../../../components/CustomImagePickerModal";
 import { auth, storage } from "../../../firebaseConfig";
 import { ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
 
-const WRITABLE_CATEGORIES = ["마트/식품", "생활용품", "기타"];
+// ✅ [추가] 이미지 업로드 압축 설정
+const IMAGE_MAX_WIDTH = 720;
+const IMAGE_QUALITY = 0.6;
+const IMAGE_CACHE_SECONDS = 60 * 60 * 24 * 30; // 30일
+
+// ✅ [수정] 무료나눔 타입도 같은 WriteScreen에서 작성되면 분기 기준이 필요함
+const WRITABLE_CATEGORIES = ["마트/식품", "생활용품", "핫플레이스", "무료나눔"];
 
 export default function WriteScreen({ navigation, route }) {
   const {
@@ -65,6 +74,14 @@ export default function WriteScreen({ navigation, route }) {
     postsRef.current = posts;
   }, [posts]);
 
+  // ✅ [추가] 무료나눔 분기 (기준 통일: category === "무료나눔" 또는 기존 데이터의 isFree / type / postType 등)
+  const isFreeShare =
+    category === "무료나눔" ||
+    editPostData?.isFree === true ||
+    editPostData?.type === "free" ||
+    editPostData?.postType === "free" ||
+    editPostData?.category === "무료나눔";
+
   useEffect(() => {
     if (isEditMode) {
       setCategory(editPostData.category || "마트/식품");
@@ -89,6 +106,18 @@ export default function WriteScreen({ navigation, route }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [myCoords]);
+
+  // ✅ [추가] 무료나눔일 때는 인원/수고비를 강제로 기본값으로 고정(데이터/화면 혼용 방지)
+  useEffect(() => {
+    if (isFreeShare) {
+      if (participants !== 1) setParticipants(1);
+      if (selectedTip !== 0) setSelectedTip(0);
+      if (isCustomTip) setIsCustomTip(false);
+      if (isParticipantsDropdownOpen) setParticipantsDropdownOpen(false);
+      if (isTipDropdownOpen) setTipDropdownOpen(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isFreeShare]);
 
   const showAlert = (msg) => {
     setAlertMsg(msg);
@@ -122,6 +151,7 @@ export default function WriteScreen({ navigation, route }) {
   };
 
   const toggleParticipantsDropdown = () => {
+    if (isFreeShare) return;
     if (isParticipantsDropdownOpen) setParticipantsDropdownOpen(false);
     else {
       Keyboard.dismiss();
@@ -136,6 +166,7 @@ export default function WriteScreen({ navigation, route }) {
   };
 
   const toggleTipDropdown = () => {
+    if (isFreeShare) return;
     if (isTipDropdownOpen) setTipDropdownOpen(false);
     else {
       Keyboard.dismiss();
@@ -150,11 +181,18 @@ export default function WriteScreen({ navigation, route }) {
   };
 
   const handleParticipantChange = (num) => {
+    if (isFreeShare) return;
     setParticipants(num);
     setParticipantsDropdownOpen(false);
   };
 
   const handleTipChange = (tip) => {
+    if (isFreeShare) {
+      setIsCustomTip(false);
+      setTipDropdownOpen(false);
+      setSelectedTip(0);
+      return;
+    }
     setIsCustomTip(false);
     setTipDropdownOpen(false);
     checkTipLimit(tip);
@@ -179,7 +217,7 @@ export default function WriteScreen({ navigation, route }) {
     }
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== "granted") return showAlert("카메라 권한이 필요합니다.");
-    let result = await ImagePicker.launchCameraAsync({ allowsEditing: false, quality: 1 });
+    let result = await ImagePicker.launchCameraAsync({ allowsEditing: false, quality: IMAGE_QUALITY });
     if (!result.canceled) {
       const uri = result.assets?.[0]?.uri;
       if (uri) setImages((prev) => [...prev, uri]);
@@ -190,6 +228,14 @@ export default function WriteScreen({ navigation, route }) {
 
   // ✅ A안 반영: 수고비 합계는 "방장 제외 인원"만 낸다고 가정 (participants - 1)
   const checkTipLimit = (tipAmount, isDirectInput = false) => {
+    if (isFreeShare) {
+      if (tipAmount > 0) {
+        showAlert("무료나눔 게시글은 수고비를 설정할 수 없습니다.");
+      }
+      if (isDirectInput) setSelectedTip(0);
+      return;
+    }
+
     if (!buyPrice) {
       showAlert("구매 금액을 먼저 입력해주세요.");
       if (isDirectInput) setSelectedTip(0);
@@ -219,12 +265,49 @@ export default function WriteScreen({ navigation, route }) {
   };
 
   const handlePriceChange = (text) => {
+    if (isFreeShare) {
+      // 무료나눔은 가격 입력을 받지 않음(표시/저장 모두 0으로 통일)
+      setBuyPrice("");
+      return;
+    }
+
     const clean = text.replace(/,/g, "");
     if (clean === "") { setBuyPrice(""); return; }
     const num = parseInt(clean, 10);
     if (!isNaN(num)) {
       setBuyPrice(num.toLocaleString());
       setIsCustomTip(false);
+    }
+  };
+
+  const getImageWidth = (uri) =>
+    new Promise((resolve) => {
+      try {
+        Image.getSize(
+          uri,
+          (w) => resolve(w || 0),
+          () => resolve(0)
+        );
+      } catch {
+        resolve(0);
+      }
+    });
+
+  const compressImageIfNeeded = async (uri) => {
+    try {
+      const width = await getImageWidth(uri);
+      const actions = [];
+      if (width && width > IMAGE_MAX_WIDTH) {
+        actions.push({ resize: { width: IMAGE_MAX_WIDTH } });
+      }
+      const result = await ImageManipulator.manipulateAsync(
+        uri,
+        actions,
+        { compress: IMAGE_QUALITY, format: ImageManipulator.SaveFormat.JPEG }
+      );
+      return result?.uri || uri;
+    } catch {
+      return uri;
     }
   };
 
@@ -256,14 +339,19 @@ export default function WriteScreen({ navigation, route }) {
         continue;
       }
 
-      const rawExt = (typeof u === "string" ? u.split(".").pop() : "jpg") || "jpg";
+      const compressedUri = await compressImageIfNeeded(u);
+
+      const rawExt = "jpg";
       const ext = String(rawExt).split("?")[0] || "jpg";
       const fileName = `${Date.now()}_${i}.${ext}`;
       const path = `posts/n_bbang/${user.uid}/${fileName}`;
 
-      const blob = await uriToBlob(u);
+      const blob = await uriToBlob(compressedUri);
       const r = storageRef(storage, path);
-      await uploadBytes(r, blob);
+      await uploadBytes(r, blob, {
+        contentType: "image/jpeg",
+        cacheControl: `public,max-age=${IMAGE_CACHE_SECONDS}`,
+      });
       try { blob.close && blob.close(); } catch {}
       const url = await getDownloadURL(r);
       out.push(url);
@@ -309,14 +397,19 @@ export default function WriteScreen({ navigation, route }) {
     if (!checkDailyWriteLimit()) return;
 
     if (!title) { showAlert("상품명을 입력해주세요."); return; }
-    if (!buyPrice) { showAlert("구매 금액을 입력해주세요."); return; }
+
+    // ✅ [수정] 무료나눔은 buyPrice 필수 아님 (저장은 0으로 통일)
+    if (!isFreeShare && !buyPrice) { showAlert("구매 금액을 입력해주세요."); return; }
 
     // ✅ 로딩 시작: 버튼 비활성화 & 모달 띄우기
     setLoading(true);
 
     try {
-      const priceInt = buyPrice ? parseInt(buyPrice.replace(/,/g, ""), 10) : 0;
-      const perPerson = Math.ceil(priceInt / participants);
+      // ✅ [수정] 무료나눔은 가격/인원/수고비 계산을 0/1/0으로 강제 통일
+      const priceInt = isFreeShare ? 0 : (buyPrice ? parseInt(buyPrice.replace(/,/g, ""), 10) : 0);
+      const safeParticipants = isFreeShare ? 1 : participants;
+      const perPerson = isFreeShare ? 0 : Math.ceil(priceInt / safeParticipants);
+      const safeTip = isFreeShare ? 0 : selectedTip;
 
       let uploadedImages = images;
       try {
@@ -339,13 +432,22 @@ export default function WriteScreen({ navigation, route }) {
         location: isEditMode ? editPostData.location : currentLocation,
         coords: { latitude: region.latitude, longitude: region.longitude },
         pickup_point: pickupPoint,
+
+        // ✅ [수정] 무료나눔 vs N빵 분기 기준을 문서에 명시(통일)
+        isFree: !!isFreeShare,
+        type: isFreeShare ? "free" : "nbbang",
+        postType: isFreeShare ? "free" : "nbbang",
+
         price: priceInt,
         pricePerPerson: perPerson,
-        tip: selectedTip,
-        maxParticipants: participants,
+        tip: safeTip,
+
+        // ✅ [수정] 무료나눔은 참여 인원 필드도 안전하게 채워 undefined 방지
+        maxParticipants: safeParticipants,
         images: uploadedImages,
         status: isEditMode ? editPostData.status : "모집중",
-        currentParticipants: isEditMode ? editPostData.currentParticipants : 1,
+        currentParticipants: isEditMode ? (editPostData.currentParticipants ?? 1) : 1,
+
         updatedAt: nextUpdatedAt,
       };
 
@@ -387,11 +489,14 @@ export default function WriteScreen({ navigation, route }) {
     }
   };
 
-  const priceInt = buyPrice ? parseInt(buyPrice.replace(/,/g, ""), 10) : 0;
-  const perPerson = participants > 0 ? Math.ceil(priceInt / participants) : 0;
+  // ✅ [수정] 화면 표시 계산도 무료나눔이면 0/1/0 기준으로 통일
+  const priceInt = isFreeShare ? 0 : (buyPrice ? parseInt(buyPrice.replace(/,/g, ""), 10) : 0);
+  const safeParticipants = isFreeShare ? 1 : participants;
+  const perPerson = safeParticipants > 0 ? Math.ceil(priceInt / safeParticipants) : 0;
 
   // ✅ A안 기준: "참여자(방장 제외)"가 내는 1인 최종 금액(물건값 + 수고비)
-  const finalPerPerson = perPerson + selectedTip;
+  const safeTip = isFreeShare ? 0 : selectedTip;
+  const finalPerPerson = perPerson + safeTip;
 
   return (
     <View style={styles.container}>
@@ -448,16 +553,18 @@ export default function WriteScreen({ navigation, route }) {
             textAlignVertical="top"
           />
           
+          {/* ✅ [수정] 무료나눔은 인원/금액 입력 UI를 최소 변경으로 비활성 처리 */}
           <View style={[styles.rowContainer, { zIndex: 1 }]}>
             <View style={styles.dropdownWrapper}>
               <TouchableOpacity 
                 ref={participantsButtonRef}
                 style={styles.dropdownHeader} 
                 onPress={toggleParticipantsDropdown}
+                disabled={isFreeShare}
               >
                 <Text style={styles.dropdownLabel}>인원</Text>
                 <View style={styles.dropdownValueContainer}>
-                  <Text style={styles.dropdownValueText}>{participants}명</Text>
+                  <Text style={styles.dropdownValueText}>{safeParticipants}명</Text>
                   <MaterialIcons name={isParticipantsDropdownOpen ? "keyboard-arrow-up" : "keyboard-arrow-down"} size={24} color="white" />
                 </View>
               </TouchableOpacity>
@@ -468,10 +575,11 @@ export default function WriteScreen({ navigation, route }) {
                 <TextInput 
                   style={[styles.input, { flex: 1, fontSize: 20, color: theme.primary, fontWeight: "bold", marginBottom: 0, borderBottomWidth: 0, textAlign: 'right' }]} 
                   placeholder="구매 금액" placeholderTextColor="grey" keyboardType="numeric"
-                  value={buyPrice} 
+                  value={isFreeShare ? "" : buyPrice} 
                   onChangeText={handlePriceChange}
+                  editable={!isFreeShare}
                 />
-                <Text style={styles.unitText}>원</Text>
+                <Text style={styles.unitText}>{isFreeShare ? "무료" : "원"}</Text>
               </View>
               <View style={{ height: 1, backgroundColor: "#444", marginTop: 4 }} />
             </View>
@@ -486,9 +594,10 @@ export default function WriteScreen({ navigation, route }) {
                             ref={tipButtonRef}
                             style={styles.dropdownHeader} 
                             onPress={toggleTipDropdown}
+                            disabled={isFreeShare}
                         >
                             <Text style={styles.dropdownValueText}>
-                                {selectedTip === 0 ? "무료봉사" : "+" + selectedTip.toLocaleString() + "원"}
+                                {safeTip === 0 ? "무료봉사" : "+" + safeTip.toLocaleString() + "원"}
                             </Text>
                             <MaterialIcons name={isTipDropdownOpen ? "keyboard-arrow-up" : "keyboard-arrow-down"} size={24} color="white" />
                         </TouchableOpacity>
@@ -497,10 +606,15 @@ export default function WriteScreen({ navigation, route }) {
                     <TouchableOpacity 
                         style={styles.directInputBtn}
                         onPress={() => {
+                            if (isFreeShare) {
+                              showAlert("무료나눔 게시글은 수고비를 설정할 수 없습니다.");
+                              return;
+                            }
                             if (!buyPrice) { showAlert("구매 금액을 먼저 입력해주세요."); return; }
                             setIsCustomTip(true); 
                             setSelectedTip(0); 
                         }}
+                        disabled={isFreeShare}
                     >
                         <Text style={{ color: "black", fontWeight: 'bold' }}>직접입력</Text>
                     </TouchableOpacity>
@@ -512,8 +626,12 @@ export default function WriteScreen({ navigation, route }) {
                     <Text style={{color:'grey', marginRight: 10}}>입력:</Text>
                     <TextInput
                         style={styles.customTipInput} placeholder="0" placeholderTextColor="#777" keyboardType="numeric"
-                        value={selectedTip === 0 ? "" : selectedTip.toLocaleString()}
+                        value={safeTip === 0 ? "" : safeTip.toLocaleString()}
                         onChangeText={(t) => {
+                            if (isFreeShare) {
+                              setSelectedTip(0);
+                              return;
+                            }
                             const clean = t.replace(/,/g, "");
                             if(clean==="") setSelectedTip(0);
                             else if(!isNaN(parseInt(clean))) checkTipLimit(parseInt(clean), true);
@@ -528,25 +646,28 @@ export default function WriteScreen({ navigation, route }) {
             )}
           </View>
 
-          <View style={styles.receipt}>
-            <View style={{ flexDirection: "row", justifyContent: "center", marginBottom: 16 }}>
-              <Text style={{ fontSize: 18 }}>🧾 </Text>
-              <Text style={{ color: "white", fontSize: 16, fontWeight: "bold" }}>N빵 예상 계산서</Text>
+          {/* ✅ [수정] 무료나눔은 N빵 예상 계산서 표시하지 않음(화면 혼용 방지) */}
+          {!isFreeShare && (
+            <View style={styles.receipt}>
+              <View style={{ flexDirection: "row", justifyContent: "center", marginBottom: 16 }}>
+                <Text style={{ fontSize: 18 }}>🧾 </Text>
+                <Text style={{ color: "white", fontSize: 16, fontWeight: "bold" }}>N빵 예상 계산서</Text>
+              </View>
+              <View style={styles.receiptRow}>
+                <Text style={{ color: "grey" }}>1인당 물건값</Text>
+                <Text style={{ color: "white" }}>{perPerson.toLocaleString()}원</Text>
+              </View>
+              <View style={styles.receiptRow}>
+                <Text style={{ color: "grey" }}>수고비</Text>
+                <Text style={{ color: theme.primary, fontWeight: "bold" }}>+ {safeTip.toLocaleString()}</Text>
+              </View>
+              <View style={{ height: 1, backgroundColor: "grey", marginVertical: 12 }} />
+              <View style={styles.receiptRow}>
+                <Text style={{ color: "white", fontWeight: "bold" }}>최종 1인</Text>
+                <Text style={{ color: theme.primary, fontSize: 24, fontWeight: "bold" }}>{finalPerPerson.toLocaleString()}원</Text>
+              </View>
             </View>
-            <View style={styles.receiptRow}>
-              <Text style={{ color: "grey" }}>1인당 물건값</Text>
-              <Text style={{ color: "white" }}>{perPerson.toLocaleString()}원</Text>
-            </View>
-            <View style={styles.receiptRow}>
-              <Text style={{ color: "grey" }}>수고비</Text>
-              <Text style={{ color: theme.primary, fontWeight: "bold" }}>+ {selectedTip.toLocaleString()}</Text>
-            </View>
-            <View style={{ height: 1, backgroundColor: "grey", marginVertical: 12 }} />
-            <View style={styles.receiptRow}>
-              <Text style={{ color: "white", fontWeight: "bold" }}>최종 1인</Text>
-              <Text style={{ color: theme.primary, fontSize: 24, fontWeight: "bold" }}>{finalPerPerson.toLocaleString()}원</Text>
-            </View>
-          </View>
+          )}
 
           <View style={{ marginTop: 30, marginBottom: 20 }}>
               <Text style={styles.label}>만남 장소</Text>

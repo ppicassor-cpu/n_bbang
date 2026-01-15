@@ -1,4 +1,6 @@
-﻿import React, { useState, useEffect, useMemo } from "react";
+﻿// FILE: src/features/post/screens/DetailScreen.js
+
+import React, { useState, useEffect, useMemo } from "react";
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Image, Dimensions, ActivityIndicator, Alert } from "react-native";
 import MapView, { Marker } from "react-native-maps";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -12,7 +14,7 @@ import CustomModal from "../../../components/CustomModal";
 
 const SCREEN_WIDTH = Dimensions.get("window").width;
 
-// ✅ [추가] 신고 사유 목록 정의
+// ✅ 신고 사유 목록 정의
 const REPORT_REASONS = [
   "광고 / 홍보성 게시글",
   "거래 금지 품목",
@@ -44,8 +46,19 @@ export default function DetailScreen({ route, navigation }) {
   const [tempStatus, setTempStatus] = useState(""); 
   const [loading, setLoading] = useState(false);
 
-  // ✅ [추가] 신고 완료 후 홈 이동 플래그
+  // ✅ 신고 완료 후 홈 이동 플래그
   const [goHomeAfterSuccess, setGoHomeAfterSuccess] = useState(false);
+
+  // ✅ 무료나눔 분기
+  const isFree = post?.category === "무료나눔";
+
+  // ✅ [수정] useMemo를 return문 위로 올림 (Hooks 순서 에러 해결)
+  const mapRegion = useMemo(() => ({
+    latitude: post?.coords?.latitude || 37.5665,
+    longitude: post?.coords?.longitude || 126.9780,
+    latitudeDelta: 0.005,
+    longitudeDelta: 0.005,
+  }), [post]);
 
   useEffect(() => {
     if (!initialPost?.id) return;
@@ -56,10 +69,27 @@ export default function DetailScreen({ route, navigation }) {
     }
   }, [posts, initialPost?.id]);
 
+  // ✅ 무료나눔 글이 이 화면으로 들어오면 무료나눔 상세로 리다이렉트
+  useEffect(() => {
+    if (post?.category === "무료나눔") {
+      navigation.replace(ROUTES.FREE_DETAIL, { post });
+    }
+  }, [post?.category, post, navigation]);
+
+  // ❌ [주의] 이 return 문이 Hooks보다 아래에 있어야 함
   if (!post) {
     return (
       <View style={[styles.container, { justifyContent: "center", alignItems: "center" }]}>
         <Text style={{ color: "white" }}>게시글 정보가 없습니다.</Text>
+      </View>
+    );
+  }
+
+  // ✅ 무료나눔은 이 화면에서 렌더하지 않음(리다이렉트 중 화면 깜빡임 방지)
+  if (isFree) {
+    return (
+      <View style={[styles.container, { justifyContent: "center", alignItems: "center" }]}>
+        <ActivityIndicator size="small" color="white" />
       </View>
     );
   }
@@ -126,15 +156,19 @@ export default function DetailScreen({ route, navigation }) {
     setReportModalVisible(true);
   };
 
-  // ✅ [수정] 신고 확정 처리 (사유 선택 시 실행)
-  const confirmReport = (selectedReason) => {
-    reportUser(post.ownerId, post.id, selectedReason, "post");
-    setReportModalVisible(false);
-
-    // ✅ [추가] 신고 완료 안내 모달 띄우고, 확인 누르면 홈으로 이동
-    setGoHomeAfterSuccess(true);
-    setAlertMsg("신고가 접수되었습니다. 검토 후 조치하겠습니다.");
-    setSuccessModalVisible(true);
+  // ✅ 신고 확정 처리
+  const confirmReport = async (selectedReason) => {
+    try {
+      await reportUser(post.ownerId, post.id, selectedReason, "post", true);
+      await blockUser(post.ownerId, true);
+    } catch (e) {
+      console.warn("report/block failed:", e);
+    } finally {
+      setReportModalVisible(false);
+      setGoHomeAfterSuccess(true);
+      setAlertMsg("신고가 접수되었습니다. 검토 후 조치하겠습니다.");
+      setSuccessModalVisible(true);
+    }
   };
 
   // 차단 핸들러
@@ -147,7 +181,7 @@ export default function DetailScreen({ route, navigation }) {
   const confirmBlock = async () => {
     await blockUser(post.ownerId);
     setBlockModalVisible(false);
-    navigation.goBack(); // 차단했으니 글 안 보이게 나감
+    navigation.goBack();
   };
 
   const handleScroll = (event) => {
@@ -155,13 +189,6 @@ export default function DetailScreen({ route, navigation }) {
     const index = event.nativeEvent.contentOffset.x / slideSize;
     setImgPage(Math.round(index) + 1);
   };
-
-  const mapRegion = useMemo(() => ({
-    latitude: post?.coords?.latitude || 37.5665,
-    longitude: post?.coords?.longitude || 126.9780,
-    latitudeDelta: 0.005,
-    longitudeDelta: 0.005,
-  }), [post]);
 
   const finalPerPerson = Number(post.pricePerPerson || 0) + Number(post.tip || 0);
 
@@ -311,8 +338,6 @@ export default function DetailScreen({ route, navigation }) {
         message={alertMsg}
         onConfirm={() => {
           setSuccessModalVisible(false);
-
-          // ✅ [추가] 신고 완료 후 확인 누르면 홈으로 이동
           if (goHomeAfterSuccess) {
             setGoHomeAfterSuccess(false);
             navigation.navigate(ROUTES.HOME);

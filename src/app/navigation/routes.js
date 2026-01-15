@@ -1,4 +1,6 @@
-﻿export const ROUTES = {
+﻿// FILE: src/app/navigation/routes.js
+
+export const ROUTES = {
   LOGIN: "Login",
   HOME: "Home",
   
@@ -7,6 +9,9 @@
   WRITE_FREE: "WriteFree",
   DETAIL: "Detail",
   FREE_DETAIL: "FreeDetail",
+
+  // ✅ [추가] 스토어 글쓰기 라우트
+  STORE_WRITE: "StoreWrite",
   
   // 프로필 관련
   PROFILE: "Profile",

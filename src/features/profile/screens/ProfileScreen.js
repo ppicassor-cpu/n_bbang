@@ -34,6 +34,11 @@ import CustomModal from '../../../components/CustomModal';
 import CustomImagePickerModal from '../../../components/CustomImagePickerModal';
 import { db } from "../../../firebaseConfig";
 
+// ✅ [추가] 이미지 압축/캐시
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as ImageManipulator from "expo-image-manipulator";
+import * as FileSystem from "expo-file-system";
+
 export default function ProfileScreen() {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
@@ -81,6 +86,12 @@ export default function ProfileScreen() {
 
   // ✅ [수정] 닉네임 모달만 키보드 올라올 때 "모달 자체"가 위로 이동하도록 (CustomModal 중앙 고정 영향 제거)
   const nicknameModalTranslateY = useRef(new Animated.Value(0)).current;
+
+  // ✅ [추가] 프로필 이미지 압축/캐시 설정
+  const PROFILE_IMAGE_CACHE_KEY = "profile_image_cache_v1";
+  const PROFILE_IMAGE_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30일
+  const PROFILE_IMAGE_TARGET_WIDTH = 400;
+  const PROFILE_IMAGE_QUALITY = 0.5;
 
   useEffect(() => {
     const onShow = (e) => {
@@ -181,6 +192,44 @@ export default function ProfileScreen() {
     setGalleryVisible(true);
   };
 
+  // ✅ [추가] 프로필 이미지 압축 + 30일 캐시
+  const getCompressedProfileImageUri = async (sourceUri) => {
+    if (!sourceUri) return null;
+
+    // 1) 캐시 조회
+    try {
+      const raw = await AsyncStorage.getItem(PROFILE_IMAGE_CACHE_KEY);
+      const map = raw ? JSON.parse(raw) : {};
+      const cached = map?.[sourceUri];
+
+      if (cached?.uri && cached?.ts && (Date.now() - cached.ts) < PROFILE_IMAGE_CACHE_TTL_MS) {
+        try {
+          const info = await FileSystem.getInfoAsync(cached.uri);
+          if (info?.exists) return cached.uri;
+        } catch {}
+      }
+    } catch {}
+
+    // 2) 캐시 없으면 압축
+    const result = await ImageManipulator.manipulateAsync(
+      sourceUri,
+      [{ resize: { width: PROFILE_IMAGE_TARGET_WIDTH } }],
+      { compress: PROFILE_IMAGE_QUALITY, format: ImageManipulator.SaveFormat.JPEG }
+    );
+
+    const outUri = result?.uri || sourceUri;
+
+    // 3) 캐시 저장(30일)
+    try {
+      const raw = await AsyncStorage.getItem(PROFILE_IMAGE_CACHE_KEY);
+      const map = raw ? JSON.parse(raw) : {};
+      map[sourceUri] = { uri: outUri, ts: Date.now() };
+      await AsyncStorage.setItem(PROFILE_IMAGE_CACHE_KEY, JSON.stringify(map));
+    } catch {}
+
+    return outUri;
+  };
+
   // ✅ [추가] 갤러리에서 사진 선택 완료 시 호출
   const handleGallerySelect = async (selectedUris) => {
     // 모달 닫기
@@ -192,8 +241,11 @@ export default function ProfileScreen() {
       // 첫 번째 사진만 사용
       const uri = selectedUris[0];
 
+      // ✅ [추가] 압축(400px, quality 0.5) + 30일 캐시
+      const compressedUri = await getCompressedProfileImageUri(uri);
+
       // ✅ 즉시 저장 (photoURL 필드)
-      await updateDoc(doc(db, "users", user.uid), { photoURL: uri });
+      await updateDoc(doc(db, "users", user.uid), { photoURL: compressedUri });
 
     } catch (e) {
       console.error(e);
@@ -426,7 +478,7 @@ export default function ProfileScreen() {
   const appVersion = Constants.expoConfig?.version || '1.0.0';
 
   // ✅ 표시용 닉네임/프로필 사진
-  const displayName = userProfile?.displayName || user?.displayName || user?.email?.split('@')[0] || "알 수 없음";
+  const displayName = userProfile?.displayName || user?.displayName || user?.email?.split('@')[0] || "닉네임을 설정해주세요";
   const photoURL = userProfile?.photoURL || null;
 
   // ✅ [수정] 닉네임 수정 팝업이 키보드에 가리지 않도록(팝업 전체가 위로 올라가게)
@@ -470,7 +522,7 @@ export default function ProfileScreen() {
                 <TouchableOpacity
                   activeOpacity={0.8}
                   onPress={() => {
-                    setNicknameInput(displayName === "알 수 없음" ? "" : displayName);
+                    setNicknameInput(displayName === "닉네임을 설정해주세요" ? "" : displayName);
                     setNicknameEditModalVisible(true);
                   }}
                   style={{ flexDirection: 'row', alignItems: 'center' }} // ✅ 가로 정렬 스타일 추가
