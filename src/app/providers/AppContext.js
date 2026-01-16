@@ -250,9 +250,15 @@ export const AppProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [currentLocation, setCurrentLocation] = useState("위치 찾는 중...");
   const [myCoords, setMyCoords] = useState(null);
+  
+  // =================================================================
+  // ✅ [수정] Posts 및 Stores(가게) 상태 관리
+  // =================================================================
   const [posts, setPosts] = useState([]);
-
   const [postLimit, setPostLimit] = useState(20);
+
+  const [stores, setStores] = useState([]); // ✅ [추가] 가게 목록 상태
+  const [storeLimit, setStoreLimit] = useState(20); // ✅ [추가] 가게 목록 제한
 
   const [blockedUsers, setBlockedUsers] = useState([]);
 
@@ -590,6 +596,7 @@ export const AppProvider = ({ children }) => {
         isAdminRef.current = false;
         setBlockedUsers([]); // 차단된 사용자는 초기화
         setPostLimit(20);
+        setStoreLimit(20); // ✅ [추가] Store limit 초기화
 
         // ✅ [추가] 핫플레이스 멤버십/월 카운트 초기화
         setMembershipType("free");
@@ -617,8 +624,27 @@ export const AppProvider = ({ children }) => {
 
           setPremiumUntil(data.premiumUntil || null);
           setIsPremium(!!data.isPremium);
-          setDailyPostCount(data.dailyPostCount || 0);
-          setDailyPostCountDate(data.dailyPostCountDate || null);
+          const todayKST = getTodayKST();
+          const savedDate = data.dailyPostCountDate || null;
+
+          if (savedDate !== todayKST) {
+            // 날짜가 오늘이 아니면: 0으로 리셋 + 날짜도 오늘로 저장
+            setDailyPostCount(0);
+            setDailyPostCountDate(todayKST);
+
+            try {
+              await updateDoc(doc(db, "users", currentUser.uid), {
+                dailyPostCount: 0,
+                dailyPostCountDate: todayKST,
+              });
+            } catch (e) {
+              console.warn("dailyPostCount reset 실패(무시 가능):", e);
+            }
+          } else {
+            // 오늘이면 그대로 사용
+            setDailyPostCount(data.dailyPostCount || 0);
+            setDailyPostCountDate(savedDate);
+          }
 
           // ✅ [추가] 핫플레이스 멤버십/월 카운트 불러오기
           setMembershipType(data.membershipType || "free");
@@ -745,7 +771,15 @@ export const AppProvider = ({ children }) => {
             loaded.push({ ...postData, id: d.id });
           }
         });
-        setPosts(loaded);
+
+        // ✅ 데이터를 저장할 때 'createdAt' 기준 내림차순(최신순) 정렬 강제
+        const sorted = loaded.sort((a, b) => {
+          const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+          const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+          return dateB - dateA;
+        });
+
+        setPosts(sorted);
       });
     } else {
       setPosts([]);
@@ -756,8 +790,51 @@ export const AppProvider = ({ children }) => {
     };
   }, [user, postLimit, blockedUsers]);
 
+  // =================================================================
+  // ✅ [추가] Stores(가게) 데이터 실시간 구독 로직
+  // =================================================================
+  useEffect(() => {
+    let unsub = null;
+    if (user) {
+      // 가게 목록도 최신순 정렬 + limit 적용
+      const q = query(collection(db, "stores"), orderBy("createdAt", "desc"), limit(storeLimit));
+
+      unsub = onSnapshot(q, (querySnapshot) => {
+        const loaded = [];
+        querySnapshot.forEach((d) => {
+          const storeData = d.data();
+          // 차단된 유저의 가게는 제외
+          if (!blockedUsers.includes(storeData.ownerId)) {
+            // type: 'store'를 추가해서 나중에 합칠 때 구분
+            loaded.push({ ...storeData, id: d.id, type: 'store' });
+          }
+        });
+
+        // ✅ 가게 데이터도 날짜 기준 최신순 정렬 보장
+        const sorted = loaded.sort((a, b) => {
+          const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+          const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+          return dateB - dateA;
+        });
+
+        setStores(sorted);
+      });
+    } else {
+      setStores([]);
+    }
+
+    return () => {
+      if (unsub) unsub();
+    };
+  }, [user, storeLimit, blockedUsers]);
+
   const loadMorePosts = () => {
     setPostLimit((prev) => prev + 5);
+  };
+
+  // ✅ [추가] 가게 목록 더 불러오기 함수
+  const loadMoreStores = () => {
+    setStoreLimit((prev) => prev + 5);
   };
 
   /* =========================
@@ -1266,6 +1343,8 @@ export const AppProvider = ({ children }) => {
     if (!user) return;
     await addDoc(collection(db, "posts"), {
       ...newPostData,
+      // ✅ [수정] 업종(category)을 포함한 모든 데이터가 무조건 DB에 박히도록 처리
+      category: newPostData.category, 
       ownerId: user.uid,
       ownerEmail: user.email,
       createdAt: new Date().toISOString(),
@@ -1297,12 +1376,15 @@ export const AppProvider = ({ children }) => {
         setCurrentLocation,
         myCoords,
         setMyCoords,
+        
         posts,
+        stores, // ✅ [추가] stores 내보내기
         addPost,
         updatePost,
         deletePost,
 
         loadMorePosts,
+        loadMoreStores, // ✅ [추가] loadMoreStores 내보내기
 
         getDistanceFromLatLonInKm,
         verifyLocation,

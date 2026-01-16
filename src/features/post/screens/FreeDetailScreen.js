@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Image, Dimensions } from "react-native";
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Dimensions } from "react-native";
+import { Image } from "expo-image";
+import ImageDetailModal from "../../../components/ImageDetailModal";
 import MapView, { Marker } from "react-native-maps";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { MaterialIcons } from "@expo/vector-icons";
@@ -43,6 +45,9 @@ export default function FreeDetailScreen({ route, navigation }) {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [tempStatus, setTempStatus] = useState("");
   const [loading, setLoading] = useState(false);
+
+  const [isImageViewVisible, setIsImageViewVisible] = useState(false);
+  const [currentImageIndex, setCurrentImageIndex] = useState(0);
 
   useEffect(() => {
     if (!initialPost?.id) return;
@@ -151,7 +156,22 @@ export default function FreeDetailScreen({ route, navigation }) {
         <View style={styles.heroContainer}>
           <ScrollView horizontal pagingEnabled onScroll={(e) => setImgPage(Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH) + 1)}>
             {post.images?.map((img, idx) => (
-              <Image key={idx} source={{ uri: img }} style={styles.heroImage} />
+              <TouchableOpacity 
+                key={idx} 
+                activeOpacity={0.9} 
+                onPress={() => {
+                  setCurrentImageIndex(idx);
+                  setIsImageViewVisible(true);
+                }}
+              >
+                <Image 
+                  source={{ uri: img }} 
+                  style={styles.heroImage} 
+                  contentFit="cover"
+                  transition={200}
+                  cachePolicy="disk"
+                />
+              </TouchableOpacity>
             ))}
           </ScrollView>
           <View style={styles.pageIndicator}><Text style={styles.pageText}>{imgPage} / {post.images?.length || 0}</Text></View>
@@ -285,8 +305,17 @@ export default function FreeDetailScreen({ route, navigation }) {
         message={"이 사용자를 차단하시겠습니까?\n차단 후에는 이 사용자의 글이 보이지 않습니다."}
         type="confirm"
         onConfirm={confirmBlock}
-        onCancel={() => setBlockModalVisible(false)}
+        onCancel={() => setBlockModalVisible(false)} 
       />
+
+      {/* ✅ [수정 시작] 공통 이미지 확대 모달 사용 */}
+      <ImageDetailModal
+        visible={isImageViewVisible}
+        images={post.images}
+        index={currentImageIndex}
+        onClose={() => setIsImageViewVisible(false)}
+      />
+      {/* ✅ [수정 끝] */}
     </View>
   );
 }
@@ -294,7 +323,7 @@ export default function FreeDetailScreen({ route, navigation }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.background },
   heroContainer: { height: 350 },
-  heroImage: { width: SCREEN_WIDTH, height: 350, resizeMode: "cover" },
+  heroImage: { width: SCREEN_WIDTH, height: 350 },
   pageIndicator: { position: "absolute", bottom: 20, right: 20, backgroundColor: "rgba(0,0,0,0.6)", paddingHorizontal: 12, paddingVertical: 5, borderRadius: 15 },
   pageText: { color: "white", fontSize: 12, fontWeight: "bold" },
   body: { padding: 20 },

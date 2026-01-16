@@ -1,7 +1,8 @@
 ﻿node_modules/
 .expo/
 *.log
-
+/android
+/ios
 .env
 .env.*
 !.env.example

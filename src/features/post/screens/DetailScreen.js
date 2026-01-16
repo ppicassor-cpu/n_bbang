@@ -1,7 +1,9 @@
 ﻿// FILE: src/features/post/screens/DetailScreen.js
 
 import React, { useState, useEffect, useMemo } from "react";
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Image, Dimensions, ActivityIndicator, Alert } from "react-native";
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Dimensions, ActivityIndicator, Alert } from "react-native";
+import { Image } from "expo-image";
+import ImageView from "react-native-image-viewing"; 
 import MapView, { Marker } from "react-native-maps";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { MaterialIcons } from "@expo/vector-icons";
@@ -30,6 +32,9 @@ export default function DetailScreen({ route, navigation }) {
   
   const [post, setPost] = useState(initialPost || null);
   const [imgPage, setImgPage] = useState(1);
+
+  const [isImageViewVisible, setIsImageViewVisible] = useState(false);
+  const [currentImageIndex, setCurrentImageIndex] = useState(0);
   
   // 기존 모달 상태
   const [deleteModalVisible, setDeleteModalVisible] = useState(false);
@@ -201,7 +206,22 @@ export default function DetailScreen({ route, navigation }) {
             <>
               <ScrollView horizontal pagingEnabled showsHorizontalScrollIndicator={false} onScroll={handleScroll} scrollEventThrottle={16}>
                 {post.images.map((img, idx) => (
-                  <Image key={idx} source={{ uri: (typeof img === "string" ? img : img.uri) }} style={styles.heroImage} />
+                  <TouchableOpacity 
+                    key={idx} 
+                    activeOpacity={0.9} 
+                    onPress={() => {
+                      setCurrentImageIndex(idx);
+                      setIsImageViewVisible(true);
+                    }}
+                  >
+                    <Image 
+                      source={{ uri: (typeof img === "string" ? img : img.uri) }} 
+                      style={styles.heroImage}
+                      contentFit="cover"
+                      transition={200}
+                      cachePolicy="disk"
+                    />
+                  </TouchableOpacity>
                 ))}
               </ScrollView>
               <View style={styles.pageIndicator}>
@@ -391,6 +411,16 @@ export default function DetailScreen({ route, navigation }) {
         onConfirm={confirmBlock} 
         onCancel={() => setBlockModalVisible(false)} 
       />
+
+      {/* ✅ [추가] 이미지 전체화면 확대 모달 */}
+      <ImageView
+        images={post.images.map(img => ({ uri: (typeof img === "string" ? img : img.uri) }))}
+        imageIndex={currentImageIndex}
+        visible={isImageViewVisible}
+        onRequestClose={() => setIsImageViewVisible(false)}
+        swipeToCloseEnabled={true}
+        doubleTapToZoomEnabled={true}
+      />
     </View>
   );
 }
@@ -398,7 +428,7 @@ export default function DetailScreen({ route, navigation }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.background },
   heroContainer: { height: 300, position: "relative" }, 
-  heroImage: { width: SCREEN_WIDTH, height: 300, resizeMode: "cover" },
+  heroImage: { width: SCREEN_WIDTH, height: 300 },
   pageIndicator: { position: "absolute", bottom: 15, right: 15, backgroundColor: "rgba(0,0,0,0.6)", paddingHorizontal: 12, paddingVertical: 4, borderRadius: 15 },
   pageText: { color: "white", fontWeight: "bold", fontSize: 12 },
   body: { padding: 24 },

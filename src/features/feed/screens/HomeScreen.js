@@ -1,8 +1,9 @@
 ﻿// FILE: src/features/feed/screens/HomeScreen.js
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 // ✅ [필수] 화면 표시용 컴포넌트들
-import { View, Text, FlatList, TouchableOpacity, Image, StyleSheet, ActivityIndicator, RefreshControl } from "react-native";
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, RefreshControl } from "react-native";
+import { Image } from "expo-image"; 
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { MaterialIcons, Ionicons } from "@expo/vector-icons"; 
 import { theme } from "../../../theme";
@@ -13,9 +14,87 @@ import { checkAndGenerateSamples } from "../../../utils/autoSampleGenerator";
 
 const CATEGORIES = ["전체", "마트/식품", "생활용품", "핫플레이스", "무료나눔"];
 
+// ✅ [최적화 핵심] 리스트 아이템을 별도 컴포넌트로 분리하고 React.memo로 감쌈
+const PostItem = React.memo(({ item, onPress }) => {
+  const isStore = item.type === 'store'; // ✅ 가게 여부 확인
+  const isFree = item.category === "무료나눔";
+  
+  const isNbbangClosed = !isFree && !isStore && item.status === "마감";
+  // ✅ 가게(isStore)는 인원수 마감 로직 제외
+  const isFull = !isFree && !isStore && (item.currentParticipants >= item.maxParticipants || isNbbangClosed);
+  const isClosed = isFree && item.status === "나눔완료";
+
+  const finalPerPerson = (!isFree && !isStore)
+    ? Number(item.pricePerPerson || 0) + Number(item.tip || 0)
+    : 0;
+
+  const imageSource = item.images && item.images.length > 0
+    ? { uri: (typeof item.images[0] === 'string' ? item.images[0] : item.images[0]?.uri) }
+    : null;
+
+  return (
+    <TouchableOpacity 
+      style={[styles.card, isClosed && { opacity: 0.6 }]} 
+      activeOpacity={0.7}
+      onPress={onPress}
+    >
+      <View style={styles.imageBox}>
+        {imageSource ? (
+          <Image 
+            source={imageSource} 
+            style={styles.image} 
+            contentFit="cover"
+            transition={200}
+            cachePolicy="disk"
+          />
+        ) : (
+          <MaterialIcons name={isStore ? "storefront" : "receipt-long"} size={40} color="grey" />
+        )}
+        {/* ✅ 가게는 마감 오버레이 안 띄움 */}
+        {(isClosed || isFull) && (
+          <View style={styles.closedOverlay}>
+            <Text style={styles.closedOverlayText}>{isClosed ? "나눔완료" : "마감"}</Text>
+          </View>
+        )}
+      </View>
+
+      <View style={styles.infoBox}>
+        <Text style={styles.title} numberOfLines={2}>{item.title}</Text>
+        <Text style={styles.subInfo}>{item.location}  {item.category}{item.distText}</Text>
+
+        <View style={styles.row}>
+          <Text style={[styles.price, isClosed && { color: "grey" }]}>
+            {isStore ? "핫플레이스" : (isFree ? "무료" : `${finalPerPerson.toLocaleString()}원`)}
+          </Text>
+          {item.tip > 0 && !isFree && !isStore && (
+            <View style={styles.badge}>
+              <Text style={styles.badgeText}>수고비 포함</Text>
+            </View>
+          )}
+        </View>
+
+        <Text
+          style={[styles.status, { color: (isFull || isClosed) ? theme.danger : theme.primary }]}
+        >
+          {isStore 
+            ? "운영중" // ✅ 가게일 때 표시 문구
+            : (isFree 
+                ? (item.status || "나눔중")
+                : (isNbbangClosed ? "참여마감" : `${item.currentParticipants}/${item.maxParticipants}명 참여중`)
+              )
+          }
+        </Text>
+      </View>
+    </TouchableOpacity>
+  );
+});
+
 export default function HomeScreen({ navigation }) {
   const { 
+    user, 
     posts, 
+    stores, // ✅ stores 데이터 가져오기
+    isAdmin, 
     currentLocation, 
     myCoords, 
     getDistanceFromLatLonInKm, 
@@ -67,6 +146,11 @@ export default function HomeScreen({ navigation }) {
   const handleHotplacePress = async () => {
     setWriteModalVisible(false);
 
+    if (user && user.isPremium) {
+       goHotplaceWrite({ paymentType: "membership", purchaseInfo: null });
+       return;
+    }
+
     try {
       const res = (typeof checkHotplaceEligibility === "function") ? await checkHotplaceEligibility() : null;
       const status = typeof res === "string" ? res : (res?.status || res?.code || null);
@@ -113,7 +197,6 @@ export default function HomeScreen({ navigation }) {
     }
   };
 
-  // ✅ [복구완료] 위치 갱신 핸들러
   const handleRefreshLocation = async () => {
     if (isLocationLoading) return;
     setIsLocationLoading(true);
@@ -126,131 +209,100 @@ export default function HomeScreen({ navigation }) {
     }
   };
 
-  // ✅ [복구완료] 앱이 켜지자마자(마운트 될 때) 자동으로 위치 찾기 실행
   useEffect(() => {
     handleRefreshLocation();
   }, []);
 
-  // ✅ 좌표가 잡히면 샘플 데이터 생성 체크
   useEffect(() => {
     if (myCoords && myCoords.latitude) {
       checkAndGenerateSamples(myCoords);
     }
   }, [myCoords]);
 
-  /* =========================
-      1시간 부스트 최상단 정렬 로직
-   ========================= */
-  const now = Date.now();
+  // ✅ 스크롤 최적화를 위한 데이터 가공 (useMemo)
+  const formattedPosts = useMemo(() => {
+    // 1. stores 데이터를 posts 형식에 맞게 변환 (⚠️ 중요 수정)
+    const normalizedStores = (stores || []).map(s => ({
+      ...s,
+      type: 'store',
+      title: s.name, 
+      category: s.category,
+      // ✅ [중요] 좌표 객체 충돌 방지: 화면 표시용 주소는 'address' 사용
+      location: s.address || "위치 정보 없음", 
+      // ✅ [중요] 거리 계산용 좌표: 원래 'location'에 있던 좌표를 'coords'로 복사
+      coords: s.location, 
+      
+      currentParticipants: 0,
+      maxParticipants: 9999, // 마감 안 뜨게 임의 설정
+      status: "운영중" 
+    }));
 
-  const boostedPosts = [];
-  const normalPosts = [];
+    // 2. 게시글과 가게 합치기
+    const allData = [...(posts || []), ...normalizedStores];
 
-  posts.forEach((post) => {
-    if (post.boostUntil && new Date(post.boostUntil).getTime() > now) {
-      boostedPosts.push(post);
-    } else {
-      normalPosts.push(post);
-    }
-  });
+    // 3. 날짜순 정렬 (최신순)
+    const now = Date.now();
 
-  const sortedPosts = [...boostedPosts, ...normalPosts];
+    // 1) 전체 데이터를 먼저 '생성일자' 기준으로 완벽하게 역순 정렬
+    const sortedByDate = allData.sort((a, b) => {
+      const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return dateB - dateA;
+    });
 
-  const filteredPosts = sortedPosts.filter(post => {
-    if (!myCoords || !post.coords) return true;
-
-    const dist = getDistanceFromLatLonInKm(
-      myCoords.latitude, myCoords.longitude,
-      post.coords.latitude, post.coords.longitude
+    // 2) 정렬된 데이터에서 끌올(Boosted)과 일반(Normal)을 분리 (이미 최신순인 상태)
+    const boosted = sortedByDate.filter(
+      (item) => item.boostUntil && new Date(item.boostUntil).getTime() > now
     );
-    if (dist > 5) return false;
+    const normal = sortedByDate.filter(
+      (item) => !(item.boostUntil && new Date(item.boostUntil).getTime() > now)
+    );
 
-    if (selectedCategory !== "전체" && post.category !== selectedCategory) {
-      return false;
-    }
-    return true;
-  });
+    // 3) 최종 합치기: [최신순 끌올] + [최신순 일반] 순서로 배치 (새 글은 normal의 맨 위로 감)
+    const finalSorted = [...boosted, ...normal];
 
-  const renderItem = ({ item }) => {
-    const isFree = item.category === "무료나눔";
+    return finalSorted.reduce((acc, item) => {
+      // ✅ item.coords가 있어야 거리 계산 가능 (위에서 매핑해줌)
+      if (!myCoords || !item.coords) {
+         if (selectedCategory === "전체" || item.category === selectedCategory) {
+           acc.push({ ...item, distText: "" }); 
+         }
+         return acc;
+      }
 
-    const isNbbangClosed = !isFree && item.status === "마감";
-    const isFull = !isFree && (item.currentParticipants >= item.maxParticipants || isNbbangClosed);
-    const isClosed = isFree && item.status === "나눔완료";
-
-    let distText = "";
-    if (myCoords && item.coords) {
-      const d = getDistanceFromLatLonInKm(
+      const dist = getDistanceFromLatLonInKm(
         myCoords.latitude, myCoords.longitude,
         item.coords.latitude, item.coords.longitude
       );
-      distText = `  ${d.toFixed(1)}km`;
-    }
 
-    const finalPerPerson = !isFree
-      ? Number(item.pricePerPerson || 0) + Number(item.tip || 0)
-      : 0;
+      // ✅ 관리자(isAdmin)이면 거리 제한 무시, 아니면 5km 제한
+      if (isAdmin || dist <= 5) {
+        if (selectedCategory === "전체" || item.category === selectedCategory) {
+           acc.push({ ...item, distText: ` ${dist.toFixed(1)}km` });
+        }
+      }
+      return acc;
+    }, []);
+  }, [posts, stores, myCoords, selectedCategory, isAdmin]);
 
-    // ✅ [수정] 이미지 URI 안전 처리 (문자열/객체 구분)
-    const imageSource = item.images && item.images.length > 0
-      ? { uri: (typeof item.images[0] === 'string' ? item.images[0] : item.images[0]?.uri) }
-      : null;
-
+  // ✅ 렌더링 함수
+  const renderItem = useCallback(({ item }) => {
     return (
-      <TouchableOpacity 
-        style={[styles.card, isClosed && { opacity: 0.6 }]} 
-        activeOpacity={0.7}
+      <PostItem 
+        item={item} 
         onPress={() => {
-          if (item.category === "무료나눔") {
+          if (item.type === 'store') {
+             navigation.navigate(ROUTES.STORE_DETAIL || "StoreDetail", { store: item });
+          } else if (item.category === "무료나눔") {
             navigation.navigate(ROUTES.FREE_DETAIL, { post: item });
           } else {
             navigation.navigate(ROUTES.DETAIL, { post: item });
           }
-        }}
-      >
-        <View style={styles.imageBox}>
-          {imageSource ? (
-            <Image 
-              source={imageSource} 
-              style={styles.image} 
-              resizeMode="cover"
-            />
-          ) : (
-            <MaterialIcons name="receipt-long" size={40} color="grey" />
-          )}
-          {(isClosed || isFull) && (
-            <View style={styles.closedOverlay}>
-              <Text style={styles.closedOverlayText}>{isClosed ? "나눔완료" : "마감"}</Text>
-            </View>
-          )}
-        </View>
-
-        <View style={styles.infoBox}>
-          <Text style={styles.title} numberOfLines={2}>{item.title}</Text>
-          <Text style={styles.subInfo}>{item.location}  {item.category}{distText}</Text>
-
-          <View style={styles.row}>
-            <Text style={[styles.price, isClosed && { color: "grey" }]}>{isFree ? "무료" : `${finalPerPerson.toLocaleString()}원`}</Text>
-            {item.tip > 0 && !isFree && (
-              <View style={styles.badge}>
-                <Text style={styles.badgeText}>수고비 포함</Text>
-              </View>
-            )}
-          </View>
-
-          <Text
-            style={[styles.status, { color: (isFull || isClosed) ? theme.danger : theme.primary }]}
-          >
-            {isFree 
-              ? (item.status || "나눔중")
-              : (isNbbangClosed ? "참여마감" : `${item.currentParticipants}/${item.maxParticipants}명 참여중`)}
-          </Text>
-        </View>
-      </TouchableOpacity>
+        }} 
+      />
     );
-  };
+  }, [navigation]);
 
-  // ✅ 화면 새로고침 기능
   const handleRefresh = async () => {
     setRefreshing(true);
     await loadMorePosts(); 
@@ -259,14 +311,13 @@ export default function HomeScreen({ navigation }) {
 
   return (
     <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
-      {/* 헤더 */}
       <View style={styles.header}>
         <TouchableOpacity 
           onPress={handleRefreshLocation} 
           style={{ flexDirection: "row", alignItems: "center" }}
           activeOpacity={0.7}
         >
-          <Text style={styles.location}>{currentLocation} </Text>
+          <Text style={styles.location}>{currentLocation} {isAdmin ? "(관리자)" : ""}</Text>
           {isLocationLoading ? (
             <ActivityIndicator size="small" color="white" style={{ marginLeft: 4 }} />
           ) : (
@@ -285,7 +336,6 @@ export default function HomeScreen({ navigation }) {
         </View>
       </View>
 
-      {/* 카테고리 탭 */}
       <View style={styles.categoryRow}>
         {CATEGORIES.map((cat) => (
           <TouchableOpacity 
@@ -302,15 +352,13 @@ export default function HomeScreen({ navigation }) {
         ))}
       </View>
 
-      {/* 게시글 리스트 */}
       <FlatList
-        data={filteredPosts}
+        data={formattedPosts}
         renderItem={renderItem}
-        keyExtractor={(item) => item.id || Math.random().toString()} // ✅ 키 안전 처리
-        // ✅ [수정] 하단 여백 확보 (FAB 가림 방지)
+        keyExtractor={(item, index) => String(item.id ?? `${item.type ?? "post"}_${index}`)} 
         contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
         ItemSeparatorComponent={() => (
-          <View style={{ height: 1, backgroundColor: "#333", marginVertical: 16 }} />
+          <View style={{ height: 1, backgroundColor: "#333", marginVertical: 12 }} />
         )}
         ListEmptyComponent={
           <View style={{ alignItems: "center", marginTop: 50 }}>
@@ -323,15 +371,18 @@ export default function HomeScreen({ navigation }) {
           }
         }}
         onEndReachedThreshold={0.5}
-        initialNumToRender={6}
-        windowSize={5}
-        removeClippedSubviews={true}
+        initialNumToRender={8}
+        maxToRenderPerBatch={6}
+        updateCellsBatchingPeriod={50}
+        windowSize={7} 
+        removeClippedSubviews={true} 
+        scrollEventThrottle={16}
+        showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
         }
       />
 
-      {/* 글쓰기 버튼 */}
       <TouchableOpacity 
         style={[styles.fab, { bottom: 20 + insets.bottom }]} 
         onPress={() => setWriteModalVisible(true)}
@@ -339,7 +390,6 @@ export default function HomeScreen({ navigation }) {
         <MaterialIcons name="post-add" size={30} color="black" />
       </TouchableOpacity>
 
-      {/* 글쓰기 선택 모달 */}
       <CustomModal
         visible={writeModalVisible}
         title="글쓰기 선택"
@@ -389,7 +439,6 @@ export default function HomeScreen({ navigation }) {
         </View>
       </CustomModal>
 
-      {/* 핫플레이스 권한/결제 모달 */}
       <CustomModal
         visible={hotplaceModalVisible}
         title={
@@ -497,12 +546,11 @@ const styles = StyleSheet.create({
   categoryText: { color: "#888", fontSize: 14, fontWeight: "600" },
   categoryTextActive: { color: "black", fontWeight: "bold" },
   
-  // ✅ [수정] 카드 스타일 보완 (배경색, 둥글기 등)
   card: { 
     flexDirection: "row", 
-    backgroundColor: theme.cardBg, // 배경색 추가
-    borderRadius: 16, // 둥글기 추가
-    padding: 12, // 내부 여백 추가
+    backgroundColor: theme.cardBg, 
+    borderRadius: 16, 
+    padding: 12, 
   },
   
   imageBox: { width: 100, height: 100, backgroundColor: "#222", borderRadius: 12, alignItems: "center", justifyContent: "center", overflow: "hidden" },

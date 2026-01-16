@@ -84,6 +84,9 @@ export default function ProfileScreen() {
   // ✅ [추가] 갤러리 모달 상태
   const [galleryVisible, setGalleryVisible] = useState(false);
 
+  // ✅ [신규] 정책 메뉴 모달 상태
+  const [policyModalVisible, setPolicyModalVisible] = useState(false);
+
   // ✅ [수정] 닉네임 모달만 키보드 올라올 때 "모달 자체"가 위로 이동하도록 (CustomModal 중앙 고정 영향 제거)
   const nicknameModalTranslateY = useRef(new Animated.Value(0)).current;
 
@@ -604,17 +607,20 @@ export default function ProfileScreen() {
           <Text style={styles.sectionTitle}>활동</Text>
 
           <MenuLink
+            IconComponent={Ionicons}
             icon="notifications-outline"
             label="알림 센터"
             onPress={() => navigation.navigate(ROUTES.NOTIFICATION)}
           />
 
           <MenuLink
+            IconComponent={Ionicons}
             icon="chatbubble-outline"
             label="채팅 목록"
             onPress={() => navigation.navigate(ROUTES.CHAT_ROOMS)}
           />
           <MenuLink
+            IconComponent={Ionicons}
             icon="receipt-outline"
             label="내가 쓴 글 보기"
             onPress={handleMyPosts}
@@ -634,31 +640,44 @@ export default function ProfileScreen() {
 
           <Text style={[styles.sectionTitle, { marginTop: 24 }]}>설정</Text>
           <MenuLink
+            IconComponent={Ionicons}
             icon="settings-outline"
             label="알림 설정"
             onPress={handleNotificationSettings}
           />
-
-          {/* ✅ 차단 사용자 관리 버튼 */}
           <MenuLink
+            IconComponent={Ionicons}
             icon="person-remove-outline"
             label="차단 사용자 관리"
             onPress={handleManageBlockedUsers}
           />
-
           <MenuLink
+            IconComponent={Ionicons}
             icon="card-outline"
             label="구독 관리"
             onPress={handleManageSubscription}
           />
-
           <MenuLink
+            icon="headset"
+            label="고객센터"
+            onPress={() => navigation.navigate(ROUTES.CUSTOMER_CENTER)}
+          />
+          <MenuLink
+            IconComponent={Ionicons}
             icon="log-out-outline"
             label="로그아웃"
             color="white"
             onPress={handleLogoutPress}
           />
         </View>
+
+        {/* ✅ [신규] 서비스 이용약관 및 정책 버튼 */}
+        <TouchableOpacity 
+          style={styles.policyBtn} 
+          onPress={() => setPolicyModalVisible(true)}
+        >
+          <Text style={styles.policyBtnText}>서비스 이용약관 및 정책</Text>
+        </TouchableOpacity>
 
         <Text style={styles.versionText}>v{appVersion}</Text>
 
@@ -692,6 +711,56 @@ export default function ProfileScreen() {
         maxImages={1} // 프로필 사진은 1장만
         currentCount={0}
       />
+
+      {/* ✅ [신규] 정책 메뉴 선택 모달 */}
+      <CustomModal
+        visible={policyModalVisible}
+        title="서비스 이용약관 및 정책"
+        message="확인하고 싶은 항목을 선택해주세요."
+        onConfirm={() => {}} 
+      >
+        <View style={{ gap: 12, width: '100%' }}>
+          <TouchableOpacity 
+            style={styles.modalMenuBtn} 
+            onPress={() => {
+              setPolicyModalVisible(false);
+              navigation.navigate(ROUTES.TERMS_OF_SERVICE);
+            }}
+          >
+            <Text style={styles.modalMenuText}>서비스 이용약관</Text>
+            <MaterialIcons name="chevron-right" size={20} color="#666" />
+          </TouchableOpacity>
+
+          <TouchableOpacity 
+            style={styles.modalMenuBtn} 
+            onPress={() => {
+              setPolicyModalVisible(false);
+              navigation.navigate(ROUTES.PRIVACY_POLICY);
+            }}
+          >
+            <Text style={styles.modalMenuText}>개인정보 처리방침</Text>
+            <MaterialIcons name="chevron-right" size={20} color="#666" />
+          </TouchableOpacity>
+
+          <TouchableOpacity 
+            style={styles.modalMenuBtn} 
+            onPress={() => {
+              setPolicyModalVisible(false);
+              navigation.navigate(ROUTES.OPERATION_POLICY);
+            }}
+          >
+            <Text style={styles.modalMenuText}>운영정책</Text>
+            <MaterialIcons name="chevron-right" size={20} color="#666" />
+          </TouchableOpacity>
+
+          <TouchableOpacity 
+            style={{ marginTop: 10, alignItems: "center", padding: 10 }}
+            onPress={() => setPolicyModalVisible(false)}
+          >
+            <Text style={{ color: "#888", fontWeight: "bold" }}>닫기</Text>
+          </TouchableOpacity>
+        </View>
+      </CustomModal>
 
       {/* ✅ [수정] 닉네임 수정 모달만: 키보드 올라올 때 "모달 자체"를 위로 이동 */}
       <Modal transparent={true} visible={nicknameEditModalVisible} animationType="fade">
@@ -793,11 +862,11 @@ export default function ProfileScreen() {
 }
 
 // 메뉴 아이템 컴포넌트
-function MenuLink({ icon, label, onPress, color = "#CCC" }) {
+function MenuLink({ IconComponent = MaterialIcons, icon, label, onPress, color = "#CCC" }) {
   return (
     <TouchableOpacity style={styles.menuItem} onPress={onPress}>
       <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-        <Ionicons name={icon} size={20} color={color} style={{ marginRight: 12 }} />
+        <IconComponent name={icon} size={20} color={color} style={{ marginRight: 12 }} />
         <Text style={{ color: color, fontSize: 15 }}>{label}</Text>
       </View>
       <MaterialIcons name="chevron-right" size={20} color="#555" />
@@ -991,8 +1060,20 @@ const styles = StyleSheet.create({
     borderBottomColor: '#222',
   },
 
+  // ✅ [신규] 정책 버튼 스타일
+  policyBtn: {
+    alignSelf: 'center',
+    padding: 10,
+    marginBottom: 10,
+  },
+  policyBtnText: {
+    color: '#666',
+    fontSize: 12,
+    textDecorationLine: 'underline', // 밑줄 추가
+  },
+
   versionText: {
-    color: '#333',
+    color: '#444',
     textAlign: 'center',
     fontSize: 11,
     marginBottom: 20,
@@ -1067,6 +1148,22 @@ const styles = StyleSheet.create({
     color: theme.primary,
     marginBottom: 15,
     textAlign: "center",
+  },
+
+  // ✅ [신규] 정책 모달 메뉴 버튼 스타일
+  modalMenuBtn: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    backgroundColor: "#222",
+    padding: 14,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#333"
+  },
+  modalMenuText: {
+    color: "white",
+    fontSize: 14,
   },
 
   // 차단 목록 모달 스타일

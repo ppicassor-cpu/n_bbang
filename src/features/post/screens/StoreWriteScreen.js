@@ -41,6 +41,8 @@ export default function StoreWriteScreen({ route, navigation }) {
   const [name, setName] = useState("");
   const [desc, setDesc] = useState("");
   const [phone, setPhone] = useState("");
+  // ✅ [추가] 홈페이지 주소 상태
+  const [homepage, setHomepage] = useState("");
   const [address, setAddress] = useState("");
   const [selectedCategory, setSelectedCategory] = useState(CATEGORIES[0]);
 
@@ -186,6 +188,8 @@ export default function StoreWriteScreen({ route, navigation }) {
         description: desc.trim(),
         category: selectedCategory,
         phone: phone.trim(),
+        // ✅ [추가] 홈페이지 주소 저장
+        homepage: homepage.trim(),
         address: address.trim(),
 
         location: {
@@ -200,7 +204,7 @@ export default function StoreWriteScreen({ route, navigation }) {
         isPremium: true,
         paymentType: paymentType,
 
-        createdAt: serverTimestamp(),
+        createdAt: new Date().toISOString(),
         expiresAt: expirationDate.toISOString(),
       };
 
@@ -221,38 +225,12 @@ export default function StoreWriteScreen({ route, navigation }) {
     }
   };
 
-  const paymentBadgeText = paymentType === "single" ? "유료(추가등록)" : "멤버십";
-
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.headerBtn} activeOpacity={0.7}>
-          <MaterialIcons name="close" size={24} color="white" />
-        </TouchableOpacity>
-
-        <View style={styles.headerCenter}>
-          <Text style={styles.headerTitle}>핫플레이스 등록</Text>
-          <View style={styles.paymentBadge}>
-            <Text style={styles.paymentBadgeText}>{paymentBadgeText}</Text>
-          </View>
-        </View>
-
-        <TouchableOpacity
-          onPress={handleSubmit}
-          disabled={loading || !canSubmit}
-          style={styles.headerBtn}
-          activeOpacity={0.7}
-        >
-          {loading ? (
-            <ActivityIndicator color={theme.primary} />
-          ) : (
-            <Text style={[styles.doneText, (!canSubmit || loading) && { opacity: 0.5 }]}>완료</Text>
-          )}
-        </TouchableOpacity>
-      </View>
+      {/* 상단 헤더 삭제됨 */}
 
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
-        <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: 120 }} keyboardShouldPersistTaps="handled">
+        <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
           <Text style={styles.sectionLabel}>매장 사진 (최대 5장)</Text>
 
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 20 }}>
@@ -320,6 +298,18 @@ export default function StoreWriteScreen({ route, navigation }) {
             onChangeText={setPhone}
           />
 
+          {/* ✅ [추가] 홈페이지 입력칸 */}
+          <Text style={styles.label}>홈페이지 / SNS / 배달앱 주소 (선택)</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="https://instagram.com/..."
+            placeholderTextColor="grey"
+            autoCapitalize="none"
+            keyboardType="url"
+            value={homepage}
+            onChangeText={setHomepage}
+          />
+
           <Text style={styles.label}>위치 설정</Text>
           <View style={styles.mapContainer}>
             <MapView
@@ -350,6 +340,22 @@ export default function StoreWriteScreen({ route, navigation }) {
         </ScrollView>
       </KeyboardAvoidingView>
 
+      {/* 하단 완료 버튼 영역 */}
+      <View style={styles.bottomArea}>
+        <TouchableOpacity
+          style={[styles.submitBtn, (!canSubmit || loading) && { opacity: 0.5 }]}
+          onPress={handleSubmit}
+          disabled={loading || !canSubmit}
+          activeOpacity={0.8}
+        >
+          {loading ? (
+            <ActivityIndicator color="black" />
+          ) : (
+            <Text style={styles.submitBtnText}>등록 완료</Text>
+          )}
+        </TouchableOpacity>
+      </View>
+
       <CustomImagePickerModal
         visible={galleryVisible}
         onClose={() => setGalleryVisible(false)}
@@ -370,33 +376,9 @@ export default function StoreWriteScreen({ route, navigation }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.background },
 
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 8,
-    paddingBottom: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: "#333",
-    backgroundColor: theme.background,
-  },
-  headerBtn: { padding: 10, width: 80, alignItems: "center", justifyContent: "center" },
-  headerCenter: { flex: 1, alignItems: "center", justifyContent: "center" },
-  headerTitle: { color: "white", fontSize: 18, fontWeight: "bold" },
-  doneText: { color: theme.primary, fontWeight: "bold", fontSize: 16 },
+  // 기존 헤더 스타일 삭제됨
 
-  paymentBadge: {
-    marginTop: 6,
-    backgroundColor: "rgba(204,255,0,0.12)",
-    borderWidth: 1,
-    borderColor: "rgba(204,255,0,0.28)",
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 999,
-  },
-  paymentBadgeText: { color: theme.primary, fontSize: 12, fontWeight: "bold" },
-
-  sectionLabel: { color: "white", fontSize: 16, fontWeight: "bold", marginBottom: 10 },
+  sectionLabel: { color: "white", fontSize: 16, fontWeight: "bold", marginBottom: 10, marginTop: 10 },
   label: { color: "#AAA", fontSize: 14, marginBottom: 6, marginTop: 16 },
 
   input: {
@@ -475,4 +457,24 @@ const styles = StyleSheet.create({
   mapOverlayText: { color: "white", fontSize: 11 },
 
   infoText: { color: "#666", fontSize: 12, marginTop: 26, textAlign: "center" },
+
+  // 하단 버튼 스타일 추가
+  bottomArea: {
+    padding: 20,
+    backgroundColor: theme.background,
+    borderTopWidth: 1,
+    borderTopColor: "#333",
+  },
+  submitBtn: {
+    backgroundColor: theme.primary,
+    height: 56,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  submitBtnText: {
+    color: "black",
+    fontSize: 16,
+    fontWeight: "bold",
+  },
 });
