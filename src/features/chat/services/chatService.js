@@ -20,6 +20,8 @@ import {
   writeBatch,
   deleteDoc,
   limit,
+  runTransaction,
+  increment,
 } from "firebase/firestore";
 
 const safeToDate = (v) => {
@@ -54,26 +56,55 @@ export const ensureRoom = async (roomId, roomName, type, ownerId) => {
   const roomRef = doc(db, "chatRooms", roomId);
   const roomSnap = await getDoc(roomRef);
 
+  const isPostRoom = typeof roomId === "string" && roomId.startsWith("post_");
+
   if (!roomSnap.exists()) {
-    const participantList = [userId];
-    if (ownerId && ownerId !== userId) {
-      participantList.push(ownerId);
+    const resolvedOwnerId = ownerId || userId;
+
+    // ✅ [수정] post_ 방은 "방 생성"과 "참여(=participants 추가)"를 분리
+    // - 방 생성 시점에는 방장만 participants에 포함
+    // - 참여자(게스트) 추가는 "참여가 DB에 기록되는 순간" 기준 로직에서 처리
+    const participantSet = isPostRoom ? new Set([resolvedOwnerId]) : new Set([userId]);
+
+    // ✅ [수정] post_ 방은 방장(ownerId)만 기본 포함, 일반 방은 기존대로 방장 포함
+    if (!isPostRoom && ownerId) {
+      participantSet.add(ownerId);
+    }
+    if (isPostRoom && resolvedOwnerId === userId) {
+      participantSet.add(userId);
+    }
+
+    const participantList = Array.from(participantSet);
+
+    // joinedAt 필드도 방장 몫까지 미리 생성
+    const joinedAtData = {
+      [`joinedAt_${resolvedOwnerId}`]: serverTimestamp(),
+    };
+    if (!isPostRoom) {
+      joinedAtData[`joinedAt_${userId}`] = serverTimestamp();
+      if (ownerId && ownerId !== userId) {
+        joinedAtData[`joinedAt_${ownerId}`] = serverTimestamp();
+      }
+    } else {
+      if (resolvedOwnerId === userId) {
+        joinedAtData[`joinedAt_${userId}`] = serverTimestamp();
+      }
     }
 
     await setDoc(roomRef, {
       id: roomId,
       title: roomName,
       type: type || "group",
-      ownerId: ownerId || userId,
+      ownerId: resolvedOwnerId,
       isClosed: false,
       participants: participantList,
-      [`joinedAt_${userId}`]: serverTimestamp(),
-      ...(ownerId && ownerId !== userId ? { [`joinedAt_${ownerId}`]: serverTimestamp() } : {}),
+      ...joinedAtData,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
       lastMessage: "채팅방이 개설되었습니다.",
     });
   } else {
+    // 이미 방이 존재할 때 (업데이트 로직)
     const data = roomSnap.data() || {};
     const currentParticipants = Array.isArray(data.participants) ? data.participants : [];
     const updateData = {};
@@ -82,18 +113,35 @@ export const ensureRoom = async (roomId, roomName, type, ownerId) => {
     updateData.updatedAt = serverTimestamp();
 
     if (type && data.type !== type) updateData.type = type;
-    if (!data[`joinedAt_${userId}`]) updateData[`joinedAt_${userId}`] = serverTimestamp();
 
-    if (!currentParticipants.includes(userId)) {
-      participantsToAdd.push(userId);
-      updateData[`joinedAt_${userId}`] = serverTimestamp();
+    // ✅ [수정] post_ 방은 ensureRoom에서 게스트를 participants에 자동 추가하지 않음
+    if (!isPostRoom) {
+      // 내(게스트)가 없으면 추가
+      if (!data[`joinedAt_${userId}`]) updateData[`joinedAt_${userId}`] = serverTimestamp();
+      if (!currentParticipants.includes(userId)) {
+        participantsToAdd.push(userId);
+      }
     }
 
+    // 방장 정보 업데이트 (없으면 채워넣기)
     if (ownerId && !data.ownerId) updateData.ownerId = ownerId;
 
+    // ✅ [수정] 방이 이미 있어도, 방장이 리스트에 없으면 강제로 다시 추가 (오류 복구)
     if (ownerId && ownerId !== userId) {
-      if (!currentParticipants.includes(ownerId)) participantsToAdd.push(ownerId);
-      if (!data[`joinedAt_${ownerId}`]) updateData[`joinedAt_${ownerId}`] = serverTimestamp();
+      if (!currentParticipants.includes(ownerId)) {
+        participantsToAdd.push(ownerId);
+      }
+      if (!data[`joinedAt_${ownerId}`]) {
+        updateData[`joinedAt_${ownerId}`] = serverTimestamp();
+      }
+    }
+
+    // ✅ [수정] post_ 방은 방장 joinedAt 누락만 보정
+    if (isPostRoom) {
+      const resolvedOwnerId = ownerId || data.ownerId;
+      if (resolvedOwnerId && !data[`joinedAt_${resolvedOwnerId}`]) {
+        updateData[`joinedAt_${resolvedOwnerId}`] = serverTimestamp();
+      }
     }
 
     if (participantsToAdd.length > 0) {
@@ -106,11 +154,14 @@ export const ensureRoom = async (roomId, roomName, type, ownerId) => {
   }
 };
 
-// 2. 메시지 전송
-export const sendMessage = async (roomId, text) => {
+// 2. 메시지 전송 (✅ 수정됨: imageUrl 파라미터 추가 및 image 필드 저장)
+export const sendMessage = async (roomId, text, imageUrl = null) => {
   if (!auth.currentUser) return;
   if (!isValidRoomId(roomId)) return;
-  if (!text || !String(text).trim()) return;
+
+  // 텍스트가 있거나 이미지가 있어야 전송 가능
+  const hasText = text && String(text).trim().length > 0;
+  if (!hasText && !imageUrl) return;
 
   const roomRef = doc(db, "chatRooms", roomId);
   const roomSnap = await getDoc(roomRef);
@@ -120,10 +171,12 @@ export const sendMessage = async (roomId, text) => {
 
   const user = auth.currentUser;
   const fallbackNickname = user.displayName || (user.email ? user.email.split("@")[0] : "사용자");
-  const safeText = String(text);
+  const safeText = hasText ? String(text) : "";
 
+  // ✅ image 필드 추가
   await addDoc(collection(db, "chatRooms", roomId, "messages"), {
     text: safeText,
+    image: imageUrl || null,
     senderId: user.uid,
     senderEmail: user.email || null,
     senderNickname: fallbackNickname,
@@ -131,8 +184,13 @@ export const sendMessage = async (roomId, text) => {
     readBy: [user.uid],
   });
 
+  // ✅ 미리보기 메시지 처리 (이미지일 경우)
+  const lastMessageText = imageUrl
+    ? (safeText ? `📷 ${safeText}` : "📷 사진을 보냈습니다.")
+    : safeText;
+
   await updateDoc(roomRef, {
-    lastMessage: safeText,
+    lastMessage: lastMessageText,
     updatedAt: serverTimestamp(),
   });
 
@@ -153,7 +211,7 @@ export const sendMessage = async (roomId, text) => {
           roomId,
           roomName: roomTitle,
           title: roomTitle,
-          body: `${senderNickname}: ${safeText}`,
+          body: `${senderNickname}: ${lastMessageText}`, // ✅ 알림 본문도 이미지 표시 적용
           isRead: false,
           // ✅ (문제1) 알림 createdAt 누락 대비: 항상 createdAt 세팅(원래도 있었지만 "누락 대비" 명시)
           createdAt: serverTimestamp(),
@@ -291,19 +349,66 @@ export const leaveRoom = async (roomId) => {
   const nickname = user.displayName || (user.email ? user.email.split("@")[0] : "사용자");
   const roomRef = doc(db, "chatRooms", roomId);
 
-  await addDoc(collection(db, "chatRooms", roomId, "messages"), {
-    text: `${nickname}님이 채팅방을 떠났습니다.`,
-    senderId: "system",
-    senderNickname: "시스템",
-    createdAt: serverTimestamp(),
-    readBy: [user.uid],
+  const isPostRoom = typeof roomId === "string" && roomId.startsWith("post_");
+  const postId = isPostRoom ? roomId.replace(/^post_/, "") : null;
+  const postRef = isPostRoom && postId ? doc(db, "posts", postId) : null;
+
+  let ownerIdFromRoom = null;
+  let wasParticipant = false;
+
+  await runTransaction(db, async (tx) => {
+    const roomSnap = await tx.get(roomRef);
+    if (!roomSnap.exists()) return;
+
+    const roomData = roomSnap.data() || {};
+    const participants = Array.isArray(roomData.participants) ? roomData.participants : [];
+    ownerIdFromRoom = roomData.ownerId;
+
+    const systemText = `${nickname}님이 채팅방을 떠났습니다.`;
+
+    // ✅ 트랜잭션 안에서 메시지/참여자만 처리 (원자성 보장)
+    const msgRef = doc(collection(db, "chatRooms", roomId, "messages"));
+    tx.set(msgRef, {
+      text: systemText,
+      senderId: "system",
+      senderNickname: "시스템",
+      createdAt: serverTimestamp(),
+      readBy: [user.uid],
+    });
+
+    // 이미 참가자가 아니면 participants 변경 없이 lastMessage만 갱신
+    if (!participants.includes(user.uid)) {
+      tx.update(roomRef, {
+        lastMessage: `${nickname}님이 퇴장하셨습니다.`,
+        updatedAt: serverTimestamp(),
+      });
+      wasParticipant = false;
+      return;
+    }
+
+    wasParticipant = true;
+
+    tx.update(roomRef, {
+      participants: arrayRemove(user.uid),
+      lastMessage: `${nickname}님이 퇴장하셨습니다.`,
+      updatedAt: serverTimestamp(),
+    });
   });
 
-  await updateDoc(roomRef, {
-    participants: arrayRemove(user.uid),
-    lastMessage: `${nickname}님이 퇴장하셨습니다.`,
-    updatedAt: serverTimestamp(),
-  });
+  // post_ 방: 게스트만 카운트 -1 (방장은 leaveRoomAsOwner 경로)
+  // ✅ 카운트는 트랜잭션 밖에서 시도 (실패해도 나가기는 유지)
+  if (postRef && ownerIdFromRoom && user.uid !== ownerIdFromRoom && wasParticipant) {
+    try {
+      const postSnap = await getDoc(postRef);
+      if (postSnap.exists()) {
+        const postData = postSnap.data() || {};
+        const cur = Number(postData.currentParticipants || 0);
+        if (cur > 0) {
+          await updateDoc(postRef, { currentParticipants: increment(-1) });
+        }
+      }
+    } catch (e) {}
+  }
 };
 
 // 7. 방장 나가기 (종료 처리)
@@ -325,20 +430,26 @@ export const leaveRoomAsOwner = async (roomId) => {
 
   const systemText = "방장이 채팅방을 떠났습니다. 채팅이 종료되었습니다.";
 
-  await addDoc(collection(db, "chatRooms", roomId, "messages"), {
-    text: systemText,
-    senderId: "system",
-    senderNickname: "시스템",
-    createdAt: serverTimestamp(),
-    readBy: [user.uid],
-  });
+  await runTransaction(db, async (tx) => {
+    const roomSnap = await tx.get(roomRef);
+    if (!roomSnap.exists()) return;
 
-  await updateDoc(roomRef, {
-    isClosed: true,
-    closedBy: user.uid,
-    closedAt: serverTimestamp(),
-    participants: arrayRemove(user.uid),
-    lastMessage: systemText,
-    updatedAt: serverTimestamp(),
+    const msgRef = doc(collection(db, "chatRooms", roomId, "messages"));
+    tx.set(msgRef, {
+      text: systemText,
+      senderId: "system",
+      senderNickname: "시스템",
+      createdAt: serverTimestamp(),
+      readBy: [user.uid],
+    });
+
+    tx.update(roomRef, {
+      isClosed: true,
+      closedBy: user.uid,
+      closedAt: serverTimestamp(),
+      participants: arrayRemove(user.uid),
+      lastMessage: systemText,
+      updatedAt: serverTimestamp(),
+    });
   });
 };

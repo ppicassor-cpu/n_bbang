@@ -1,16 +1,27 @@
-﻿// FILE: src/features/feed/screens/HomeScreen.js
+﻿// ================================================================================
+//  FILE: src/features/feed/screens/HomeScreen.js
+// ================================================================================
 
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 // ✅ [필수] 화면 표시용 컴포넌트들
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, RefreshControl } from "react-native";
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, RefreshControl, TextInput, Alert, Linking } from "react-native";
 import { Image } from "expo-image"; 
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { MaterialIcons, Ionicons } from "@expo/vector-icons"; 
+// ✅ [추가] 화면 포커스 시 갱신을 위한 Hook
+import { useFocusEffect } from "@react-navigation/native";
+
 import { theme } from "../../../theme";
 import { ROUTES } from "../../../app/navigation/routes";
 import { useAppContext } from "../../../app/providers/AppContext";
 import CustomModal from "../../../components/CustomModal";
 import { checkAndGenerateSamples } from "../../../utils/autoSampleGenerator";
+// ✅ [추가] 비속어 필터링 함수 임포트
+import { hasBadWord } from "../../../utils/badWordFilter";
+
+// ✅ [추가] 닉네임 로직을 위한 Firebase 임포트
+import { doc, getDoc, updateDoc, collection, query, where, getDocs } from "firebase/firestore";
+import { db } from "../../../firebaseConfig";
 
 const CATEGORIES = ["전체", "마트/식품", "생활용품", "핫플레이스", "무료나눔"];
 
@@ -60,11 +71,15 @@ const PostItem = React.memo(({ item, onPress }) => {
 
       <View style={styles.infoBox}>
         <Text style={styles.title} numberOfLines={2}>{item.title}</Text>
-        <Text style={styles.subInfo}>{item.location}  {item.category}{item.distText}</Text>
+        
+        {/* ✅ [수정] 스토어일 경우 실제 카테고리 표시 및 거리 삭제 */}
+        <Text style={styles.subInfo}>
+          {item.location}{isStore ? "" : `  ${item.category}${item.distText}`}
+        </Text>
 
         <View style={styles.row}>
-          <Text style={[styles.price, isClosed && { color: "grey" }]}>
-            {isStore ? "핫플레이스" : (isFree ? "무료" : `${finalPerPerson.toLocaleString()}원`)}
+          <Text style={[styles.price, isClosed && { color: "grey" }]}>            
+            {isStore ? item.realCategory : (isFree ? "무료" : `${finalPerPerson.toLocaleString()}원`)}
           </Text>
           {item.tip > 0 && !isFree && !isStore && (
             <View style={styles.badge}>
@@ -92,14 +107,19 @@ const PostItem = React.memo(({ item, onPress }) => {
 export default function HomeScreen({ navigation }) {
   const { 
     user, 
+    isPremium, 
     posts, 
     stores, // ✅ stores 데이터 가져오기
     isAdmin, 
     currentLocation, 
     myCoords, 
     getDistanceFromLatLonInKm, 
-    loadMorePosts,
+    loadMorePosts, 
+    loadMoreStores,
+    refreshPostsAndStores,
     verifyLocation,
+    isVerified,
+    isBooting,
     checkHotplaceEligibility,
     incrementHotplaceCount,
     purchaseHotplaceExtra
@@ -116,6 +136,22 @@ export default function HomeScreen({ navigation }) {
   const [hotplaceModalType, setHotplaceModalType] = useState(null);
   const [hotplaceModalLoading, setHotplaceModalLoading] = useState(false);
 
+  // ✅ [추가] 닉네임 설정 관련 상태
+  const [nicknameModalVisible, setNicknameModalVisible] = useState(false);
+  const [newNickname, setNewNickname] = useState("");
+
+  // ✅ [추가] 커스텀 알림 모달 상태 (Alert 대체용)
+  const [alertModalVisible, setAlertModalVisible] = useState(false);
+  const [alertModalConfig, setAlertModalConfig] = useState({ title: "", message: "" });
+
+  // ✅ [추가] 위치/인증 게이트 무한 방지용 타임아웃 상태
+  const [gateTimeoutPassed, setGateTimeoutPassed] = useState(false);
+
+  const showCustomAlert = (title, message) => {
+    setAlertModalConfig({ title, message });
+    setAlertModalVisible(true);
+  };
+
   const MEMBERSHIP_ROUTE =
     ROUTES?.MEMBERSHIP ||
     ROUTES?.PREMIUM ||
@@ -126,6 +162,125 @@ export default function HomeScreen({ navigation }) {
     ROUTES?.STORE_WRITE ||
     ROUTES?.HOTPLACE_WRITE ||
     ROUTES?.STORE_WRITE_SCREEN;
+
+  // ✅ [수정] (3) 게이트 visible 조건 최소화:
+  // - isBooting이 boolean이면 그대로 쓰지 않고, "위치 인증"과 "좌표 존재"만 최소 조건으로 사용
+  // - storesLoaded 때문에 영구 봉쇄되는 케이스 차단
+  const locationGateVisible = !(isVerified && myCoords && myCoords.latitude && myCoords.longitude);
+
+  const isPermissionIssue = (currentLocation === "위치 권한 필요" || currentLocation === "위치 확인 불가");
+  const gateTitle = isPermissionIssue ? "위치 권한이 필요합니다" : "데이터를 불러오고 있습니다";
+
+  // ✅ [수정] 권한 거부/위치 실패/무한 대기 방지: 일정 시간 지나면 '로딩'만 해제하고 안내 모드로 전환
+  useEffect(() => {
+    if (!locationGateVisible) {
+      setGateTimeoutPassed(false);
+      return;
+    }
+
+    // 권한/위치 실패 문구가 뜬 경우는 즉시 안내 모드로 전환
+    if (isPermissionIssue) {
+      setGateTimeoutPassed(true);
+      return;
+    }
+
+    const t = setTimeout(() => {
+      setGateTimeoutPassed(true);
+    }, 9000);
+
+    return () => clearTimeout(t);
+  }, [locationGateVisible, isPermissionIssue]);
+
+  const handleGateConfirm = async () => {
+    if (isPermissionIssue) {
+      Linking.openSettings();
+      return;
+    }
+
+    // ✅ [수정] (2) 게이트 확인 버튼에서 refreshPostsAndStores로 loaded 리셋하지 않음
+    // - 여기서는 위치 재검증만 수행 (필요 시 좌표 갱신)
+    setGateTimeoutPassed(false);
+
+    if (typeof verifyLocation === "function") {
+      try {
+        await verifyLocation();
+      } catch (e) {}
+    }
+  };
+
+  // ✅ [수정] (1) useFocusEffect에서 refreshPostsAndStores 호출 제거 (loaded 리셋 방지)
+  // 상세 화면에서 참여 후 돌아왔을 때 숫자 업데이트는 AppContext의 실시간 스냅샷/상세화면 처리로 해결해야 함
+  useFocusEffect(
+    useCallback(() => {
+      return () => {};
+    }, [])
+  );
+
+  // ✅ [추가] 닉네임 미설정 여부 확인 (앱 실행 시) - displayName 필드 확인
+  useEffect(() => {
+    const checkNickname = async () => {
+      if (!user?.uid) return;
+      try {
+        const userRef = doc(db, "users", user.uid);
+        const userSnap = await getDoc(userRef);
+        if (userSnap.exists()) {
+          const userData = userSnap.data();
+          // ✅ [수정] nickname -> displayName (필드명 변경)
+          if (!userData.displayName || userData.displayName.trim() === "") {
+            setNicknameModalVisible(true);
+          }
+        }
+      } catch (e) {
+        console.log("닉네임 확인 실패:", e);
+      }
+    };
+    checkNickname();
+  }, [user]);
+
+  // ✅ [추가] 닉네임 저장 및 유효성 검사 로직 - Alert 대신 CustomModal 사용
+  const handleSaveNickname = async () => {
+    const trimmed = newNickname.trim();
+    if (!trimmed) {
+      showCustomAlert("알림", "닉네임을 입력해주세요.");
+      return;
+    }
+
+    // ✅ [추가] 비속어 및 금칙어 체크
+    if (hasBadWord(trimmed)) {
+      showCustomAlert("경고", "부적절한 단어(욕설, 관리자 사칭 등)가 포함되어 있습니다.\n바른 말을 사용해주세요.");
+      return;
+    }
+
+    // 특수문자/공백 체크 (한글, 영문, 숫자만 허용)
+    const specialCharPattern = /[^a-zA-Z0-9가-힣]/;
+    if (specialCharPattern.test(trimmed)) {
+      showCustomAlert("알림", "특수문자나 공백은 사용할 수 없습니다.\n(한글, 영문, 숫자만 가능)");
+      return;
+    }
+
+    try {
+      // ✅ [수정] 중복 검사: nickname -> displayName
+      const q = query(collection(db, "users"), where("displayName", "==", trimmed));
+      const querySnapshot = await getDocs(q);
+
+      if (!querySnapshot.empty) {
+        showCustomAlert("알림", "이미 사용 중인 닉네임입니다.\n다른 닉네임을 입력해주세요.");
+        return;
+      }
+
+      // ✅ [수정] 저장: nickname -> displayName
+      await updateDoc(doc(db, "users", user.uid), {
+        displayName: trimmed
+      });
+
+      setNicknameModalVisible(false);
+      showCustomAlert("환영합니다!", "닉네임이 설정되었습니다.");
+
+    } catch (e) {
+      console.error("닉네임 저장 오류:", e);
+      showCustomAlert("오류", "닉네임 저장 중 문제가 발생했습니다.");
+    }
+  };
 
   const openHotplaceModal = (type) => {
     setHotplaceModalType(type);
@@ -146,7 +301,7 @@ export default function HomeScreen({ navigation }) {
   const handleHotplacePress = async () => {
     setWriteModalVisible(false);
 
-    if (user && user.isPremium) {
+    if (isPremium) {
        goHotplaceWrite({ paymentType: "membership", purchaseInfo: null });
        return;
     }
@@ -226,7 +381,8 @@ export default function HomeScreen({ navigation }) {
       ...s,
       type: 'store',
       title: s.name, 
-      category: s.category,
+      realCategory: s.category, // ✅ [추가] 실제 업종(예: 맛집) 보존
+      category: "핫플레이스", // 탭 필터링용
       // ✅ [중요] 좌표 객체 충돌 방지: 화면 표시용 주소는 'address' 사용
       location: s.address || "위치 정보 없음", 
       // ✅ [중요] 거리 계산용 좌표: 원래 'location'에 있던 좌표를 'coords'로 복사
@@ -276,14 +432,14 @@ export default function HomeScreen({ navigation }) {
       );
 
       // ✅ 관리자(isAdmin)이면 거리 제한 무시, 아니면 5km 제한
-      if (isAdmin || dist <= 5) {
+      if (isAdmin || item.ownerIsAdmin || dist <= 5) {
         if (selectedCategory === "전체" || item.category === selectedCategory) {
            acc.push({ ...item, distText: ` ${dist.toFixed(1)}km` });
         }
       }
       return acc;
     }, []);
-  }, [posts, stores, myCoords, selectedCategory, isAdmin]);
+  }, [posts, stores, myCoords, selectedCategory, isAdmin, getDistanceFromLatLonInKm]);
 
   // ✅ 렌더링 함수
   const renderItem = useCallback(({ item }) => {
@@ -305,9 +461,18 @@ export default function HomeScreen({ navigation }) {
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    await loadMorePosts(); 
+    if (typeof refreshPostsAndStores === "function") {
+      await refreshPostsAndStores();
+    }
     setRefreshing(false);
   };
+
+  const gateMessage = isPermissionIssue
+    ? "위치 권한을 허용해야 홈을 볼 수 있습니다.\n설정에서 위치 권한을 허용해주세요."
+    : (gateTimeoutPassed
+        ? "로딩이 지연되고 있습니다.\n아래 버튼을 눌러 다시 시도해주세요."
+        : "데이터를 불러오고 있습니다.\n잠시만 기다려주세요."
+      );
 
   return (
     <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
@@ -346,7 +511,7 @@ export default function HomeScreen({ navigation }) {
             <Text
               style={[styles.categoryText, selectedCategory === cat && styles.categoryTextActive]}
             >
-              {cat}
+              {cat === "핫플레이스" ? "핫스토어" : cat}
             </Text>
           </TouchableOpacity>
         ))}
@@ -368,6 +533,17 @@ export default function HomeScreen({ navigation }) {
         onEndReached={() => {
           if (selectedCategory === "전체") {
             loadMorePosts();
+            if (typeof loadMoreStores === "function") {
+              loadMoreStores();
+            }
+            return;
+          }
+
+          if (selectedCategory === "핫플레이스") {
+            if (typeof loadMoreStores === "function") {
+              loadMoreStores();
+            }
+            return;
           }
         }}
         onEndReachedThreshold={0.5}
@@ -427,7 +603,7 @@ export default function HomeScreen({ navigation }) {
             disabled={hotplaceModalLoading}
           >
             <MaterialIcons name="place" size={20} color="white" />
-            <Text style={[styles.selectBtnText, { color: "white" }]}>핫플레이스 등록</Text>
+            <Text style={[styles.selectBtnText, { color: "white" }]}>핫스토어 등록</Text>
           </TouchableOpacity>
 
           <TouchableOpacity 
@@ -454,7 +630,7 @@ export default function HomeScreen({ navigation }) {
         }
         message={
           hotplaceModalType === "NOT_PREMIUM"
-            ? "핫플레이스 등록은 프리미엄 회원만 가능합니다."
+            ? "핫스토어 등록은 프리미엄 회원만 가능합니다."
             : hotplaceModalType === "NEED_PURCHASE"
             ? "이번 달 무료 등록 횟수를 모두 사용했습니다.\n0.99달러에 추가 등록하시겠습니까?"
             : hotplaceModalType === "PAYMENT_FAILED"
@@ -532,6 +708,65 @@ export default function HomeScreen({ navigation }) {
           )}
         </View>
       </CustomModal>
+
+      {/* ✅ [추가] 닉네임 설정 모달 (강제) */}
+      <CustomModal
+        visible={nicknameModalVisible}
+        title="닉네임 설정"
+        message="앱 사용을 위해 닉네임을 설정해주세요."
+        // 버튼 동작을 비워두거나 onConfirm만 연결해서 강제성 부여
+        onConfirm={handleSaveNickname}
+      >
+        <View style={{ width: '100%', marginTop: 10 }}>
+          <TextInput
+            style={{
+              backgroundColor: '#eee',
+              padding: 10,
+              borderRadius: 8,
+              color: 'black',
+              width: '100%'
+            }}
+            placeholder="닉네임 입력 (예: 행복한망고)"
+            placeholderTextColor="#888"
+            value={newNickname}
+            onChangeText={setNewNickname}
+            maxLength={10}
+            autoCapitalize="none"
+          />
+          
+          <TouchableOpacity 
+            style={{ 
+              backgroundColor: theme.primary, 
+              padding: 12, 
+              borderRadius: 8, 
+              marginTop: 15,
+              alignItems: 'center' 
+            }}
+            onPress={handleSaveNickname}
+          >
+            <Text style={{ fontWeight: 'bold', color: 'black' }}>등록하기</Text>
+          </TouchableOpacity>
+        </View>
+      </CustomModal>
+
+      {/* ✅ [추가] 일반 알림용 커스텀 모달 (Alert 대체) */}
+      <CustomModal
+        visible={alertModalVisible}
+        title={alertModalConfig.title}
+        message={alertModalConfig.message}
+        onConfirm={() => setAlertModalVisible(false)}
+        confirmText="확인"
+      />
+
+      {/* ✅ [수정] 위치/인증/데이터 완료 전 덮는 모달 */}
+      <CustomModal
+        visible={locationGateVisible}
+        title={gateTitle}
+        message={gateMessage}
+        onConfirm={handleGateConfirm}
+        loading={!gateTimeoutPassed && !isPermissionIssue}
+      />
+
     </SafeAreaView>
   );
 }

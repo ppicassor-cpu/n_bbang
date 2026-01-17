@@ -27,21 +27,23 @@ import CustomImagePickerModal from "../../../components/CustomImagePickerModal";
 
 import { db, storage } from "../../../firebaseConfig";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { collection, addDoc, serverTimestamp } from "firebase/firestore";
+// ✅ [수정] updateDoc, doc 추가
+import { collection, addDoc, serverTimestamp, updateDoc, doc } from "firebase/firestore";
 
 const CATEGORIES = ["식당/카페", "운동/헬스", "미용/뷰티", "병원/약국", "생활/편의", "학원/교육", "기타"];
 
 export default function StoreWriteScreen({ route, navigation }) {
   const insets = useSafeAreaInsets();
 
-  const { user, myCoords, incrementHotplaceCount } = useAppContext();
+  const { user, myCoords, incrementHotplaceCount, isAdmin } = useAppContext();
 
-  const { paymentType = "membership", purchaseInfo = null } = route?.params || {};
+  // ✅ [수정] 파라미터에서 mode와 storeData 받아오기
+  const { paymentType = "membership", purchaseInfo = null, mode, storeData } = route?.params || {};
+  const isEditMode = mode === "edit" && !!storeData;
 
   const [name, setName] = useState("");
   const [desc, setDesc] = useState("");
   const [phone, setPhone] = useState("");
-  // ✅ [추가] 홈페이지 주소 상태
   const [homepage, setHomepage] = useState("");
   const [address, setAddress] = useState("");
   const [selectedCategory, setSelectedCategory] = useState(CATEGORIES[0]);
@@ -60,6 +62,35 @@ export default function StoreWriteScreen({ route, navigation }) {
   const [alertVisible, setAlertVisible] = useState(false);
   const [alertMsg, setAlertMsg] = useState("");
 
+  const [uploadingVisible, setUploadingVisible] = useState(false);
+  const [successVisible, setSuccessVisible] = useState(false);
+
+  // ✅ [추가] 수정 모드일 때 기존 데이터 채워넣기
+  useEffect(() => {
+    if (isEditMode && storeData) {
+      setName(storeData.name || "");
+      setDesc(storeData.description || "");
+      setPhone(storeData.phone || "");
+      setHomepage(storeData.homepage || "");
+      setAddress(storeData.address || "");
+      setSelectedCategory(storeData.category || CATEGORIES[0]);
+      
+      // 이미지는 배열 그대로 (URL 문자열 배열)
+      setImages(storeData.images || []);
+
+      if (storeData.location) {
+        setRegion({
+          latitude: Number(storeData.location.latitude),
+          longitude: Number(storeData.location.longitude),
+          latitudeDelta: 0.005,
+          longitudeDelta: 0.005,
+        });
+      }
+      
+      navigation.setOptions({ title: "핫플레이스 수정" });
+    }
+  }, [isEditMode, storeData, navigation]);
+
   const canSubmit = useMemo(() => {
     return (
       !!user &&
@@ -71,14 +102,15 @@ export default function StoreWriteScreen({ route, navigation }) {
   }, [user, name, desc, phone, images]);
 
   useEffect(() => {
-    if (myCoords?.latitude && myCoords?.longitude) {
+    // ✅ [수정] 수정 모드가 아닐 때만 내 위치로 초기화 (수정 중인데 위치 덮어쓰기 방지)
+    if (!isEditMode && myCoords?.latitude && myCoords?.longitude) {
       setRegion((prev) => ({
         ...prev,
         latitude: myCoords.latitude,
         longitude: myCoords.longitude,
       }));
     }
-  }, [myCoords]);
+  }, [myCoords, isEditMode]);
 
   const showAlert = (msg) => {
     setAlertMsg(String(msg || ""));
@@ -151,6 +183,12 @@ export default function StoreWriteScreen({ route, navigation }) {
       const uri = images[i];
       if (!uri) continue;
 
+      // ✅ [수정] 이미 http로 시작하는 URL(기존 이미지)은 업로드 건너뛰고 그대로 사용
+      if (uri.startsWith("http")) {
+        urls.push(uri);
+        continue;
+      }
+
       const response = await fetch(uri);
       const blob = await response.blob();
 
@@ -176,50 +214,66 @@ export default function StoreWriteScreen({ route, navigation }) {
     if (images.length === 0) return showAlert("최소 1장의 사진을 등록해주세요.");
 
     setLoading(true);
+    setUploadingVisible(true);
     try {
       const imageUrls = await uploadImages();
 
-      const now = new Date();
-      const expirationDate = new Date(now.setMonth(now.getMonth() + 1));
-
-      const newStoreData = {
-        ownerId: user.uid,
+      // ✅ [수정] 공통 데이터 객체 생성
+      const commonData = {
         name: name.trim(),
         description: desc.trim(),
         category: selectedCategory,
         phone: phone.trim(),
-        // ✅ [추가] 홈페이지 주소 저장
         homepage: homepage.trim(),
         address: address.trim(),
-
         location: {
           latitude: Number(region.latitude),
           longitude: Number(region.longitude),
         },
-
         imageUrl: imageUrls?.[0] || null,
         images: imageUrls || [],
-
-        status: "active",
-        isPremium: true,
-        paymentType: paymentType,
-
-        createdAt: new Date().toISOString(),
-        expiresAt: expirationDate.toISOString(),
+        // 수정 시에도 업데이트 시간 갱신
+        updatedAt: serverTimestamp(), // 나중에 Firestore 타임스탬프로 저장됨(여기서는 안보여도 됨)
       };
 
-      await addDoc(collection(db, "stores"), newStoreData);
+      if (isEditMode) {
+        // ✅ [수정 모드 로직] updateDoc 사용
+        await updateDoc(doc(db, "stores", storeData.id), {
+          ...commonData,
+          // updatedAt은 serverTimestamp()로 처리하되, 여기서는 위에서 정의한 것 사용
+          // 기존 필드 유지 (status, isPremium 등은 변경 안 함)
+        });
 
-      if (typeof incrementHotplaceCount === "function") {
-        const usageType = paymentType === "single" ? "paid_extra" : "membership";
-        await incrementHotplaceCount({ usageType, purchaseInfo: purchaseInfo ?? null });
+      } else {
+        // ✅ [신규 등록 로직] addDoc 사용
+        const now = new Date();
+        const expirationDate = new Date(now.setMonth(now.getMonth() + 1));
+
+        const newStoreData = {
+          ...commonData,
+          ownerId: user.uid,
+          ownerIsAdmin: !!isAdmin,
+          status: "active",
+          isPremium: true,
+          paymentType: paymentType,
+          createdAt: new Date().toISOString(),
+          expiresAt: expirationDate.toISOString(),
+        };
+
+        await addDoc(collection(db, "stores"), newStoreData);
+
+        if (typeof incrementHotplaceCount === "function") {
+          const usageType = paymentType === "single" ? "paid_extra" : "membership";
+          await incrementHotplaceCount({ usageType, purchaseInfo: purchaseInfo ?? null });
+        }
       }
 
-      Alert.alert("등록 완료", "핫플레이스 등록이 완료되었습니다!", [
-        { text: "확인", onPress: () => navigation.goBack() },
-      ]);
+      setUploadingVisible(false);
+      setSuccessVisible(true);
     } catch (e) {
-      showAlert("등록 중 오류가 발생했습니다.");
+      console.error(e); // 에러 로그 추가
+      setUploadingVisible(false);
+      showAlert(isEditMode ? "수정 중 오류가 발생했습니다." : "등록 중 오류가 발생했습니다.");
     } finally {
       setLoading(false);
     }
@@ -298,7 +352,6 @@ export default function StoreWriteScreen({ route, navigation }) {
             onChangeText={setPhone}
           />
 
-          {/* ✅ [추가] 홈페이지 입력칸 */}
           <Text style={styles.label}>홈페이지 / SNS / 배달앱 주소 (선택)</Text>
           <TextInput
             style={styles.input}
@@ -351,7 +404,10 @@ export default function StoreWriteScreen({ route, navigation }) {
           {loading ? (
             <ActivityIndicator color="black" />
           ) : (
-            <Text style={styles.submitBtnText}>등록 완료</Text>
+            <Text style={styles.submitBtnText}>
+              {/* ✅ [수정] 수정 모드일 때 텍스트 변경 */}
+              {isEditMode ? "수정 완료" : "등록 완료"}
+            </Text>
           )}
         </TouchableOpacity>
       </View>
@@ -361,6 +417,23 @@ export default function StoreWriteScreen({ route, navigation }) {
         onClose={() => setGalleryVisible(false)}
         onSelect={handleGallerySelect}
         currentCount={images.length}
+      />
+
+      <CustomModal
+        visible={uploadingVisible}
+        title={isEditMode ? "수정 중" : "업로드 중"}
+        message="요청을 처리 중입니다. 잠시만 기다려주세요."
+        onConfirm={() => {}}
+      />
+
+      <CustomModal
+        visible={successVisible}
+        title={isEditMode ? "수정 완료" : "등록 완료"}
+        message={isEditMode ? "핫플레이스 정보가 수정되었습니다." : "핫플레이스 등록이 완료되었습니다!"}
+        onConfirm={() => {
+          setSuccessVisible(false);
+          navigation.goBack();
+        }}
       />
 
       <CustomModal

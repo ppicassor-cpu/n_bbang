@@ -1,3 +1,5 @@
+// FILE: src/features/post/screens/FreeDetailScreen.js
+
 import React, { useState, useEffect, useMemo } from "react";
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Dimensions } from "react-native";
 import { Image } from "expo-image";
@@ -5,6 +7,10 @@ import ImageDetailModal from "../../../components/ImageDetailModal";
 import MapView, { Marker } from "react-native-maps";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { MaterialIcons } from "@expo/vector-icons";
+
+// ✅ [추가] 닉네임 조회를 위해 firebase 관련 모듈 추가
+import { doc, getDoc } from "firebase/firestore";
+import { db } from "../../../firebaseConfig";
 
 import { theme } from "../../../theme";
 import { ROUTES } from "../../../app/navigation/routes";
@@ -31,17 +37,20 @@ export default function FreeDetailScreen({ route, navigation }) {
   const [post, setPost] = useState(initialPost || null);
   const [imgPage, setImgPage] = useState(1);
 
+  // ✅ [추가] 작성자 닉네임 상태
+  const [ownerNickname, setOwnerNickname] = useState("");
+
   // 기존 모달 상태
   const [deleteModalVisible, setDeleteModalVisible] = useState(false);
   const [statusModalVisible, setStatusModalVisible] = useState(false);
 
   // 신고, 차단, 샘플 데이터 안내용 모달 상태
   const [reportModalVisible, setReportModalVisible] = useState(false);
-  const [reportSuccessModalVisible, setReportSuccessModalVisible] = useState(false); // ✅ 신고 완료 모달
+  const [reportSuccessModalVisible, setReportSuccessModalVisible] = useState(false); 
   const [blockModalVisible, setBlockModalVisible] = useState(false);
   const [sampleModalVisible, setSampleModalVisible] = useState(false);
 
-  // 드롭다운 메뉴 상태 (내 글일 땐 상태변경, 남의 글일 땐 신고/차단 메뉴)
+  // 드롭다운 메뉴 상태
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [tempStatus, setTempStatus] = useState("");
   const [loading, setLoading] = useState(false);
@@ -49,6 +58,7 @@ export default function FreeDetailScreen({ route, navigation }) {
   const [isImageViewVisible, setIsImageViewVisible] = useState(false);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
 
+  // 1. 게시글 데이터 동기화
   useEffect(() => {
     if (!initialPost?.id) return;
     const updated = posts.find(p => p.id === initialPost.id);
@@ -57,6 +67,34 @@ export default function FreeDetailScreen({ route, navigation }) {
       setTempStatus(updated.status || "나눔중");
     }
   }, [posts, initialPost?.id]);
+
+  // ✅ [추가] 2. 작성자 닉네임 가져오기 로직
+  useEffect(() => {
+    const fetchNickname = async () => {
+      if (!post?.ownerId) return;
+
+      // 샘플 데이터 처리
+      if (post.ownerId === "SAMPLE_DATA") {
+        setOwnerNickname("운영팀 (예시)");
+        return;
+      }
+
+      try {
+        const userDoc = await getDoc(doc(db, "users", post.ownerId));
+        if (userDoc.exists()) {
+          const data = userDoc.data();
+          // displayName이 없으면 이메일 앞부분 사용
+          setOwnerNickname(data.displayName || data.email?.split("@")[0] || "알 수 없음");
+        } else {
+          setOwnerNickname("탈퇴한 사용자");
+        }
+      } catch (e) {
+        console.error("닉네임 조회 실패:", e);
+      }
+    };
+
+    fetchNickname();
+  }, [post?.ownerId]);
 
   if (!post) return null;
 
@@ -88,22 +126,15 @@ export default function FreeDetailScreen({ route, navigation }) {
     setReportModalVisible(true);
   };
 
-  // ✅ 신고 확정 처리 (사유 선택 시 실행 -> 성공 모달 띄움)
   const confirmReport = async (selectedReason) => {
     setReportModalVisible(false);
     if (!post.ownerId) return;
-
-    // ✅ [수정] 상세페이지에서만 silent=true로 호출하여 AppContext 팝업 차단
     await reportUser(post.ownerId, post.id, selectedReason, "post", true);
-
     setReportSuccessModalVisible(true);
   };
 
-  // ✅ 신고 완료 모달 확인 버튼 -> 차단 후 홈으로 이동
   const handleReportSuccess = async () => {
     setReportSuccessModalVisible(false);
-
-    // 1. 해당 유저 차단 (홈 리스트에서 안 보이게)
     if (post.ownerId && post.ownerId !== user?.uid) {
       try {
         await blockUser(post.ownerId);
@@ -111,31 +142,25 @@ export default function FreeDetailScreen({ route, navigation }) {
         console.log("차단 실패:", e);
       }
     }
-
-    // 2. 홈 화면으로 이동
     navigation.navigate(ROUTES.HOME);
   };
 
-  // 차단 핸들러
   const handleBlock = () => {
     setIsDropdownOpen(false);
     setBlockModalVisible(true);
   };
 
-  // 차단 확정 처리
   const confirmBlock = async () => {
     await blockUser(post.ownerId);
     setBlockModalVisible(false);
-    navigation.goBack(); // 차단 후 해당 글 안 보이게 뒤로가기
+    navigation.goBack(); 
   };
 
   const onPressChat = () => {
-    // 샘플 데이터인지 확인하여 커스텀 모달 띄우기
     if (post.ownerId === "SAMPLE_DATA") {
       setSampleModalVisible(true);
       return;
     }
-
     if (isClosed) return;
     const roomId = `post_${post.id}`;
     ensureRoom(roomId, post.title, "free", post.ownerId);
@@ -181,54 +206,60 @@ export default function FreeDetailScreen({ route, navigation }) {
           <View style={styles.titleRow}>
             <Text style={styles.title}>{post.title}</Text>
 
-            {/* 내 글이면 상태변경 버튼, 남의 글이면 메뉴(점 세개) 버튼 노출 */}
             {isMyPost ? (
-              <TouchableOpacity style={styles.statusBtn} onPress={() => setIsDropdownOpen(!isDropdownOpen)}>
-                <Text style={[styles.statusBtnText, isClosed && { color: theme.danger }]}>{post.status || "나눔중"}</Text>
-                <MaterialIcons name="arrow-drop-down" size={20} color="white" />
-              </TouchableOpacity>
+              <View style={{ position: 'relative', zIndex: 100 }}>
+                <TouchableOpacity style={styles.statusBtn} onPress={() => setIsDropdownOpen(!isDropdownOpen)}>
+                  <Text style={[styles.statusBtnText, isClosed && { color: theme.danger }]}>{post.status || "나눔중"}</Text>
+                  <MaterialIcons name={isDropdownOpen ? "arrow-drop-up" : "arrow-drop-down"} size={20} color="white" />
+                </TouchableOpacity>
+
+                {isDropdownOpen && (
+                  <View style={styles.dropdown}>
+                    {["나눔중", "예약중", "나눔완료"].map(s => (
+                      <TouchableOpacity key={s} style={styles.dropdownItem} onPress={() => setTempStatus(s)}>
+                        <Text style={{ color: tempStatus === s ? theme.primary : "white", fontSize: 13 }}>{s}</Text>
+                        {tempStatus === s && <MaterialIcons name="check" size={14} color={theme.primary} />}
+                      </TouchableOpacity>
+                    ))}
+                    {tempStatus !== post.status && (
+                      <TouchableOpacity style={styles.saveBtn} onPress={handleStatusUpdate} disabled={loading}>
+                        <Text style={styles.saveBtnText}>{loading ? "..." : "확인"}</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                )}
+              </View>
             ) : (
-              <TouchableOpacity style={{ padding: 5 }} onPress={() => setIsDropdownOpen(!isDropdownOpen)}>
-                <MaterialIcons name="more-vert" size={24} color="#888" />
-              </TouchableOpacity>
+              <View style={{ position: 'relative', zIndex: 100 }}>
+                <TouchableOpacity style={{ padding: 5 }} onPress={() => setIsDropdownOpen(!isDropdownOpen)}>
+                  <MaterialIcons name="more-vert" size={24} color="#888" />
+                </TouchableOpacity>
+                {isDropdownOpen && (
+                  <View style={[styles.dropdown, { width: 140, right: 0 }]}>
+                    <TouchableOpacity style={styles.dropdownItem} onPress={handleReport}>
+                      <Text style={{ color: theme.danger, fontSize: 13 }}>🚨 신고하기</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[styles.dropdownItem, { borderBottomWidth: 0 }]} onPress={handleBlock}>
+                      <Text style={{ color: "#888", fontSize: 13 }}>🚫 차단하기</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+              </View>
             )}
           </View>
-
-          {/* 드롭다운 메뉴 내용 분기 (내 글 vs 남의 글) */}
-          {isDropdownOpen && (
-            <View style={styles.dropdown}>
-              {isMyPost ? (
-                // 1. 내 글일 때: 상태 변경 메뉴
-                <>
-                  {["나눔중", "나눔완료"].map(s => (
-                    <TouchableOpacity key={s} style={styles.dropdownItem} onPress={() => setTempStatus(s)}>
-                      <Text style={{ color: tempStatus === s ? theme.primary : "white" }}>{s}</Text>
-                    </TouchableOpacity>
-                  ))}
-                  {tempStatus !== post.status && (
-                    <TouchableOpacity style={styles.saveBtn} onPress={handleStatusUpdate}>
-                      <Text style={styles.saveBtnText}>변경 확인</Text>
-                    </TouchableOpacity>
-                  )}
-                </>
-              ) : (
-                // 2. 남의 글일 때: 신고/차단 메뉴
-                <>
-                  <TouchableOpacity style={styles.dropdownItem} onPress={handleReport}>
-                    <Text style={{ color: theme.danger }}>🚨 신고하기</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={[styles.dropdownItem, { borderBottomWidth: 0 }]} onPress={handleBlock}>
-                    <Text style={{ color: "#888" }}>🚫 이 사용자 차단하기</Text>
-                  </TouchableOpacity>
-                </>
-              )}
-            </View>
-          )}
 
           <Text style={styles.content}>{post.content}</Text>
 
           <View style={styles.mapSection}>
-            <Text style={styles.label}>나눔 희망 장소</Text>
+            {/* ✅ [수정] 닉네임 표시 영역 추가 (Flex Row) */}
+            <View style={styles.labelRow}>
+              <Text style={styles.label}>나눔 희망 장소</Text>
+              <View style={styles.writerInfo}>
+                <Text style={styles.writerLabel}>작성자: </Text>
+                <Text style={styles.writerName}>{ownerNickname || "로딩중..."}</Text>
+              </View>
+            </View>
+
             <View style={styles.mapWrap}>
               <MapView style={styles.map} initialRegion={mapRegion} scrollEnabled={false}><Marker coordinate={mapRegion} /></MapView>
             </View>
@@ -256,7 +287,6 @@ export default function FreeDetailScreen({ route, navigation }) {
       <CustomModal visible={statusModalVisible} title="알림" message="상태가 변경되었습니다." onConfirm={() => setStatusModalVisible(false)} />
       <CustomModal visible={deleteModalVisible} title="삭제" message="정말 삭제하시겠습니까?" type="confirm" onConfirm={handleDelete} onCancel={() => setDeleteModalVisible(false)} />
 
-      {/* 신규 적용된 모달들 */}
       <CustomModal
         visible={sampleModalVisible}
         title="체험용 게시글"
@@ -264,7 +294,6 @@ export default function FreeDetailScreen({ route, navigation }) {
         onConfirm={() => setSampleModalVisible(false)}
       />
 
-      {/* ✅ 신고 모달 (버튼 목록형) */}
       <CustomModal
         visible={reportModalVisible}
         title="신고 사유 선택"
@@ -291,7 +320,6 @@ export default function FreeDetailScreen({ route, navigation }) {
         </View>
       </CustomModal>
 
-      {/* ✅ 신고 완료 알림 모달 */}
       <CustomModal
         visible={reportSuccessModalVisible}
         title="신고 완료"
@@ -308,14 +336,12 @@ export default function FreeDetailScreen({ route, navigation }) {
         onCancel={() => setBlockModalVisible(false)} 
       />
 
-      {/* ✅ [수정 시작] 공통 이미지 확대 모달 사용 */}
       <ImageDetailModal
         visible={isImageViewVisible}
         images={post.images}
         index={currentImageIndex}
         onClose={() => setIsImageViewVisible(false)}
       />
-      {/* ✅ [수정 끝] */}
     </View>
   );
 }
@@ -327,22 +353,48 @@ const styles = StyleSheet.create({
   pageIndicator: { position: "absolute", bottom: 20, right: 20, backgroundColor: "rgba(0,0,0,0.6)", paddingHorizontal: 12, paddingVertical: 5, borderRadius: 15 },
   pageText: { color: "white", fontSize: 12, fontWeight: "bold" },
   body: { padding: 20 },
-  titleRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 20 },
-  title: { flex: 1, color: "white", fontSize: 22, fontWeight: "bold" },
-  statusBtn: { flexDirection: "row", alignItems: "center", backgroundColor: "#222", paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: "#444" },
-  statusBtnText: { color: theme.primary, fontWeight: "bold", marginRight: 4 },
-  dropdown: { backgroundColor: "#222", borderRadius: 10, padding: 10, marginBottom: 20 },
-  dropdownItem: { paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: "#333" },
-  saveBtn: { backgroundColor: theme.primary, marginTop: 10, padding: 10, borderRadius: 8, alignItems: "center" },
-  saveBtnText: { color: "black", fontWeight: "bold" },
-  content: { color: "#DDD", fontSize: 16, lineHeight: 26, marginBottom: 30 },
+  titleRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20, zIndex: 999 }, // ✅ zIndex 추가
+  title: { flex: 1, color: "white", fontSize: 22, fontWeight: "bold", marginRight: 10 },
+  
+  // ✅ [수정] 상태 버튼 및 드롭다운 스타일
+  statusBtn: { flexDirection: "row", alignItems: "center", backgroundColor: "#222", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: "#444", minWidth: 90, justifyContent: 'space-between' },
+  statusBtnText: { color: theme.primary, fontWeight: "bold", fontSize: 13 },
+  
+  dropdown: { 
+    position: 'absolute', 
+    top: 38, // 버튼 바로 아래
+    right: 0, 
+    width: 100, // 버튼 폭과 비슷하게
+    backgroundColor: "#222", 
+    borderRadius: 8, 
+    padding: 5, 
+    borderWidth: 1, 
+    borderColor: "#444",
+    elevation: 5,
+    zIndex: 1000, // 최상단
+  },
+  dropdownItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10, paddingHorizontal: 5, borderBottomWidth: 0.5, borderBottomColor: "#333" },
+  
+  saveBtn: { backgroundColor: theme.primary, marginTop: 5, padding: 8, borderRadius: 6, alignItems: "center" },
+  saveBtnText: { color: "black", fontWeight: "bold", fontSize: 12 },
+  
+  content: { color: "#DDD", fontSize: 16, lineHeight: 26, marginBottom: 30, zIndex: 1 }, // ✅ 본문 zIndex 낮춤
+  
   mapSection: { marginTop: 10 },
-  label: { color: theme.primary, fontSize: 16, fontWeight: "bold", marginBottom: 12 },
+  
+  // ✅ [추가] 라벨과 닉네임을 가로로 배치하기 위한 스타일
+  labelRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  label: { color: theme.primary, fontSize: 16, fontWeight: "bold" },
+  
+  // ✅ [추가] 작성자 정보 스타일
+  writerInfo: { flexDirection: 'row', alignItems: 'center' },
+  writerLabel: { color: '#888', fontSize: 13, marginRight: 4 },
+  writerName: { color: 'white', fontSize: 14, fontWeight: "bold" },
+
   mapWrap: { height: 200, borderRadius: 15, overflow: "hidden", marginBottom: 10 },
   map: { flex: 1 },
   locationText: { color: "#888", fontSize: 14 },
 
-  // ✅ bottomBar 스타일
   bottomBar: {
     position: "absolute",
     bottom: 0,
@@ -351,7 +403,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 20,
-    paddingTop: 20, // 상단 패딩은 고정
+    paddingTop: 20,
     borderTopWidth: 1,
     borderTopColor: "#333"
   },
@@ -362,7 +414,6 @@ const styles = StyleSheet.create({
   row: { flexDirection: "row", gap: 10 },
   actionBtn: { paddingHorizontal: 20, paddingVertical: 12, borderRadius: 10, backgroundColor: "#222" },
 
-  // ✅ 신고 사유 버튼 스타일
   reportReasonBtn: {
     backgroundColor: '#2A2A2A',
     paddingVertical: 14,
@@ -376,4 +427,3 @@ const styles = StyleSheet.create({
     fontSize: 14
   }
 });
-

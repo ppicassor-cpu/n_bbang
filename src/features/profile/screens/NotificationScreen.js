@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from "react-native";
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator } from "react-native"; // ✅ Alert 제거
 import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -9,6 +9,7 @@ import { db } from "../../../firebaseConfig";
 import { theme } from "../../../theme";
 import { useAppContext } from "../../../app/providers/AppContext";
 import { ROUTES } from "../../../app/navigation/routes";
+import CustomModal from "../../../components/CustomModal"; // ✅ 커스텀 모달 추가
 
 export default function NotificationScreen() {
   const navigation = useNavigation();
@@ -17,6 +18,15 @@ export default function NotificationScreen() {
 
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  // ✅ [추가] 모달 상태 관리
+  const [modalVisible, setModalVisible] = useState(false);
+  const [modalConfig, setModalConfig] = useState({
+    title: "",
+    message: "",
+    type: "alert", // 'alert' | 'confirm'
+    onConfirm: () => {},
+  });
 
   const formatDate = (createdAt) => {
     try {
@@ -120,6 +130,12 @@ export default function NotificationScreen() {
     return () => unsubscribe();
   }, [user]);
 
+  // ✅ [추가] 모달 열기 헬퍼 함수
+  const openModal = (title, message, type = "alert", onConfirm = () => {}) => {
+    setModalConfig({ title, message, type, onConfirm });
+    setModalVisible(true);
+  };
+
   const handleRead = async (noti) => {
     if (!user) return;
     if (noti.isRead) return;
@@ -134,7 +150,8 @@ export default function NotificationScreen() {
     try {
       await deleteDoc(doc(db, "users", user.uid, "notifications", id));
     } catch (e) {
-      Alert.alert("오류", "삭제에 실패했습니다.");
+      // ✅ [수정] Alert -> CustomModal
+      openModal("오류", "삭제에 실패했습니다.", "alert", () => setModalVisible(false));
     }
   };
 
@@ -157,33 +174,38 @@ export default function NotificationScreen() {
         await batch.commit();
       }
     } catch (e) {
-      Alert.alert("오류", "일괄 처리 중 문제가 발생했습니다.");
+      // ✅ [수정] Alert -> CustomModal
+      openModal("오류", "일괄 처리 중 문제가 발생했습니다.", "alert", () => setModalVisible(false));
     }
   };
 
   const handleDeleteAll = () => {
     if (!user) return;
     if (notifications.length === 0) return;
-    Alert.alert("알림 전체 삭제", "정말 모든 알림을 삭제하시겠습니까?", [
-      { text: "취소", style: "cancel" },
-      {
-        text: "삭제",
-        style: "destructive",
-        onPress: async () => {
-          try {
-            const batch = writeBatch(db);
-            notifications.forEach((noti) => {
-              const ref = doc(db, "users", user.uid, "notifications", noti.id);
-              batch.delete(ref);
-            });
-            await batch.commit();
-          } catch (e) {
-            console.error("전체 삭제 실패:", e);
-            Alert.alert("오류", "삭제 중 문제가 발생했습니다.");
-          }
-        },
-      },
-    ]);
+
+    // ✅ [수정] Alert.alert -> CustomModal (confirm 타입)
+    openModal(
+      "알림 전체 삭제",
+      "정말 모든 알림을 삭제하시겠습니까?",
+      "confirm",
+      async () => {
+        setModalVisible(false); // 확인 누르면 일단 모달 닫고 작업 시작
+        try {
+          const batch = writeBatch(db);
+          notifications.forEach((noti) => {
+            const ref = doc(db, "users", user.uid, "notifications", noti.id);
+            batch.delete(ref);
+          });
+          await batch.commit();
+        } catch (e) {
+          console.error("전체 삭제 실패:", e);
+          // 실패 시 다시 알림 모달
+          setTimeout(() => {
+            openModal("오류", "삭제 중 문제가 발생했습니다.", "alert", () => setModalVisible(false));
+          }, 300);
+        }
+      }
+    );
   };
 
   const onPressNoti = async (item) => {
@@ -285,6 +307,16 @@ export default function NotificationScreen() {
           }
         />
       )}
+
+      {/* ✅ [추가] 커스텀 모달 렌더링 */}
+      <CustomModal
+        visible={modalVisible}
+        title={modalConfig.title}
+        message={modalConfig.message}
+        type={modalConfig.type}
+        onConfirm={modalConfig.onConfirm}
+        onCancel={() => setModalVisible(false)}
+      />
     </View>
   );
 }

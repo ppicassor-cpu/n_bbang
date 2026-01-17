@@ -33,6 +33,7 @@ import CustomModal from '../../../components/CustomModal';
 // ✅ [추가] 커스텀 이미지 피커 모달 import
 import CustomImagePickerModal from '../../../components/CustomImagePickerModal';
 import { db } from "../../../firebaseConfig";
+import { hasBadWord } from "../../../utils/badWordFilter";
 
 // ✅ [추가] 이미지 압축/캐시
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -256,12 +257,37 @@ export default function ProfileScreen() {
     }
   };
 
-  // ✅ [추가] 닉네임 저장 → 즉시 DB 저장 → 팝업 닫힘 → 실시간 구독으로 화면 반영
+  // ✅ 표시용 닉네임/프로필 사진
+  const displayName = userProfile?.displayName || user?.displayName || user?.email?.split('@')[0] || "닉네임을 설정해주세요";
+  const photoURL = userProfile?.photoURL || null;
+
+  // ✅ [수정] 닉네임 저장 → 검증 추가 → 즉시 DB 저장
   const handleSaveNickname = async () => {
     try {
       const next = (nicknameInput || "").trim();
+
+      // 1. 빈 값 체크
       if (!next) {
         openModal("안내", "닉네임을 입력해주세요.", "alert", () => setModalVisible(false));
+        return;
+      }
+
+      // 2. 현재 사용 중인 닉네임 체크
+      if (next === displayName) {
+        openModal("안내", "사용 중인 닉네임입니다.", "alert", () => setModalVisible(false));
+        return;
+      }
+
+      // ✅ [추가] 3. 비속어 및 금칙어 체크
+      if (hasBadWord(next)) {
+        openModal("경고", "부적절한 단어(욕설, 관리자 사칭 등)가 포함되어 있습니다.\n바른 말을 사용해주세요.", "alert", () => setModalVisible(false));
+        return;
+      }
+
+      // 4. 특수문자 체크 (한글, 영문, 숫자만 허용)
+      const specialCharRegex = /[^a-zA-Z0-9ㄱ-ㅎㅏ-ㅣ가-힣]/;
+      if (specialCharRegex.test(next)) {
+        openModal("안내", "특수문자는 사용할 수 없습니다.", "alert", () => setModalVisible(false));
         return;
       }
 
@@ -480,10 +506,6 @@ export default function ProfileScreen() {
 
   const appVersion = Constants.expoConfig?.version || '1.0.0';
 
-  // ✅ 표시용 닉네임/프로필 사진
-  const displayName = userProfile?.displayName || user?.displayName || user?.email?.split('@')[0] || "닉네임을 설정해주세요";
-  const photoURL = userProfile?.photoURL || null;
-
   // ✅ [수정] 닉네임 수정 팝업이 키보드에 가리지 않도록(팝업 전체가 위로 올라가게)
   const nicknameKeyboardOffset = Platform.OS === "ios"
     ? (insets?.top || 0) + 160
@@ -630,6 +652,7 @@ export default function ProfileScreen() {
             <>
               <Text style={[styles.sectionTitle, { marginTop: 24, color: '#FF6B6B' }]}>관리자 전용</Text>
               <MenuLink
+                IconComponent={Ionicons} // ✅ [수정] 아이콘 깨짐 방지를 위해 Ionicons 명시
                 icon="shield-checkmark-outline"
                 label="신고 내역 관리"
                 color="#FF6B6B"
@@ -884,7 +907,7 @@ const styles = StyleSheet.create({
   },
 
   // ✅ [수정] 상단 여백 줄임
-  scrollContent: { paddingHorizontal: 20, paddingTop: 0, paddingBottom: 60 },
+  scrollContent: { paddingHorizontal: 20, paddingTop: 0, paddingBottom: 10 },
 
   // 1. 프로필 섹션
   profileHeader: {

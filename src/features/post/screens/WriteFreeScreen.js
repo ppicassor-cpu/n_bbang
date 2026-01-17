@@ -23,6 +23,7 @@ import { theme } from "../../../theme";
 
 import { storage } from "../../../firebaseConfig";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { hasBadWord } from "../../../utils/badWordFilter";
 
 // ✅ 안내 문구 (기존 그대로)
 const DEFAULT_DESC = `나눔하실 물건 상태를 적어주세요.
@@ -257,6 +258,10 @@ export default function WriteFreeScreen({ navigation, route }) {
     }
     if (!coords?.latitude || !coords?.longitude) {
       showAlert("위치를 선택해주세요.");
+      return;
+    }
+    if (hasBadWord(title) || hasBadWord(content) || hasBadWord(pickupPoint)) {
+      showAlert("부적절한 단어(욕설, 관리자 사칭 등)가 포함되어 있습니다.\n바른 말을 사용해주세요.");
       return;
     }
 

@@ -24,6 +24,9 @@ const CustomModal = ({
 
   // ✅ [추가] 특정 모달만 키보드 뜰 때 위로 이동시키기 위한 옵션 (기본 false)
   moveUpOnKeyboard = false,
+
+  // ✅ [추가] 하드웨어(안드로이드) 뒤로가기 버튼으로 모달 닫힘 방지 (기본 false)
+  disableBackClose = false,
 }) => {
   // ✅ [추가] 키보드 높이에 따라 모달을 위로 이동 (센터 고정은 유지하되, 필요한 경우만 translateY 적용)
   const translateY = useRef(new Animated.Value(0)).current;
@@ -84,7 +87,21 @@ const CustomModal = ({
   }, [visible, moveUpOnKeyboard, translateY]);
 
   return (
-    <Modal transparent={true} visible={visible} animationType="fade">
+    <Modal
+      transparent={true}
+      visible={visible}
+      animationType="fade"
+      onRequestClose={() => {
+        if (disableBackClose) return;
+        if (typeof onCancel === "function") {
+          onCancel();
+          return;
+        }
+        if (typeof onConfirm === "function") {
+          onConfirm();
+        }
+      }}
+    >
       <View style={styles.overlay}>
         {/* ✅ [수정] 모달 박스만 Animated로 감싸서(센터는 유지) 키보드 뜰 때만 위로 이동 */}
         <Animated.View style={[styles.modalContainer, moveUpOnKeyboard ? { transform: [{ translateY }] } : null]}>

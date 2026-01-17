@@ -1,5 +1,9 @@
+// FILE: src/components/ImageDetailModal.js
+
 import React from "react";
+import { View, TouchableOpacity, StyleSheet, Platform } from "react-native";
 import ImageView from "react-native-image-viewing";
+import { MaterialIcons } from "@expo/vector-icons";
 
 /**
  * @param {boolean} visible - 모달 표시 여부
@@ -16,6 +20,15 @@ export default function ImageDetailModal({ visible, images, index, onClose }) {
     return { uri: img.uri || img };
   });
 
+  // ✅ [추가] 커스텀 헤더 (왼쪽 상단 뒤로가기 버튼)
+  const HeaderComponent = () => (
+    <View style={styles.headerContainer}>
+      <TouchableOpacity style={styles.closeBtn} onPress={onClose}>
+        <MaterialIcons name="arrow-back-ios-new" size={24} color="white" />
+      </TouchableOpacity>
+    </View>
+  );
+
   return (
     <ImageView
       images={formattedImages}
@@ -26,6 +39,23 @@ export default function ImageDetailModal({ visible, images, index, onClose }) {
       doubleTapToZoomEnabled={true}
       // 아래쪽에서 위로 올리는 제스처 등으로 닫기 최적화
       presentationStyle="overFullScreen"
+      // ✅ [추가] HeaderComponent 연결
+      HeaderComponent={HeaderComponent}
     />
   );
 }
+
+const styles = StyleSheet.create({
+  headerContainer: {
+    position: "absolute",
+    width: "100%",
+    zIndex: 1,
+  },
+  closeBtn: {
+    position: "absolute",
+    top: Platform.OS === "ios" ? 70 : 50, // 노치/상태바 고려
+    left: 10, // ✅ 왼쪽 정렬
+    zIndex: 1,
+    padding: 10,
+  },
+});

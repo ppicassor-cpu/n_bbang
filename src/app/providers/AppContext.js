@@ -250,7 +250,20 @@ export const AppProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [currentLocation, setCurrentLocation] = useState("위치 찾는 중...");
   const [myCoords, setMyCoords] = useState(null);
-  
+
+  // ✅ [추가] 초기 로딩 게이팅용 상태(홈 모달에서 사용)
+  const [authChecked, setAuthChecked] = useState(false);
+  const [locationChecked, setLocationChecked] = useState(false);
+  const [postsLoaded, setPostsLoaded] = useState(false);
+  const [storesLoaded, setStoresLoaded] = useState(false);
+
+  // ✅ [수정] HomeScreen 게이트는 storesLoaded에 묶이지 않도록 분리
+  const isHomeReady = authChecked && locationChecked && postsLoaded;
+  const isHomeBooting = !isHomeReady;
+
+  // (기존: 전체 준비 상태가 필요할 수 있어 유지)
+  const isBooting = !(authChecked && locationChecked && postsLoaded && storesLoaded);
+
   // =================================================================
   // ✅ [수정] Posts 및 Stores(가게) 상태 관리
   // =================================================================
@@ -259,6 +272,14 @@ export const AppProvider = ({ children }) => {
 
   const [stores, setStores] = useState([]); // ✅ [추가] 가게 목록 상태
   const [storeLimit, setStoreLimit] = useState(20); // ✅ [추가] 가게 목록 제한
+
+  // ✅ [추가] 새로고침 트리거(구독 재시작용)
+  const [postsRefreshKey, setPostsRefreshKey] = useState(0);
+  const [storesRefreshKey, setStoresRefreshKey] = useState(0);
+
+  // ✅ [수정] 원본 데이터(로그인 무관 구독) + 차단 필터 분리
+  const [rawPosts, setRawPosts] = useState([]);
+  const [rawStores, setRawStores] = useState([]);
 
   const [blockedUsers, setBlockedUsers] = useState([]);
 
@@ -281,6 +302,24 @@ export const AppProvider = ({ children }) => {
   useEffect(() => {
     isAdminRef.current = isAdmin;
   }, [isAdmin]);
+
+  // ✅ [추가] (stores) 작성자 admin 여부 캐시 (ownerIsAdmin 보강용)
+  const ownerAdminCacheRef = useRef({}); // { [uid]: boolean }
+  const getOwnerIsAdminCached = async (ownerId) => {
+    try {
+      if (!ownerId) return false;
+      const cached = ownerAdminCacheRef.current?.[ownerId];
+      if (typeof cached === "boolean") return cached;
+
+      const snap = await getDoc(doc(db, "users", ownerId));
+      const flag = !!(snap.exists() ? snap.data()?.isAdmin : false);
+      ownerAdminCacheRef.current = { ...(ownerAdminCacheRef.current || {}), [ownerId]: flag };
+      return flag;
+    } catch {
+      ownerAdminCacheRef.current = { ...(ownerAdminCacheRef.current || {}), [ownerId]: false };
+      return false;
+    }
+  };
 
   // ✅ [추가] Alert.alert 대체용 커스텀 모달 상태/헬퍼
   const [modalVisible, setModalVisible] = useState(false);
@@ -578,6 +617,7 @@ export const AppProvider = ({ children }) => {
     let customerInfoListener = null;
 
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      setAuthChecked(true);
       setUser(currentUser);
 
       if (customerInfoListener && Purchases.removeCustomerInfoUpdateListener) {
@@ -758,18 +798,28 @@ export const AppProvider = ({ children }) => {
     };
   }, [user?.uid]);
 
+  // ✅ [추가] "첫 snapshot 도착" 기준 확정용 키 추적
+  const postsFirstSnapshotKeyRef = useRef(null);
+  const storesFirstSnapshotKeyRef = useRef(null);
+
+  // ✅ [수정] posts: 로그인 여부와 무관하게 구독(원본 수집) + 차단 필터는 별도 파생
   useEffect(() => {
     let unsub = null;
-    if (user) {
-      const q = query(collection(db, "posts"), orderBy("createdAt", "desc"), limit(postLimit));
+    const q = query(collection(db, "posts"), orderBy("createdAt", "desc"), limit(postLimit));
 
-      unsub = onSnapshot(q, (querySnapshot) => {
+    unsub = onSnapshot(
+      q,
+      (querySnapshot) => {
+        // ✅ [핵심] postsLoaded는 "첫 snapshot 도착" 시점에만 true 확정 (refreshKey 기준)
+        if (postsFirstSnapshotKeyRef.current !== postsRefreshKey) {
+          postsFirstSnapshotKeyRef.current = postsRefreshKey;
+          setPostsLoaded(true);
+        }
+
         const loaded = [];
         querySnapshot.forEach((d) => {
           const postData = d.data();
-          if (!blockedUsers.includes(postData.ownerId)) {
-            loaded.push({ ...postData, id: d.id });
-          }
+          loaded.push({ ...postData, id: d.id });
         });
 
         // ✅ 데이터를 저장할 때 'createdAt' 기준 내림차순(최신순) 정렬 강제
@@ -779,54 +829,173 @@ export const AppProvider = ({ children }) => {
           return dateB - dateA;
         });
 
-        setPosts(sorted);
-      });
-    } else {
-      setPosts([]);
-    }
+        setRawPosts(sorted);
+      },
+      (e) => {
+        console.warn("posts onSnapshot Error:", e);
+        setRawPosts([]);
+
+        // ✅ 에러가 나도 홈이 영구 봉쇄되지 않도록: refreshKey 기준 1회만 true 처리
+        if (postsFirstSnapshotKeyRef.current !== postsRefreshKey) {
+          postsFirstSnapshotKeyRef.current = postsRefreshKey;
+          setPostsLoaded(true);
+        }
+      }
+    );
 
     return () => {
       if (unsub) unsub();
     };
-  }, [user, postLimit, blockedUsers]);
+  }, [postLimit, postsRefreshKey]);
+
+  // ✅ [추가] rawPosts + blockedUsers로 posts 파생(차단 변경 시에도 즉시 반영)
+  useEffect(() => {
+    const loaded = [];
+    for (const p of rawPosts || []) {
+      if (!blockedUsers.includes(p?.ownerId)) {
+        loaded.push(p);
+      }
+    }
+
+    // ✅ 데이터를 저장할 때 'createdAt' 기준 내림차순(최신순) 정렬 강제
+    const sorted = loaded.sort((a, b) => {
+      const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return dateB - dateA;
+    });
+
+    setPosts(sorted);
+  }, [rawPosts, blockedUsers]);
 
   // =================================================================
   // ✅ [추가] Stores(가게) 데이터 실시간 구독 로직
   // =================================================================
+  // ✅ [수정] stores: 로그인 여부와 무관하게 구독(원본 수집) + 차단 필터는 별도 파생
   useEffect(() => {
     let unsub = null;
-    if (user) {
-      // 가게 목록도 최신순 정렬 + limit 적용
-      const q = query(collection(db, "stores"), orderBy("createdAt", "desc"), limit(storeLimit));
+    let alive = true;
 
-      unsub = onSnapshot(q, (querySnapshot) => {
-        const loaded = [];
-        querySnapshot.forEach((d) => {
-          const storeData = d.data();
-          // 차단된 유저의 가게는 제외
-          if (!blockedUsers.includes(storeData.ownerId)) {
+    // 가게 목록도 최신순 정렬 + limit 적용
+    const q = query(collection(db, "stores"), orderBy("createdAt", "desc"), limit(storeLimit));
+
+    unsub = onSnapshot(
+      q,
+      async (querySnapshot) => {
+        // ✅ [핵심] storesLoaded는 "첫 snapshot 도착" 즉시 true 확정 (정규화/추가 getDoc 완료를 기다리지 않음)
+        if (storesFirstSnapshotKeyRef.current !== storesRefreshKey) {
+          storesFirstSnapshotKeyRef.current = storesRefreshKey;
+          setStoresLoaded(true);
+        }
+
+        try {
+          const loaded = [];
+          querySnapshot.forEach((d) => {
+            const storeData = d.data();
             // type: 'store'를 추가해서 나중에 합칠 때 구분
-            loaded.push({ ...storeData, id: d.id, type: 'store' });
-          }
-        });
+            loaded.push({ ...storeData, id: d.id, type: "store" });
+          });
 
-        // ✅ 가게 데이터도 날짜 기준 최신순 정렬 보장
-        const sorted = loaded.sort((a, b) => {
-          const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-          const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-          return dateB - dateA;
-        });
+          // ✅ [핵심] StoreListScreen 필터/표시 스키마 정규화 + ownerIsAdmin 보강용
+          const normalized = await Promise.all(
+            loaded.map(async (item) => {
+              // 1) 좌표 통일: coords로 제공
+              const rawCoords =
+                item?.coords ||
+                (item?.location && typeof item.location === "object"
+                  ? { latitude: item.location.latitude, longitude: item.location.longitude }
+                  : null);
 
-        setStores(sorted);
-      });
-    } else {
-      setStores([]);
-    }
+              const coords =
+                rawCoords && rawCoords.latitude != null && rawCoords.longitude != null
+                  ? { latitude: Number(rawCoords.latitude), longitude: Number(rawCoords.longitude) }
+                  : null;
+
+              // 2) 위치 텍스트 통일: location은 "문자열"로 제공 (화면 표시용)
+              const locationText =
+                typeof item.location === "string"
+                  ? item.location
+                  : (item.address || item.locationText || item.place || item.placeName || "");
+
+              // 3) 타이틀 통일: StoreListScreen에서 item.title/item.storeName 사용
+              const title = item.title || item.name || item.storeName || "";
+
+              // 4) createdAt 정규화 (정렬/표시 안전성)
+              const createdAtMs = item.createdAt ? new Date(item.createdAt).getTime() : 0;
+
+              // 5) 작성자 admin 여부 (거리 무제한 표시용)
+              const ownerIsAdmin =
+                typeof item.ownerIsAdmin === "boolean"
+                  ? item.ownerIsAdmin
+                  : await getOwnerIsAdminCached(item.ownerId);
+
+              return {
+                ...item,
+                title,
+                storeName: item.storeName || title,
+                address: item.address || locationText || "위치 정보 없음",
+                location:
+  (item?.location && typeof item.location === "object" && item.location.latitude != null && item.location.longitude != null)
+    ? { latitude: Number(item.location.latitude), longitude: Number(item.location.longitude) }
+    : coords,
+
+// 거리계산용은 coords도 그대로 유지 (기존 로직 호환)
+coords,
+
+createdAtMs,
+ownerIsAdmin,
+              };
+            })
+          );
+
+          // ✅ 가게 데이터도 날짜 기준 최신순 정렬 보장
+          const sorted = normalized.sort((a, b) => {
+            const dateA = a.createdAt ? new Date(a.createdAt).getTime() : (a.createdAtMs || 0);
+            const dateB = b.createdAt ? new Date(b.createdAt).getTime() : (b.createdAtMs || 0);
+            return dateB - dateA;
+          });
+
+          if (alive) setRawStores(sorted);
+        } catch (e) {
+          console.warn("stores onSnapshot 처리 실패:", e);
+          if (alive) setRawStores([]);
+        }
+      },
+      (e) => {
+        console.warn("stores onSnapshot Error:", e);
+        if (alive) setRawStores([]);
+
+        // ✅ 에러가 나도 홈이 영구 봉쇄되지 않도록: refreshKey 기준 1회만 true 처리
+        if (storesFirstSnapshotKeyRef.current !== storesRefreshKey) {
+          storesFirstSnapshotKeyRef.current = storesRefreshKey;
+          setStoresLoaded(true);
+        }
+      }
+    );
 
     return () => {
+      alive = false;
       if (unsub) unsub();
     };
-  }, [user, storeLimit, blockedUsers]);
+  }, [storeLimit, storesRefreshKey]);
+
+  // ✅ [추가] rawStores + blockedUsers로 stores 파생(차단 변경 시에도 즉시 반영)
+  useEffect(() => {
+    const loaded = [];
+    for (const s of rawStores || []) {
+      if (!blockedUsers.includes(s?.ownerId)) {
+        loaded.push(s);
+      }
+    }
+
+    // ✅ 가게 데이터도 날짜 기준 최신순 정렬 보장
+    const sorted = loaded.sort((a, b) => {
+      const dateA = a.createdAt ? new Date(a.createdAt).getTime() : (a.createdAtMs || 0);
+      const dateB = b.createdAt ? new Date(b.createdAt).getTime() : (b.createdAtMs || 0);
+      return dateB - dateA;
+    });
+
+    setStores(sorted);
+  }, [rawStores, blockedUsers]);
 
   const loadMorePosts = () => {
     setPostLimit((prev) => prev + 5);
@@ -835,6 +1004,14 @@ export const AppProvider = ({ children }) => {
   // ✅ [추가] 가게 목록 더 불러오기 함수
   const loadMoreStores = () => {
     setStoreLimit((prev) => prev + 5);
+  };
+
+  // ✅ [추가] 진짜 새로고침(구독 재시작 + loaded 플래그 리셋)
+  const refreshPostsAndStores = async () => {
+    setPostsLoaded(false);
+    setStoresLoaded(false);
+    setPostsRefreshKey((prev) => prev + 1);
+    setStoresRefreshKey((prev) => prev + 1);
   };
 
   /* =========================
@@ -926,6 +1103,7 @@ export const AppProvider = ({ children }) => {
           setCurrentLocation(dong);
           setMyCoords(coords);
           setIsVerified(true);
+          setLocationChecked(true);
           return;
         }
       }
@@ -940,6 +1118,7 @@ export const AppProvider = ({ children }) => {
     let { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== "granted") {
       setCurrentLocation("위치 권한 필요");
+      setLocationChecked(true);
       return;
     }
 
@@ -948,6 +1127,7 @@ export const AppProvider = ({ children }) => {
       const coords = await getBestCoordsWithShortWatch();
       if (!coords?.latitude || !coords?.longitude) {
         setCurrentLocation("위치 확인 불가");
+        setLocationChecked(true);
         return;
       }
 
@@ -985,6 +1165,7 @@ export const AppProvider = ({ children }) => {
 
         setCurrentLocation(dong);
         setIsVerified(true);
+        setLocationChecked(true);
         return;
       }
 
@@ -1004,6 +1185,7 @@ export const AppProvider = ({ children }) => {
 
                 setCurrentLocation(cachedDong);
                 setIsVerified(true);
+                setLocationChecked(true);
                 return;
               }
             }
@@ -1099,6 +1281,7 @@ export const AppProvider = ({ children }) => {
 
             setCurrentLocation(kakaoDong);
             setIsVerified(true);
+            setLocationChecked(true);
             return;
           }
         }
@@ -1109,8 +1292,10 @@ export const AppProvider = ({ children }) => {
       if (savedDong) {
         setCurrentLocation(savedDong);
       }
+      setLocationChecked(true);
     } catch (e) {
       setCurrentLocation("위치 확인 불가");
+      setLocationChecked(true);
     }
   };
 
@@ -1344,7 +1529,7 @@ export const AppProvider = ({ children }) => {
     await addDoc(collection(db, "posts"), {
       ...newPostData,
       // ✅ [수정] 업종(category)을 포함한 모든 데이터가 무조건 DB에 박히도록 처리
-      category: newPostData.category, 
+      category: newPostData.category,
       ownerId: user.uid,
       ownerEmail: user.email,
       createdAt: new Date().toISOString(),
@@ -1376,7 +1561,7 @@ export const AppProvider = ({ children }) => {
         setCurrentLocation,
         myCoords,
         setMyCoords,
-        
+
         posts,
         stores, // ✅ [추가] stores 내보내기
         addPost,
@@ -1386,9 +1571,23 @@ export const AppProvider = ({ children }) => {
         loadMorePosts,
         loadMoreStores, // ✅ [추가] loadMoreStores 내보내기
 
+        // ✅ [추가] 홈 새로고침(진짜 새로고침)
+        refreshPostsAndStores,
+
         getDistanceFromLatLonInKm,
         verifyLocation,
         isVerified,
+
+        // ✅ [추가] 홈 게이팅(커스텀 모달)용 준비 상태
+        authChecked,
+        locationChecked,
+        postsLoaded,
+        storesLoaded,
+        isBooting,
+
+        // ✅ [추가] HomeScreen 전용 게이트(최소 조건)
+        isHomeReady,
+        isHomeBooting,
 
         isPremium,
         premiumUntil,

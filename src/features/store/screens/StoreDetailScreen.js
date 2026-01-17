@@ -8,15 +8,13 @@ import {
   ScrollView, 
   TouchableOpacity, 
   Linking, 
-  Platform,
   Dimensions
 } from "react-native";
 
 import { Image } from "expo-image";
 import ImageDetailModal from "../../../components/ImageDetailModal";
 
-
-import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import MapView, { Marker } from "react-native-maps";
 import { deleteDoc, doc } from "firebase/firestore";
@@ -25,8 +23,9 @@ import { theme } from "../../../theme";
 import { db } from "../../../firebaseConfig";
 import { useAppContext } from "../../../app/providers/AppContext";
 import CustomModal from "../../../components/CustomModal";
+import { ROUTES } from "../../../app/navigation/routes"; // ✅ 라우트 상수 추가
 
-const { width } = Dimensions.get("window");
+const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
 // ✅ 신고 사유 목록 정의
 const REPORT_REASONS = [
@@ -49,7 +48,6 @@ export default function StoreDetailScreen({ route, navigation }) {
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
 
   // ✅ 모달 통합 관리 상태
-  // type: 'alert' (단순알림), 'confirm' (삭제확인), 'report' (신고사유선택)
   const [modalVisible, setModalVisible] = useState(false);
   const [modalConfig, setModalConfig] = useState({
     title: "",
@@ -101,12 +99,21 @@ export default function StoreDetailScreen({ route, navigation }) {
     }
   };
 
-  // ✅ 가게 삭제 로직 (커스텀 모달 적용)
+  // ✅ 수정하기 (StoreWriteScreen으로 이동)
+  const handleEdit = () => {
+    // ROUTES.STORE_WRITE 또는 해당 스크린 이름으로 이동하며 데이터 전달
+    navigation.navigate(ROUTES.STORE_WRITE || "StoreWrite", { 
+      mode: "edit", 
+      storeData: store 
+    });
+  };
+
+  // ✅ 가게 삭제 로직
   const handleDelete = () => {
     setModalConfig({
       title: "가게 삭제",
       message: "정말로 이 가게 정보를 삭제하시겠습니까?",
-      type: "confirm", // 확인/취소 버튼이 뜨는 모달
+      type: "confirm", 
       onConfirm: confirmDelete,
     });
     setModalVisible(true);
@@ -119,7 +126,6 @@ export default function StoreDetailScreen({ route, navigation }) {
 
     try {
       await deleteDoc(doc(db, "stores", store.id));
-      // 삭제 성공 후 알림 -> 확인 누르면 뒤로가기
       setModalConfig({
         title: "삭제 완료",
         message: "가게 정보가 삭제되었습니다.",
@@ -138,86 +144,105 @@ export default function StoreDetailScreen({ route, navigation }) {
     }
   };
 
-  // ✅ 신고 버튼 클릭 (사유 선택 모달 띄우기)
+  // ✅ 신고 버튼 클릭
   const handleReportPress = () => {
     setModalConfig({
       title: "신고하기",
       message: "신고 사유를 선택해주세요.",
-      type: "report", // ✅ 사유 선택용 타입
+      type: "report", 
       onConfirm: null, 
     });
     setModalVisible(true);
   };
 
-  // ✅ 실제 신고 접수 로직
   const submitReport = (reason) => {
     setModalVisible(false);
-    // reportUser(targetUserId, contentId, reason, type)
     reportUser(store.ownerId, store.id, reason, "store");
   };
 
-  // 대표 이미지
-  const mainImage = (store.images && store.images.length > 0) 
-    ? { uri: (typeof store.images[0] === 'string' ? store.images[0] : store.images[0]?.uri) }
-    : null;
+  // ✅ 이미지 목록 준비 (가로 스크롤용)
+  const images = store.images && store.images.length > 0 ? store.images : [];
 
   return (
     <View style={styles.container}>
       <ScrollView contentContainerStyle={{ paddingBottom: 100 }}>
         
-        {/* 상단 이미지 */}
+        {/* ✅ 상단 이미지 (가로 스크롤 가능하도록 수정) */}
         <View style={styles.imageContainer}>
-          {mainImage ? (
-            <TouchableOpacity 
-              activeOpacity={0.9} 
-              onPress={() => {
-                setCurrentImageIndex(0); // 상세페이지 대표 이미지는 0번 인덱스
-                setIsImageViewVisible(true);
-              }}
+          {images.length > 0 ? (
+            <ScrollView 
+              horizontal 
+              pagingEnabled 
+              decelerationRate="fast" // ✅ 스와이프 감도 묵직하게 변경
+              showsHorizontalScrollIndicator={false}
+              style={{ width: SCREEN_WIDTH, height: 250 }}
             >
-              <Image 
-                source={mainImage} 
-                style={styles.mainImage} 
-                contentFit="cover"
-                transition={200}
-                cachePolicy="disk"
-              />
-            </TouchableOpacity>
+              {images.map((img, index) => {
+                const uri = typeof img === 'string' ? img : img?.uri;
+                return (
+                  <TouchableOpacity 
+                    key={index}
+                    activeOpacity={0.9} 
+                    onPress={() => {
+                      setCurrentImageIndex(index);
+                      setIsImageViewVisible(true);
+                    }}
+                    style={{ width: SCREEN_WIDTH, height: 250 }}
+                  >
+                    <Image 
+                      source={{ uri }} 
+                      style={styles.mainImage} 
+                      contentFit="cover"
+                      transition={200}
+                      cachePolicy="disk"
+                    />
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
           ) : (
             <View style={[styles.mainImage, { backgroundColor: '#333', alignItems: 'center', justifyContent: 'center' }]}>
               <MaterialIcons name="store" size={60} color="#555" />
             </View>
           )}
-          
-          {/* 뒤로가기 버튼 */}
-          <TouchableOpacity 
-            style={[styles.backBtn, { top: insets.top + 10 }]} 
-            onPress={() => navigation.goBack()}
-          >
-            <Ionicons name="arrow-back" size={24} color="white" />
-          </TouchableOpacity>
 
-          {/* ✅ 신고 버튼 (본인 아니면 노출) */}
-          {!isOwner && (
-            <TouchableOpacity 
-              style={[styles.reportBtn, { top: insets.top + 10 }]} 
-              onPress={handleReportPress}
-            >
-              <MaterialIcons name="report-problem" size={24} color="#FF6B6B" />
-            </TouchableOpacity>
+          {/* ❌ 요청대로 뒤로가기 버튼 삭제됨 (여기 있던 코드 제거) */}
+          {/* ❌ 요청대로 기존 신고 버튼 삭제됨 (여기 있던 코드 제거) */}
+          
+          {/* 이미지 개수 표시 (이미지가 2장 이상일 때만) */}
+          {images.length > 1 && (
+            <View style={styles.imageCountBadge}>
+              <Text style={styles.imageCountText}>
+                 사진 옆으로 넘겨보기 <MaterialIcons name="arrow-forward" size={10} color="white"/>
+              </Text>
+            </View>
           )}
         </View>
 
         {/* 컨텐츠 영역 */}
         <View style={styles.contentContainer}>
+          
+          {/* ✅ 헤더 행 (상호명 + 점3개 버튼) */}
           <View style={styles.headerRow}>
-            <Text style={styles.storeName}>{store.name}</Text>
-            {store.isPremium && (
-              <MaterialIcons name="verified" size={20} color={theme.primary} style={{ marginLeft: 6 }} />
+            <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}>
+              <Text style={styles.storeName}>{store.name}</Text>
+              {store.isPremium && (
+                <MaterialIcons name="verified" size={20} color={theme.primary} style={{ marginLeft: 6 }} />
+              )}
+            </View>
+
+            {/* ✅ 상호명 오른쪽 끝(같은 줄)에 점 3개 메뉴 (본인 아닐 때 신고용) */}
+            {!isOwner && (
+              <TouchableOpacity onPress={handleReportPress} style={{ padding: 4 }}>
+                <MaterialIcons name="more-vert" size={24} color="white" />
+              </TouchableOpacity>
             )}
           </View>
           
-          <Text style={styles.category}>{store.category} · {store.location?.dong || "위치 정보 없음"}</Text>
+          {/* ✅ 위치 정보: 인증된 동 값 표시 */}
+          <Text style={styles.category}>
+            {store.category} · {store.location?.dong || store.region_2depth_name || "위치 인증됨"}
+          </Text>
 
           {/* 전화/링크 버튼 */}
           <View style={styles.actionRow}>
@@ -228,7 +253,7 @@ export default function StoreDetailScreen({ route, navigation }) {
             
             <TouchableOpacity style={[styles.actionBtn, { backgroundColor: '#333' }]} onPress={handleLink}>
               <MaterialIcons name="link" size={20} color="white" />
-              <Text style={[styles.actionBtnText, { color: 'white' }]}>홈페이지/배달</Text>
+              <Text style={[styles.actionBtnText, { color: 'white' }]}>홈페이지</Text>
             </TouchableOpacity>
           </View>
 
@@ -265,12 +290,22 @@ export default function StoreDetailScreen({ route, navigation }) {
             </View>
           )}
 
-          {/* 삭제 버튼 (관리자/본인) */}
+          {/* ✅ 수정 및 삭제 버튼 영역 (관리자/본인) */}
           {canDelete && (
-            <TouchableOpacity style={styles.deleteBtn} onPress={handleDelete}>
-              <MaterialIcons name="delete-outline" size={20} color={theme.danger} />
-              <Text style={styles.deleteBtnText}>이 가게 삭제하기</Text>
-            </TouchableOpacity>
+            <View style={styles.ownerBtnRow}>
+              {/* ✅ 본인일 때 수정하기 버튼 추가 */}
+              {isOwner && (
+                <TouchableOpacity style={styles.editBtn} onPress={handleEdit}>
+                  <MaterialIcons name="edit" size={20} color="white" />
+                  <Text style={styles.editBtnText}>정보 수정</Text>
+                </TouchableOpacity>
+              )}
+              
+              <TouchableOpacity style={styles.deleteBtn} onPress={handleDelete}>
+                <MaterialIcons name="delete-outline" size={20} color={theme.danger} />
+                <Text style={styles.deleteBtnText}>삭제하기</Text>
+              </TouchableOpacity>
+            </View>
           )}
 
         </View>
@@ -327,29 +362,16 @@ const styles = StyleSheet.create({
   imageContainer: { width: '100%', height: 250, position: 'relative' },
   mainImage: { width: '100%', height: '100%' },
   
-  backBtn: {
+  imageCountBadge: {
     position: 'absolute',
-    left: 16,
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 10,
-  },
-
-  reportBtn: {
-    position: 'absolute',
+    bottom: 30, // 컨텐츠 컨테이너랑 겹치지 않게 조절
     right: 16,
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 10,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 12,
   },
+  imageCountText: { color: 'white', fontSize: 12, fontWeight: 'bold' },
 
   contentContainer: {
     padding: 20,
@@ -359,7 +381,12 @@ const styles = StyleSheet.create({
     marginTop: -24, 
   },
 
-  headerRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
+  headerRow: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    justifyContent: 'space-between', // 양쪽 정렬 (제목 - 점3개)
+    marginBottom: 4 
+  },
   storeName: { fontSize: 24, fontWeight: 'bold', color: 'white' },
   category: { fontSize: 14, color: '#888', marginBottom: 20 },
 
@@ -391,8 +418,28 @@ const styles = StyleSheet.create({
   },
   map: { flex: 1 },
 
-  deleteBtn: {
+  // ✅ 버튼 행 스타일 (수정/삭제 버튼)
+  ownerBtnRow: {
+    flexDirection: 'row',
+    gap: 10,
     marginTop: 40,
+  },
+  editBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#555',
+    borderRadius: 12,
+    backgroundColor: '#333',
+    gap: 8,
+  },
+  editBtnText: { color: 'white', fontWeight: 'bold', fontSize: 15 },
+
+  deleteBtn: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',

@@ -84,7 +84,8 @@ export default function StoreListScreen({ navigation }) {
     getDistanceFromLatLonInKm, 
     loadMoreStores, // ✅ 가게 목록 더 불러오기 함수 (없으면 loadMorePosts 사용)
     checkHotplaceEligibility,
-    purchaseHotplaceExtra
+    purchaseHotplaceExtra,
+    isPremium
   } = useAppContext();
   
   const insets = useSafeAreaInsets();
@@ -109,7 +110,35 @@ export default function StoreListScreen({ navigation }) {
 
     if (!sourceData) return [];
 
-    const processed = sourceData.reduce((acc, item) => {
+    // ✅ [추가] stores 원본 필드(location: {lat,lng} / address / name 등)와 화면에서 기대하는 필드(title/location(string)/coords)를 useMemo 내부에서만 정규화
+    const normalized = (sourceData || []).map((item) => {
+      const hasLatLngObj =
+        item?.location &&
+        typeof item.location === "object" &&
+        item.location !== null &&
+        typeof item.location.latitude === "number" &&
+        typeof item.location.longitude === "number";
+
+      const coords = item?.coords || (hasLatLngObj ? item.location : null);
+
+      const displayLocation =
+        typeof item?.location === "string"
+          ? item.location
+          : (item?.address || "위치 정보 없음");
+
+      const title = item?.title || item?.name || item?.storeName;
+
+      return {
+        ...item,
+        type: item?.type || "store",
+        title,
+        storeName: item?.storeName || item?.name,
+        location: displayLocation,
+        coords: coords || item?.coords,
+      };
+    });
+
+    const processed = normalized.reduce((acc, item) => {
       // 내 위치나 가게 위치 정보가 없으면 목록 뒤쪽으로 보내거나(거리 표시X) 처리
       if (!myCoords || !item.coords) {
          acc.push({ ...item, distText: "", distVal: 99999 });
@@ -122,9 +151,8 @@ export default function StoreListScreen({ navigation }) {
         item.coords.latitude, item.coords.longitude
       );
 
-      // ✅ [핵심] 관리자(isAdmin)이거나, 거리가 10km 이내인 경우만 표시
-      // (가게는 일반 글보다 탐색 범위가 넓으므로 10km로 잡았으나, 5km 원하시면 숫자만 바꾸세요)
-      if (isAdmin || dist <= 10) {
+      // ✅ [핵심] 관리자(isAdmin)이거나, ownerIsAdmin이면 거리 무제한, 아니면 10km 이내만 표시
+      if (isAdmin || item.ownerIsAdmin || dist <= 10) {
         acc.push({ 
           ...item, 
           distText: `${dist.toFixed(1)}km`, 
@@ -160,7 +188,7 @@ export default function StoreListScreen({ navigation }) {
 
   const handleRegisterPress = async () => {
     // 1. 프리미엄 유저면 즉시 통과
-    if (user && user.isPremium) {
+    if (user && isPremium) {
        goHotplaceWrite({ paymentType: "membership", purchaseInfo: null });
        return;
     }

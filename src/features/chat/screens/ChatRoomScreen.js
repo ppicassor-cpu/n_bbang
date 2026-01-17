@@ -21,6 +21,11 @@ import * as ImageManipulator from "expo-image-manipulator";
 
 import { ROUTES } from "../../../app/navigation/routes";
 import CustomModal from "../../../components/CustomModal";
+// ✅ [추가] 갤러리 모달 및 이미지 확대 모달 임포트
+import CustomImagePickerModal from "../../../components/CustomImagePickerModal";
+import ImageDetailModal from "../../../components/ImageDetailModal";
+// ✅ [수정] hasBadWord -> hasProfanity 로 변경 (욕설만 검사)
+import { hasProfanity } from "../../../utils/badWordFilter";
 
 const REPORT_REASONS = [
   "광고 / 홍보성 채팅",
@@ -54,6 +59,29 @@ export default function ChatRoomScreen({ route, navigation }) {
 
   // ✅ [추가] 이미지 업로드 로딩 상태
   const [uploading, setUploading] = useState(false);
+  // ✅ [추가] 갤러리 모달 상태
+  const [galleryVisible, setGalleryVisible] = useState(false);
+
+  // ✅ [추가] 이미지 상세보기(확대) 상태
+  const [isImageViewerVisible, setIsImageViewerVisible] = useState(false);
+  const [selectedImageUri, setSelectedImageUri] = useState("");
+
+  // ✅ [추가] 비속어 경고 모달 상태
+  const [badWordModalVisible, setBadWordModalVisible] = useState(false);
+
+  // ✅ [추가] 나가기 중복 방지
+  const [leaving, setLeaving] = useState(false);
+
+  // ✅ [추가] 나가기 실패 커스텀 모달
+  const [leaveErrorModalVisible, setLeaveErrorModalVisible] = useState(false);
+  const [leaveErrorMessage, setLeaveErrorMessage] = useState("");
+
+  // ✅ [추가] 이미지 전송 실패 커스텀 모달
+  const [imageErrorModalVisible, setImageErrorModalVisible] = useState(false);
+  const [imageErrorMessage, setImageErrorMessage] = useState("");
+
+  // ✅ [추가] 차단하고 나가기 확인 커스텀 모달
+  const [blockLeaveModalVisible, setBlockLeaveModalVisible] = useState(false);
 
   const keyboardHeight = useRef(new Animated.Value(0)).current;
   const flatListRef = useRef(null);
@@ -201,6 +229,13 @@ export default function ChatRoomScreen({ route, navigation }) {
     if (!roomId) return;
     if (isClosed) return;
     if (!text.trim()) return;
+
+    // ✅ [수정] hasBadWord -> hasProfanity (욕설만 검사)
+    if (hasProfanity(text)) {
+      setBadWordModalVisible(true); // 경고 모달 띄움
+      return; // 전송 중단
+    }
+
     const tempText = text;
     setText("");
     try {
@@ -210,56 +245,63 @@ export default function ChatRoomScreen({ route, navigation }) {
     }
   };
 
-  // ✅ [추가] 이미지 선택, 압축, 전송 로직
-  const handlePickAndSendImage = async () => {
+  // ✅ [수정] 갤러리 모달에서 이미지 선택 시 처리 (압축 및 전송)
+  const handleGallerySelect = async (selectedUris) => {
     if (isGhost || isClosed) return;
+    if (!selectedUris || selectedUris.length === 0) return;
+
+    setUploading(true); // 로딩 시작 -> 모달 뜸
 
     try {
-      // 1. 이미지 선택
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: false, 
-        quality: 1,
-      });
+      // 선택된 이미지들을 순차적으로 처리
+      for (const uri of selectedUris) {
+        if (!uri) continue;
 
-      if (result.canceled) return;
+        // 1. 이미지 압축 (600px, 0.4, WebP)
+        const manipResult = await ImageManipulator.manipulateAsync(
+          uri,
+          [{ resize: { width: 600 } }],
+          { compress: 0.4, format: ImageManipulator.SaveFormat.WEBP }
+        );
 
-      setUploading(true);
-      const originalUri = result.assets[0].uri;
+        // 2. Firebase Storage 업로드
+        const response = await fetch(manipResult.uri);
+        const blob = await response.blob();
+        const filename = `chat_images/${roomId}/${Date.now()}_${user.uid}_${Math.random().toString(36).substring(7)}.webp`;
+        const storageRef = ref(storage, filename);
 
-      // 2. 이미지 압축 (600px, 0.4, WebP)
-      const manipResult = await ImageManipulator.manipulateAsync(
-        originalUri,
-        [{ resize: { width: 600 } }], 
-        { compress: 0.4, format: ImageManipulator.SaveFormat.WEBP }
-      );
+        await uploadBytes(storageRef, blob);
+        const downloadUrl = await getDownloadURL(storageRef);
 
-      // 3. Firebase Storage 업로드
-      const response = await fetch(manipResult.uri);
-      const blob = await response.blob();
-      const filename = `chat_images/${roomId}/${Date.now()}_${user.uid}.webp`;
-      const storageRef = ref(storage, filename);
-      
-      await uploadBytes(storageRef, blob);
-      const downloadUrl = await getDownloadURL(storageRef);
-
-      // 4. 메시지 전송 (텍스트는 빈 값, image 필드에 URL)
-      await sendMessage(roomId, "", downloadUrl); // chatService가 image 인자를 처리한다고 가정
-
+        // 3. 메시지 전송 (텍스트는 빈 값, image 필드에 URL)
+        await sendMessage(roomId, "", downloadUrl);
+      }
     } catch (e) {
-      console.error("Image upload error:", e);
-      Alert.alert("오류", "이미지 전송에 실패했습니다.");
+      console.error("Image upload/send error:", e);
+      // ✅ [수정] Alert.alert 대신 커스텀 모달로 표시
+      const msg = `${e?.code || "unknown"}\n${e?.message || ""}`.trim();
+      setImageErrorMessage(msg || "이미지 전송 중 문제가 발생했습니다.");
+      setImageErrorModalVisible(true);
     } finally {
-      setUploading(false);
+      setUploading(false); // 로딩 끝 -> 모달 사라짐
+      setGalleryVisible(false); // 갤러리 모달 닫기
     }
   };
 
   const handleLeave = async () => {
     if (!roomId) return;
-    
+    if (leaving) return;
+
+    setLeaving(true);
+
     if (isGhost) {
       setLeaveModalVisible(false);
-      navigation.goBack();
+      setIsHeaderMenuOpen(false);
+      setLeaving(false);
+      navigation.reset({
+        index: 0,
+        routes: [{ name: ROUTES.HOME }],
+      });
       return;
     }
 
@@ -270,10 +312,22 @@ export default function ChatRoomScreen({ route, navigation }) {
         await leaveRoom(roomId);
       }
       setLeaveModalVisible(false);
-      navigation.goBack();
+      setIsHeaderMenuOpen(false);
+      navigation.reset({
+        index: 0,
+        routes: [{ name: ROUTES.HOME }],
+      });
     } catch (e) {
       setLeaveModalVisible(false);
+      setIsHeaderMenuOpen(false);
       console.error("방 나가기 실패:", e);
+
+      // ✅ [수정] Alert.alert 대신 커스텀 모달로 표시
+      const msg = `${e?.code || "unknown"}\n${e?.message || ""}`.trim();
+      setLeaveErrorMessage(msg || "나가기 처리 중 오류가 발생했습니다.");
+      setLeaveErrorModalVisible(true);
+    } finally {
+      setLeaving(false);
     }
   };
 
@@ -322,6 +376,23 @@ export default function ChatRoomScreen({ route, navigation }) {
     navigation.navigate(ROUTES.HOME); 
   };
 
+  const confirmBlockAndLeave = async () => {
+    setBlockLeaveModalVisible(false);
+    if (isGhost) return; 
+
+    if (!roomId) return;
+    if (!roomOwnerId || roomOwnerId === user?.uid) return;
+
+    if (typeof blockUser === "function") {
+      await blockUser(roomOwnerId);
+    }
+    await leaveRoom(roomId);
+    navigation.reset({
+      index: 0,
+      routes: [{ name: ROUTES.HOME }],
+    });
+  };
+
   const handleBlockAndLeave = () => {
     setIsHeaderMenuOpen(false);
     if (isGhost) return; 
@@ -329,20 +400,8 @@ export default function ChatRoomScreen({ route, navigation }) {
     if (!roomId) return;
     if (!roomOwnerId || roomOwnerId === user?.uid) return;
 
-    Alert.alert("차단하고 나가기", "방장을 차단하고 채팅방을 나가시겠습니까?", [
-      { text: "취소", style: "cancel" },
-      {
-        text: "차단 및 나가기",
-        style: "destructive",
-        onPress: async () => {
-          if (typeof blockUser === "function") {
-            await blockUser(roomOwnerId);
-          }
-          await leaveRoom(roomId);
-          navigation.goBack();
-        },
-      },
-    ]);
+    // ✅ [수정] Alert.alert 대신 커스텀 모달로 표시
+    setBlockLeaveModalVisible(true);
   };
 
   const handleGoToPost = () => {
@@ -381,14 +440,27 @@ export default function ChatRoomScreen({ route, navigation }) {
           </Text>
         )}
         <View style={{ flexDirection: isMy ? "row-reverse" : "row", alignItems: "flex-end" }}>
-          <View style={[styles.bubble, isMy ? styles.myBubble : styles.otherBubble]}>
-            {/* ✅ [추가] 이미지 메시지 렌더링 */}
+          {/* ✅ [수정] 이미지가 있으면 배경색(녹색)과 패딩을 없앰 */}
+          <View style={[
+            styles.bubble, 
+            isMy ? styles.myBubble : styles.otherBubble,
+            item.image && { backgroundColor: "transparent", padding: 0 } 
+          ]}>
+            {/* ✅ [수정] 이미지를 TouchableOpacity로 감싸 확대 기능 연결 */}
             {item.image ? (
-              <Image 
-                source={{ uri: item.image }} 
-                style={{ width: 200, height: 200, borderRadius: 8 }} 
-                resizeMode="cover"
-              />
+              <TouchableOpacity 
+                activeOpacity={0.9} 
+                onPress={() => {
+                  setSelectedImageUri(item.image);
+                  setIsImageViewerVisible(true);
+                }}
+              >
+                <Image 
+                  source={{ uri: item.image }} 
+                  style={{ width: 200, height: 200, borderRadius: 8 }} 
+                  resizeMode="cover"
+                />
+              </TouchableOpacity>
             ) : (
               <Text style={[styles.msgText, isMy ? styles.myMsgText : styles.otherMsgText]}>{item.text}</Text>
             )}
@@ -429,7 +501,7 @@ export default function ChatRoomScreen({ route, navigation }) {
           </View>
           
           <View style={styles.postLinkArrow}>
-            <Text style={{color: '#AAA', fontSize: 12, marginRight: 4}}>게시글</Text>
+            <Text style={{color: '#AAA', fontSize: 12, marginRight: 4}}>게시글로 이동</Text>
             <MaterialIcons name="arrow-forward-ios" size={14} color="#AAA" />
           </View>
         </TouchableOpacity>
@@ -495,13 +567,14 @@ export default function ChatRoomScreen({ route, navigation }) {
             </View>
         ) : (
             <View style={[styles.inputContainer, { paddingBottom: insets.bottom + 10 }]}>
-              {/* ✅ [추가] 이미지 전송 버튼 */}
-              <TouchableOpacity onPress={handlePickAndSendImage} disabled={uploading || isClosed} style={{ marginRight: 10 }}>
-                {uploading ? (
-                  <ActivityIndicator size="small" color={theme.primary} />
-                ) : (
-                  <MaterialIcons name="add-photo-alternate" size={28} color="grey" />
-                )}
+              {/* ✅ [수정] 이미지 전송 버튼: 갤러리 모달 열기 */}
+              <TouchableOpacity 
+                onPress={() => setGalleryVisible(true)} 
+                disabled={uploading || isClosed} 
+                style={{ marginRight: 10 }}
+              >
+                {/* 하단 스피너는 제거하고 모달로 대체하므로 여기서는 아이콘만 표시 */}
+                <MaterialIcons name="add-photo-alternate" size={28} color="grey" />
               </TouchableOpacity>
 
               <TextInput
@@ -575,6 +648,67 @@ export default function ChatRoomScreen({ route, navigation }) {
             setAlreadyReportedModalVisible(false);
             navigation.navigate(ROUTES.HOME); 
         }}
+      />
+
+      {/* ✅ [추가] 업로드 중 팝업 (자동으로 사라짐) */}
+      <CustomModal
+        visible={uploading}
+        title="이미지 업로드중 ⟳"
+        message="이미지를 전송하고 있습니다..."
+        loading={true}
+      />
+
+      {/* ✅ [추가] 갤러리 선택 모달 */}
+      <CustomImagePickerModal
+        visible={galleryVisible}
+        onClose={() => setGalleryVisible(false)}
+        onSelect={handleGallerySelect}
+        currentCount={0} 
+      />
+
+      {/* ✅ [추가] 이미지 상세보기(확대) 모달 */}
+      <ImageDetailModal
+        visible={isImageViewerVisible}
+        images={[selectedImageUri]}
+        index={0}
+        onClose={() => setIsImageViewerVisible(false)}
+      />
+
+      {/* ✅ [추가] 비속어 감지 경고 모달 */}
+      <CustomModal
+        visible={badWordModalVisible}
+        title="경고"
+        message={"부적절한 단어(욕설, 비방 등)가 포함되어 있습니다.\n바른 말을 사용해주세요."}
+        onConfirm={() => setBadWordModalVisible(false)}
+        confirmText="확인"
+      />
+
+      {/* ✅ [추가] 나가기 실패 커스텀 모달 */}
+      <CustomModal
+        visible={leaveErrorModalVisible}
+        title="나가기 실패"
+        message={leaveErrorMessage}
+        onConfirm={() => setLeaveErrorModalVisible(false)}
+        confirmText="확인"
+      />
+
+      {/* ✅ [추가] 이미지 전송 실패 커스텀 모달 */}
+      <CustomModal
+        visible={imageErrorModalVisible}
+        title="오류"
+        message={imageErrorMessage}
+        onConfirm={() => setImageErrorModalVisible(false)}
+        confirmText="확인"
+      />
+
+      {/* ✅ [추가] 차단하고 나가기 확인 커스텀 모달 */}
+      <CustomModal
+        visible={blockLeaveModalVisible}
+        title="차단하고 나가기"
+        message="방장을 차단하고 채팅방을 나가시겠습니까?"
+        type="confirm"
+        onConfirm={confirmBlockAndLeave}
+        onCancel={() => setBlockLeaveModalVisible(false)}
       />
 
     </View>

@@ -8,6 +8,11 @@ import MapView, { Marker } from "react-native-maps";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { MaterialIcons } from "@expo/vector-icons";
 
+// ✅ [추가] 닉네임 조회 및 숫자 증가를 위해 firebase 관련 모듈 추가
+// increment 추가됨
+import { doc, getDoc, updateDoc, increment, runTransaction, arrayUnion } from "firebase/firestore";
+import { db } from "../../../firebaseConfig";
+
 import { theme } from "../../../theme";
 import { ROUTES } from "../../../app/navigation/routes";
 import { useAppContext } from "../../../app/providers/AppContext";
@@ -32,6 +37,9 @@ export default function DetailScreen({ route, navigation }) {
   
   const [post, setPost] = useState(initialPost || null);
   const [imgPage, setImgPage] = useState(1);
+
+  // ✅ [추가] 작성자 닉네임 상태
+  const [ownerNickname, setOwnerNickname] = useState("");
 
   const [isImageViewVisible, setIsImageViewVisible] = useState(false);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
@@ -74,6 +82,34 @@ export default function DetailScreen({ route, navigation }) {
     }
   }, [posts, initialPost?.id]);
 
+  // ✅ [추가] 작성자 닉네임 가져오기 로직
+  useEffect(() => {
+    const fetchNickname = async () => {
+      if (!post?.ownerId) return;
+
+      // 샘플 데이터 처리
+      if (post.ownerId === "SAMPLE_DATA") {
+        setOwnerNickname("운영팀 (예시)");
+        return;
+      }
+
+      try {
+        const userDoc = await getDoc(doc(db, "users", post.ownerId));
+        if (userDoc.exists()) {
+          const data = userDoc.data();
+          // displayName이 없으면 이메일 앞부분 사용
+          setOwnerNickname(data.displayName || data.email?.split("@")[0] || "알 수 없음");
+        } else {
+          setOwnerNickname("탈퇴한 사용자");
+        }
+      } catch (e) {
+        console.error("닉네임 조회 실패:", e);
+      }
+    };
+
+    fetchNickname();
+  }, [post?.ownerId]);
+
   // ✅ 무료나눔 글이 이 화면으로 들어오면 무료나눔 상세로 리다이렉트
   useEffect(() => {
     if (post?.category === "무료나눔") {
@@ -106,7 +142,7 @@ export default function DetailScreen({ route, navigation }) {
   const roomId = `post_${post.id}`;
   const roomName = post.title || "공동구매 채팅방";
 
-  const onPressChat = () => {
+  const onPressChat = async () => {
     // 샘플 데이터인지 확인하여 커스텀 모달 띄우기
     if (post.ownerId === "SAMPLE_DATA") {
       setSampleModalVisible(true);
@@ -114,8 +150,64 @@ export default function DetailScreen({ route, navigation }) {
     }
 
     if (isFull) return;
-    ensureRoom(roomId, roomName, "group", post.ownerId).catch(() => {});
-    navigation.navigate(ROUTES.CHAT_ROOM, { roomId, roomName });
+
+    try {
+      // 1. 먼저 채팅방을 생성/확인합니다.
+      await ensureRoom(roomId, roomName, "group", post.ownerId);
+
+      // 2. ✅ 참여가 DB에 기록되는 순간(= participants에 실제 추가) 기준으로 카운트 증가를 확정
+      //    - 트랜잭션에서 "participants에 없을 때만" participants 추가 + currentParticipants 증가를 함께 처리
+      if (!isMyPost) {
+        let didIncrement = false;
+
+        try {
+          const roomRef = doc(db, "chatRooms", roomId);
+          const postRef = doc(db, "posts", post.id);
+
+          await runTransaction(db, async (tx) => {
+            const roomSnap = await tx.get(roomRef);
+
+            if (!roomSnap.exists()) {
+              throw new Error("chatRooms 문서가 존재하지 않습니다.");
+            }
+
+            const roomData = roomSnap.data() || {};
+            const participants = Array.isArray(roomData.participants) ? roomData.participants : [];
+
+            // 이미 참여한 유저면 아무것도 하지 않음(중복 증가 방지)
+            if (participants.includes(user.uid)) {
+              return;
+            }
+
+            // 참여 기록(= participants 추가) + 참여자 수 증가를 한 번에 확정
+            tx.update(roomRef, {
+              participants: arrayUnion(user.uid),
+            });
+
+            tx.update(postRef, {
+              currentParticipants: increment(1),
+            });
+
+            didIncrement = true;
+          });
+
+          // 로컬 UI 즉시 반영(트랜잭션에서 실제 증가가 발생한 경우에만)
+          if (didIncrement) {
+            setPost(prev => ({ ...prev, currentParticipants: Number(prev.currentParticipants || 0) + 1 }));
+          }
+        } catch (e) {
+          console.error("참여 기록/카운트 업데이트 실패:", e);
+        }
+      }
+
+      // 3. 채팅방으로 이동
+      navigation.navigate(ROUTES.CHAT_ROOM, { roomId, roomName });
+
+    } catch (e) {
+      console.error("채팅방 입장 실패:", e);
+      // 에러 발생 시에도 일단 이동은 시도해볼 수 있음
+      navigation.navigate(ROUTES.CHAT_ROOM, { roomId, roomName });
+    }
   };
 
   const handleEdit = () => {
@@ -129,6 +221,10 @@ export default function DetailScreen({ route, navigation }) {
         status: tempStatus,
         updatedAt: new Date().toISOString() 
       });
+      
+      // ✅ [수정] 로컬 상태 업데이트 (화면 즉시 반영)
+      setPost(prev => ({ ...prev, status: tempStatus }));
+
       setIsDropdownOpen(false);
       setAlertMsg("모집 상태가 성공적으로 변경되었습니다.");
       setSuccessModalVisible(true);
@@ -292,9 +388,19 @@ export default function DetailScreen({ route, navigation }) {
 
           <Text style={styles.content}>{post.content || "내용 없음"}</Text>
 
+          {/* ✅ [수정] 닉네임과 참여인원을 한 줄에 배치 */}
           <View style={styles.infoRow}>
-            <Text style={styles.infoLabel}>참여 인원</Text>
-            <Text style={styles.infoValue}>{post.currentParticipants} / {post.maxParticipants}명</Text>
+            {/* 왼쪽: 작성자 정보 */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Text style={styles.infoLabel}>작성자</Text>
+              <Text style={styles.infoValue}>{ownerNickname || "로딩중"}</Text>
+            </View>
+
+            {/* 오른쪽: 참여 인원 */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Text style={styles.infoLabel}>참여</Text>
+              <Text style={styles.infoValue}>{post.currentParticipants} / {post.maxParticipants}명</Text>
+            </View>
           </View>
 
           {/* 예상 계산서 */}

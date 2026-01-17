@@ -1,4 +1,4 @@
-﻿// FILE: src/app/navigation/AppNavigator.js
+﻿// FILE: src/app/navigation/RootNavigator.js
 
 import React, { useEffect, useState } from "react";
 import { View } from "react-native";
@@ -36,6 +36,9 @@ import StoreWriteScreen from "../../features/post/screens/StoreWriteScreen";
 
 // ✅ [추가] 스토어 리스트(목록) 화면 import
 import StoreListScreen from "../../features/store/screens/StoreListScreen";
+
+// ✅ [추가] 스토어 상세 화면 import
+import StoreDetailScreen from "../../features/store/screens/StoreDetailScreen";
 
 const Stack = createStackNavigator();
 
@@ -108,6 +111,9 @@ export default function RootNavigator() {
 
             {/* ✅ [추가] 스토어 리스트 화면 등록 */}
             <Stack.Screen name="StoreList" component={StoreListScreen} options={{ title: "핫플레이스 목록" }} />
+
+            {/* ✅ [추가] 스토어 상세 화면 등록 (여기 추가됨) */}
+            <Stack.Screen name={ROUTES.STORE_DETAIL} component={StoreDetailScreen} options={{ title: "핫플레이스 상세" }} />
 
             <Stack.Screen name={ROUTES.PROFILE} component={ProfileScreen} options={{ title: "내 정보" }} />
             <Stack.Screen name={ROUTES.CHAT_ROOMS} component={ChatRoomsScreen} options={{ title: "채팅" }} />
