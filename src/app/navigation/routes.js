@@ -3,7 +3,7 @@
 export const ROUTES = {
   LOGIN: "Login",
   HOME: "Home",
-  
+  MY_TOWN: "MyTown",
   // 게시글 관련
   WRITE: "Write",
   WRITE_FREE: "WriteFree",

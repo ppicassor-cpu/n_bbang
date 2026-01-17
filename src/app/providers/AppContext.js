@@ -1,7 +1,7 @@
 ﻿// FILE: src/app/providers/AppContext.js
 
 import React, { createContext, useState, useContext, useEffect, useRef } from "react";
-import { Platform, Alert } from "react-native";
+import { Platform } from "react-native";
 import * as Location from "expo-location";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { auth, db } from "../../firebaseConfig";
@@ -15,7 +15,6 @@ import {
   GoogleAuthProvider,
   signInWithCredential,
   signInWithCustomToken,
-  OAuthProvider,
 } from "firebase/auth";
 import {
   collection,
@@ -40,22 +39,15 @@ import CustomModal from "../../components/CustomModal";
 const AppContext = createContext();
 const STORAGE_KEY = "user_location_auth_v3";
 
+// ✅ [추가] 홈 동 저장 키
+const HOME_DONG_STORAGE_KEY = "home_dong_v1";
+const HOME_DONG_NAME_KEY = "HOME_DONG_NAME";
+const HOME_DONG_CODE_KEY = "HOME_DONG_CODE";
+const HOME_DONG_VERIFIED_KEY = "HOME_DONG_VERIFIED";
+const HOME_DONG_VERIFIED_AT_KEY = "HOME_DONG_VERIFIED_AT";
+
 // ✅ [추가] API BASE URL (cleartext/도메인 분리용)
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || "http://152.67.213.225:4000";
-
-// ✅ [추가] Kakao Local REST API Key (좌표→행정동 보조용)
-// ※ 반드시 EXPO_PUBLIC_ 로 설정하세요.
-const KAKAO_REST_API_KEY = process.env.EXPO_PUBLIC_KAKAO_REST_API_KEY || "";
-
-// ✅ [추가] Kakao 보조 지오코딩 캐시/스로틀 키
-const KAKAO_DONG_CACHE_KEY = "kakao_dong_cache_v1";
-const KAKAO_GEO_META_KEY = "kakao_geo_meta_v1";
-
-// ✅ [추가] Kakao 호출 제한 기본값
-const KAKAO_THROTTLE_MS = 45 * 1000; // 30~60초 중간값
-const KAKAO_DISTANCE_KM = 0.2; // 150~300m 중간값(200m)
-const DONG_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7일
-const GRID_DECIMALS = 3; // 소수점 3자리 ≈ 100m
 
 function getDistanceFromLatLonInKm(lat1, lon1, lat2, lon2) {
   if (lat1 == null || lon1 == null || lat2 == null || lon2 == null) return 9999;
@@ -73,62 +65,6 @@ function getDistanceFromLatLonInKm(lat1, lon1, lat2, lon2) {
 }
 function deg2rad(deg) {
   return deg * (Math.PI / 180);
-}
-
-function extractDong(text) {
-  if (!text) return null;
-  const words = String(text).split(/[\s,()\[\]]+/);
-  for (const w of words) {
-    if (/^\d+$/.test(w)) continue;
-    if (w.endsWith("로") || w.endsWith("길") || w.endsWith("대로")) continue;
-    if (w.endsWith("시") || w.endsWith("군") || w.endsWith("구") || w.endsWith("도")) continue;
-    if (/[가-힣0-9]+(동|읍|면|리|가)$/.test(w)) return w;
-  }
-  return null;
-}
-
-// ✅ [추가] 구 추출(동이 없을 때라도 fallback)
-function extractGu(text) {
-  if (!text) return null;
-  const words = String(text).split(/[\s,()\[\]]+/);
-  for (const w of words) {
-    if (/^\d+$/.test(w)) continue;
-    if (/[가-힣0-9]+구$/.test(w)) return w;
-  }
-  return null;
-}
-
-function isValidDongLabel(v) {
-  if (!v) return false;
-  return /[가-힣0-9]+(동|읍|면|리|가)$/.test(String(v));
-}
-
-function roundToDecimals(n, decimals) {
-  const p = Math.pow(10, decimals);
-  return Math.round(Number(n) * p) / p;
-}
-
-function makeGridKey(coords) {
-  if (!coords?.latitude || !coords?.longitude) return null;
-  const lat = roundToDecimals(coords.latitude, GRID_DECIMALS).toFixed(GRID_DECIMALS);
-  const lon = roundToDecimals(coords.longitude, GRID_DECIMALS).toFixed(GRID_DECIMALS);
-  return `${lat},${lon}`;
-}
-
-// ✅ [추가] reverseGeocode 결과에서 "동" 추출 성공률을 높이기 위한 주소 문자열 생성
-function buildAddressText(addr) {
-  if (!addr || typeof addr !== "object") return "";
-  const parts = [];
-  for (const v of Object.values(addr)) {
-    if (typeof v === "string" && v.trim()) parts.push(v.trim());
-  }
-  return parts.join(" ");
-}
-
-function getTodayKST() {
-  const now = new Date();
-  const kst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
-  return kst.toISOString().slice(0, 10);
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -189,79 +125,92 @@ async function getBestCoordsWithShortWatch() {
   return best;
 }
 
-// ✅ [추가] expo reverseGeocode 1~2회 재시도
-async function getDongFromExpoReverseGeocode(coords) {
-  for (let i = 0; i < 2; i++) {
-    const addresses = await Location.reverseGeocodeAsync(coords).catch(() => []);
-    for (const addr of addresses) {
-      const found = extractDong(buildAddressText(addr));
-      if (found) return { dong: found, gu: null };
-    }
+// ✅ [추가] Point-in-Polygon (GeoJSON)
+function pointInRing(lon, lat, ring) {
+  if (!Array.isArray(ring) || ring.length < 4) return false;
 
-    // 동이 없으면 구라도 확보(동이 최우선이므로 여기서는 저장만)
-    for (const addr of addresses) {
-      const gu = extractGu(buildAddressText(addr));
-      if (gu) return { dong: null, gu };
-    }
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = Number(ring[i]?.[0]);
+    const yi = Number(ring[i]?.[1]);
+    const xj = Number(ring[j]?.[0]);
+    const yj = Number(ring[j]?.[1]);
 
-    if (i < 1) await sleep(280);
+    const intersect =
+      yi > lat !== yj > lat &&
+      lon < ((xj - xi) * (lat - yi)) / (yj - yi + 0.0) + xi;
+
+    if (intersect) inside = !inside;
   }
-  return { dong: null, gu: null };
+  return inside;
 }
 
-// ✅ [추가] Kakao 로컬: 좌표→행정동 (실패 시에만 호출)
-async function getDongFromKakao(coords) {
-  if (!KAKAO_REST_API_KEY) return null;
-  if (!coords?.latitude || !coords?.longitude) return null;
+function pointInPolygonGeometry(lon, lat, geometry) {
+  if (!geometry || typeof geometry !== "object") return false;
+  const type = geometry.type;
+  const coords = geometry.coordinates;
 
-  const x = coords.longitude;
-  const y = coords.latitude;
+  if (!coords) return false;
 
-  const url = `https://dapi.kakao.com/v2/local/geo/coord2regioncode.json?x=${encodeURIComponent(
-    x
-  )}&y=${encodeURIComponent(y)}`;
+  if (type === "Polygon") {
+    const rings = coords;
+    if (!Array.isArray(rings) || !rings.length) return false;
 
-  try {
-    const resp = await fetch(url, {
-      method: "GET",
-      headers: {
-        Authorization: `KakaoAK ${KAKAO_REST_API_KEY}`,
-      },
-    });
+    const outer = rings[0];
+    if (!pointInRing(lon, lat, outer)) return false;
 
-    const data = await resp.json().catch(() => null);
-    if (!resp.ok || !data?.documents?.length) return null;
-
-    const docs = data.documents || [];
-    const pick =
-      docs.find((d) => d?.region_type === "H") ||
-      docs.find((d) => d?.region_type === "B") ||
-      docs[0];
-
-    const d3 = pick?.region_3depth_name || "";
-    const dong = extractDong(d3);
-    return dong || null;
-  } catch {
-    return null;
+    // holes
+    for (let i = 1; i < rings.length; i++) {
+      if (pointInRing(lon, lat, rings[i])) return false;
+    }
+    return true;
   }
+
+  if (type === "MultiPolygon") {
+    const polys = coords;
+    if (!Array.isArray(polys) || !polys.length) return false;
+
+    for (const poly of polys) {
+      const rings = poly;
+      if (!Array.isArray(rings) || !rings.length) continue;
+
+      const outer = rings[0];
+      if (!pointInRing(lon, lat, outer)) continue;
+
+      let inHole = false;
+      for (let i = 1; i < rings.length; i++) {
+        if (pointInRing(lon, lat, rings[i])) {
+          inHole = true;
+          break;
+        }
+      }
+      if (!inHole) return true;
+    }
+    return false;
+  }
+
+  return false;
 }
 
 export const AppProvider = ({ children }) => {
   const [user, setUser] = useState(null);
-  const [currentLocation, setCurrentLocation] = useState("위치 찾는 중...");
+
+  // ✅ 동 표시 정책: homeDong 우선 (없으면 "내 동네 설정")
+  const [currentLocation, setCurrentLocation] = useState("내 동네 설정");
   const [myCoords, setMyCoords] = useState(null);
+
+  // ✅ [추가] 홈 동 상태
+  const [homeDong, setHomeDong] = useState(null);
+  const [homeDongCode, setHomeDongCode] = useState(null);
+  const [homeDongPolygonId, setHomeDongPolygonId] = useState(null);
+  const [homeDongVerified, setHomeDongVerified] = useState(false);
+  const [homeDongVerifiedAt, setHomeDongVerifiedAt] = useState(null);
 
   // ✅ [추가] 초기 로딩 게이팅용 상태(홈 모달에서 사용)
   const [authChecked, setAuthChecked] = useState(false);
   const [locationChecked, setLocationChecked] = useState(false);
   const [postsLoaded, setPostsLoaded] = useState(false);
   const [storesLoaded, setStoresLoaded] = useState(false);
-
-  // ✅ [수정] HomeScreen 게이트는 storesLoaded에 묶이지 않도록 분리
-  const isHomeReady = authChecked && locationChecked && postsLoaded;
-  const isHomeBooting = !isHomeReady;
-
-  // (기존: 전체 준비 상태가 필요할 수 있어 유지)
   const isBooting = !(authChecked && locationChecked && postsLoaded && storesLoaded);
 
   // =================================================================
@@ -344,10 +293,6 @@ export const AppProvider = ({ children }) => {
   };
 
   // ✅ [추가] $0.99 단건(Consumable) 식별자 (RevenueCat 상품/패키지 ID)
-  // - 가능한 값:
-  //   1) EXPO_PUBLIC_HOTPLACE_CONSUMABLE_PACKAGE_ID (Offerings의 custom package identifier)
-  //   2) EXPO_PUBLIC_HOTPLACE_CONSUMABLE_PRODUCT_ID (Store product identifier)
-  // - 둘 다 없으면 아래 fallback 리스트로 매칭 시도
   const HOTPLACE_CONSUMABLE_PACKAGE_ID = process.env.EXPO_PUBLIC_HOTPLACE_CONSUMABLE_PACKAGE_ID || "";
   const HOTPLACE_CONSUMABLE_PRODUCT_ID = process.env.EXPO_PUBLIC_HOTPLACE_CONSUMABLE_PRODUCT_ID || "";
   const HOTPLACE_CONSUMABLE_FALLBACK_IDS = [
@@ -380,8 +325,6 @@ export const AppProvider = ({ children }) => {
         return;
       }
 
-      // ✅ 로그인(identify) 연결: uid가 있고, 현재 로그인 uid와 다르면 logIn
-      // (configure는 App.js에서 선행되어야 함)
       if (uid && rcLoggedInUidRef.current !== uid && Purchases.logIn) {
         try {
           await Purchases.logIn(uid);
@@ -401,7 +344,7 @@ export const AppProvider = ({ children }) => {
       if (isAdminRef.current) {
         setPremiumUntil("2099-12-31T23:59:59.999Z");
         setIsPremium(true);
-        setMembershipType("yearly"); // ✅ [추가] 관리자는 연간 회원 대우
+        setMembershipType("yearly");
         return;
       }
 
@@ -409,11 +352,9 @@ export const AppProvider = ({ children }) => {
       const nextPremiumUntil = entitlement?.expirationDate || null;
       const nextIsPremium = !!entitlement || !!isAdminRef.current;
 
-      // ✅ [수정] 멤버십 타입 판별 로직 추가
       let nextMembershipType = "free";
       if (nextIsPremium) {
         const pid = entitlement?.productIdentifier || "";
-        // RevenueCat 상품 ID에 'year'나 'annual'이 포함되면 연간권으로 간주
         if (pid.toLowerCase().includes("year") || pid.toLowerCase().includes("annual")) {
           nextMembershipType = "yearly";
         } else {
@@ -423,13 +364,13 @@ export const AppProvider = ({ children }) => {
 
       setPremiumUntil(nextPremiumUntil);
       setIsPremium(nextIsPremium);
-      setMembershipType(nextMembershipType); // ✅ 상태 업데이트
+      setMembershipType(nextMembershipType);
 
       if (uid) {
         await updateDoc(doc(db, "users", uid), {
           premiumUntil: nextPremiumUntil,
           isPremium: nextIsPremium,
-          membershipType: nextMembershipType, // ✅ DB 업데이트
+          membershipType: nextMembershipType,
           premiumUpdatedAt: new Date().toISOString(),
         });
       }
@@ -438,7 +379,6 @@ export const AppProvider = ({ children }) => {
     }
   };
 
-  // ✅ [점검 3] 갱신 타이밍 보강: 가능한 경우에만 syncPurchases -> getCustomerInfo
   const refreshPremiumFromRevenueCat = async () => {
     try {
       if (!user?.uid) return;
@@ -449,10 +389,8 @@ export const AppProvider = ({ children }) => {
         return;
       }
 
-      // ✅ 혹시 아직 logIn 안 된 상태면 먼저 보장 (configure는 App.js에서만)
       await initRevenueCatForUser(user.uid);
 
-      // ✅ 안드로이드에서 테스트/해지/만료 반영 지연 케이스 완화 (지원될 때만)
       if (Platform.OS === "android" && Purchases.syncPurchases) {
         try {
           await Purchases.syncPurchases();
@@ -476,7 +414,6 @@ export const AppProvider = ({ children }) => {
         await initRevenueCatForUser(user.uid);
       }
 
-      // ✅ restore 전에도 sync를 한 번 시도 (지원될 때만)
       if (Platform.OS === "android" && Purchases.syncPurchases) {
         try {
           await Purchases.syncPurchases();
@@ -530,7 +467,6 @@ export const AppProvider = ({ children }) => {
     return true;
   };
 
-  // ✅ [추가] Offerings에서 핫플레이스 단건(Consumable) 패키지 찾기
   const findHotplaceConsumablePackage = (offerings) => {
     try {
       const current = offerings?.current;
@@ -546,19 +482,16 @@ export const AppProvider = ({ children }) => {
       if (HOTPLACE_CONSUMABLE_PRODUCT_ID) allIds.push(String(HOTPLACE_CONSUMABLE_PRODUCT_ID));
       for (const v of HOTPLACE_CONSUMABLE_FALLBACK_IDS) allIds.push(String(v));
 
-      // 1) storeProduct.identifier 매칭
       for (const id of allIds) {
         const hit = packs.find((p) => String(p?.product?.identifier || "") === id);
         if (hit) return hit;
       }
 
-      // 2) package identifier 매칭(커스텀 패키지 identifier가 id랑 같게 써놓은 경우)
       for (const id of allIds) {
         const hit = packs.find((p) => String(p?.identifier || "") === id);
         if (hit) return hit;
       }
 
-      // 3) 마지막 fallback: $0.99 가격대 패키지 추정 (가격 문자열에 0.99가 포함된 경우)
       const priceHit = packs.find((p) => {
         const priceStr = String(p?.product?.priceString || "");
         return priceStr.includes("0.99") || priceStr.includes("0,99");
@@ -571,9 +504,6 @@ export const AppProvider = ({ children }) => {
     }
   };
 
-  // ✅ [추가] $0.99 단건(Consumable) 구매 함수
-  // - "글쓰기 버튼"에서 결제유도 시 호출
-  // - 실제 사용(카운트 +1 / DB 반영)은 "글 등록 성공 후" incrementHotplaceCount({usageType:"paid_extra", purchaseInfo}) 로 처리
   const purchaseHotplaceConsumable = async () => {
     if (isAdminRef.current) {
       return { status: "PURCHASED", purchaseInfo: { admin: true } };
@@ -611,7 +541,221 @@ export const AppProvider = ({ children }) => {
     }
   };
 
+  // ✅ [추가] 홈 동 로드(앱 시작 1회)
+  const loadHomeDongFromStorage = async () => {
+    try {
+      // 1) HOME_DONG_* 개별키 우선 로드
+      const pairs = await AsyncStorage.multiGet([
+        HOME_DONG_NAME_KEY,
+        HOME_DONG_CODE_KEY,
+        HOME_DONG_VERIFIED_KEY,
+        HOME_DONG_VERIFIED_AT_KEY,
+      ]);
+
+      const map = Object.fromEntries(pairs || []);
+      const kName = map?.[HOME_DONG_NAME_KEY] || null;
+
+      if (kName) {
+        const kCode = map?.[HOME_DONG_CODE_KEY] || null;
+        const kVerifiedRaw = map?.[HOME_DONG_VERIFIED_KEY] || "false";
+        const kVerified = String(kVerifiedRaw).toLowerCase() === "true";
+        const kVerifiedAt = map?.[HOME_DONG_VERIFIED_AT_KEY] || null;
+
+        setHomeDong(kName);
+        setHomeDongCode(kCode);
+        setHomeDongPolygonId(null);
+        setHomeDongVerified(kVerified);
+        setHomeDongVerifiedAt(kVerifiedAt);
+
+        // 2) 기존 포맷(home_dong_v1)로 마이그레이션 저장(호환 유지)
+        try {
+          const legacy = {
+            dongName: kName,
+            dongCode: kCode,
+            featureId: null,
+            verified: kVerified,
+            verifiedAt: kVerifiedAt,
+          };
+          await AsyncStorage.setItem(HOME_DONG_STORAGE_KEY, JSON.stringify(legacy));
+        } catch {}
+
+        return;
+      }
+
+      // 3) fallback: 기존 home_dong_v1 로드
+      const raw = await AsyncStorage.getItem(HOME_DONG_STORAGE_KEY);
+      if (!raw) {
+        setHomeDong(null);
+        setHomeDongCode(null);
+        setHomeDongPolygonId(null);
+        setHomeDongVerified(false);
+        setHomeDongVerifiedAt(null);
+        return;
+      }
+
+      const parsed = JSON.parse(raw) || {};
+      const dongName = parsed?.dongName || null;
+      const dongCode = parsed?.dongCode || null;
+      const featureId = parsed?.featureId || null;
+      const verified = !!parsed?.verified;
+      const verifiedAt = parsed?.verifiedAt || null;
+
+      setHomeDong(dongName);
+      setHomeDongCode(dongCode);
+      setHomeDongPolygonId(featureId);
+      setHomeDongVerified(verified);
+      setHomeDongVerifiedAt(verifiedAt);
+
+      // 4) fallback로 읽은 값도 HOME_DONG_*에 동기화(다음부터는 개별키 사용)
+      try {
+        await AsyncStorage.multiSet([
+          [HOME_DONG_NAME_KEY, dongName ? String(dongName) : ""],
+          [HOME_DONG_CODE_KEY, dongCode ? String(dongCode) : ""],
+          [HOME_DONG_VERIFIED_KEY, verified ? "true" : "false"],
+          [HOME_DONG_VERIFIED_AT_KEY, verifiedAt ? String(verifiedAt) : ""],
+        ]);
+      } catch {}
+    } catch {
+      setHomeDong(null);
+      setHomeDongCode(null);
+      setHomeDongPolygonId(null);
+      setHomeDongVerified(false);
+      setHomeDongVerifiedAt(null);
+    }
+  };
+
+  // ✅ [추가] 홈 동 저장(사용자 확정)
+  const saveHomeDong = async ({ dongName, dongCode, featureId } = {}) => {
+    const next = {
+      dongName: dongName || null,
+      dongCode: dongCode || null,
+      featureId: featureId || null,
+      verified: false,
+      verifiedAt: null,
+    };
+
+    try {
+      // ✅ legacy + HOME_DONG_* 동시 저장(호환)
+      await AsyncStorage.setItem(HOME_DONG_STORAGE_KEY, JSON.stringify(next));
+      await AsyncStorage.multiSet([
+        [HOME_DONG_NAME_KEY, next.dongName ? String(next.dongName) : ""],
+        [HOME_DONG_CODE_KEY, next.dongCode ? String(next.dongCode) : ""],
+        [HOME_DONG_VERIFIED_KEY, "false"],
+        [HOME_DONG_VERIFIED_AT_KEY, ""],
+      ]);
+    } catch {}
+
+    setHomeDong(next.dongName);
+    setHomeDongCode(next.dongCode);
+    setHomeDongPolygonId(next.featureId);
+    setHomeDongVerified(false);
+    setHomeDongVerifiedAt(null);
+  };
+
+  // ✅ [추가] 홈 동 초기화
+  const clearHomeDong = async () => {
+    try {
+      await AsyncStorage.removeItem(HOME_DONG_STORAGE_KEY);
+      await AsyncStorage.multiRemove([
+        HOME_DONG_NAME_KEY,
+        HOME_DONG_CODE_KEY,
+        HOME_DONG_VERIFIED_KEY,
+        HOME_DONG_VERIFIED_AT_KEY,
+      ]);
+    } catch {}
+
+    setHomeDong(null);
+    setHomeDongCode(null);
+    setHomeDongPolygonId(null);
+    setHomeDongVerified(false);
+    setHomeDongVerifiedAt(null);
+  };
+
+  // ✅ [추가] GPS 좌표만 갱신 (동 표시 문자열은 절대 변경 금지)
+  const refreshMyCoords = async () => {
+    try {
+      const perm = await Location.requestForegroundPermissionsAsync();
+      if (perm?.status !== "granted") {
+        setLocationChecked(true);
+        return null;
+      }
+
+      const c = await getBestCoordsWithShortWatch();
+      if (!c?.latitude || !c?.longitude) {
+        setLocationChecked(true);
+        return null;
+      }
+
+      const coords = {
+        latitude: Number(c.latitude),
+        longitude: Number(c.longitude),
+        accuracy: c.accuracy != null ? Number(c.accuracy) : undefined,
+      };
+
+      setMyCoords(coords);
+      setIsVerified(true);
+      setLocationChecked(true);
+
+      try {
+        await AsyncStorage.setItem(
+          STORAGE_KEY,
+          JSON.stringify({ coords: { latitude: coords.latitude, longitude: coords.longitude }, timestamp: Date.now() })
+        );
+      } catch {}
+
+      return coords;
+    } catch {
+      setLocationChecked(true);
+      return null;
+    }
+  };
+
+  // ✅ [추가] 현재 GPS가 선택 동 폴리곤 안인지 검증(동 이름은 절대 변경 금지)
+  const verifyHomeDongByGps = async ({ polygon } = {}) => {
+    try {
+      const coords = myCoords?.latitude && myCoords?.longitude ? myCoords : await refreshMyCoords();
+      if (!coords?.latitude || !coords?.longitude) return false;
+
+      if (!polygon || typeof polygon !== "object") return false;
+
+      const ok = pointInPolygonGeometry(Number(coords.longitude), Number(coords.latitude), polygon);
+
+      const nowIso = new Date().toISOString();
+      setHomeDongVerified(!!ok);
+      setHomeDongVerifiedAt(nowIso);
+
+      try {
+        const raw = await AsyncStorage.getItem(HOME_DONG_STORAGE_KEY);
+        const prev = raw ? JSON.parse(raw) || {} : {};
+        const next = {
+          dongName: prev?.dongName || homeDong || null,
+          dongCode: prev?.dongCode || homeDongCode || null,
+          featureId: prev?.featureId || homeDongPolygonId || null,
+          verified: !!ok,
+          verifiedAt: nowIso,
+        };
+
+        // ✅ legacy + HOME_DONG_* 동시 저장(검증 상태 동기화)
+        await AsyncStorage.setItem(HOME_DONG_STORAGE_KEY, JSON.stringify(next));
+        await AsyncStorage.multiSet([
+          [HOME_DONG_VERIFIED_KEY, ok ? "true" : "false"],
+          [HOME_DONG_VERIFIED_AT_KEY, nowIso ? String(nowIso) : ""],
+        ]);
+      } catch {}
+
+      return !!ok;
+    } catch {
+      return false;
+    }
+  };
+
+  // ✅ 동 표시 정책 반영: homeDong 변경 시 currentLocation 동기화
   useEffect(() => {
+    setCurrentLocation(homeDong ? String(homeDong) : "내 동네 설정");
+  }, [homeDong]);
+
+  useEffect(() => {
+    loadHomeDongFromStorage();
     checkSavedVerification();
 
     let customerInfoListener = null;
@@ -634,11 +778,10 @@ export const AppProvider = ({ children }) => {
         setDailyPostCountDate(null);
         setIsAdmin(false);
         isAdminRef.current = false;
-        setBlockedUsers([]); // 차단된 사용자는 초기화
+        setBlockedUsers([]);
         setPostLimit(20);
-        setStoreLimit(20); // ✅ [추가] Store limit 초기화
+        setStoreLimit(20);
 
-        // ✅ [추가] 핫플레이스 멤버십/월 카운트 초기화
         setMembershipType("free");
         setHotplaceMonthKey(null);
         setHotplaceCount(0);
@@ -660,7 +803,7 @@ export const AppProvider = ({ children }) => {
           setIsAdmin(adminFlag);
           isAdminRef.current = adminFlag;
 
-          setBlockedUsers(data.blockedUsers || []); // 차단된 사용자는 불러오기
+          setBlockedUsers(data.blockedUsers || []);
 
           setPremiumUntil(data.premiumUntil || null);
           setIsPremium(!!data.isPremium);
@@ -668,7 +811,6 @@ export const AppProvider = ({ children }) => {
           const savedDate = data.dailyPostCountDate || null;
 
           if (savedDate !== todayKST) {
-            // 날짜가 오늘이 아니면: 0으로 리셋 + 날짜도 오늘로 저장
             setDailyPostCount(0);
             setDailyPostCountDate(todayKST);
 
@@ -681,12 +823,10 @@ export const AppProvider = ({ children }) => {
               console.warn("dailyPostCount reset 실패(무시 가능):", e);
             }
           } else {
-            // 오늘이면 그대로 사용
             setDailyPostCount(data.dailyPostCount || 0);
             setDailyPostCountDate(savedDate);
           }
 
-          // ✅ [추가] 핫플레이스 멤버십/월 카운트 불러오기
           setMembershipType(data.membershipType || "free");
           setHotplaceMonthKey(data.hotplaceMonthKey || null);
           setHotplaceCount(typeof data.hotplaceCount === "number" ? data.hotplaceCount : 0);
@@ -708,7 +848,6 @@ export const AppProvider = ({ children }) => {
             blockedUsers: [],
             email: currentUser.email,
 
-            // ✅ [추가] 핫플레이스 멤버십/월 카운트 기본값
             membershipType: "free",
             hotplaceMonthKey: null,
             hotplaceCount: 0,
@@ -720,7 +859,6 @@ export const AppProvider = ({ children }) => {
           isAdminRef.current = false;
           setBlockedUsers([]);
 
-          // ✅ [추가] 핫플레이스 멤버십/월 카운트 기본값
           setMembershipType("free");
           setHotplaceMonthKey(null);
           setHotplaceCount(0);
@@ -770,7 +908,6 @@ export const AppProvider = ({ children }) => {
             const data = snap.data();
             setBlockedUsers(data.blockedUsers || []);
 
-            // ✅ [추가] 핫플레이스 멤버십/월 카운트 실시간 반영
             setMembershipType(data.membershipType || "free");
             setHotplaceMonthKey(data.hotplaceMonthKey || null);
             setHotplaceCount(typeof data.hotplaceCount === "number" ? data.hotplaceCount : 0);
@@ -779,7 +916,6 @@ export const AppProvider = ({ children }) => {
           } else {
             setBlockedUsers([]);
 
-            // ✅ [추가] 핫플레이스 멤버십/월 카운트 기본값
             setMembershipType("free");
             setHotplaceMonthKey(null);
             setHotplaceCount(0);
@@ -798,9 +934,11 @@ export const AppProvider = ({ children }) => {
     };
   }, [user?.uid]);
 
-  // ✅ [추가] "첫 snapshot 도착" 기준 확정용 키 추적
-  const postsFirstSnapshotKeyRef = useRef(null);
-  const storesFirstSnapshotKeyRef = useRef(null);
+  function getTodayKST() {
+    const now = new Date();
+    const kst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+    return kst.toISOString().slice(0, 10);
+  }
 
   // ✅ [수정] posts: 로그인 여부와 무관하게 구독(원본 수집) + 차단 필터는 별도 파생
   useEffect(() => {
@@ -810,19 +948,12 @@ export const AppProvider = ({ children }) => {
     unsub = onSnapshot(
       q,
       (querySnapshot) => {
-        // ✅ [핵심] postsLoaded는 "첫 snapshot 도착" 시점에만 true 확정 (refreshKey 기준)
-        if (postsFirstSnapshotKeyRef.current !== postsRefreshKey) {
-          postsFirstSnapshotKeyRef.current = postsRefreshKey;
-          setPostsLoaded(true);
-        }
-
         const loaded = [];
         querySnapshot.forEach((d) => {
           const postData = d.data();
           loaded.push({ ...postData, id: d.id });
         });
 
-        // ✅ 데이터를 저장할 때 'createdAt' 기준 내림차순(최신순) 정렬 강제
         const sorted = loaded.sort((a, b) => {
           const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
           const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
@@ -830,16 +961,12 @@ export const AppProvider = ({ children }) => {
         });
 
         setRawPosts(sorted);
+        setPostsLoaded(true);
       },
       (e) => {
         console.warn("posts onSnapshot Error:", e);
         setRawPosts([]);
-
-        // ✅ 에러가 나도 홈이 영구 봉쇄되지 않도록: refreshKey 기준 1회만 true 처리
-        if (postsFirstSnapshotKeyRef.current !== postsRefreshKey) {
-          postsFirstSnapshotKeyRef.current = postsRefreshKey;
-          setPostsLoaded(true);
-        }
+        setPostsLoaded(true);
       }
     );
 
@@ -848,7 +975,6 @@ export const AppProvider = ({ children }) => {
     };
   }, [postLimit, postsRefreshKey]);
 
-  // ✅ [추가] rawPosts + blockedUsers로 posts 파생(차단 변경 시에도 즉시 반영)
   useEffect(() => {
     const loaded = [];
     for (const p of rawPosts || []) {
@@ -857,7 +983,6 @@ export const AppProvider = ({ children }) => {
       }
     }
 
-    // ✅ 데이터를 저장할 때 'createdAt' 기준 내림차순(최신순) 정렬 강제
     const sorted = loaded.sort((a, b) => {
       const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
       const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
@@ -870,35 +995,24 @@ export const AppProvider = ({ children }) => {
   // =================================================================
   // ✅ [추가] Stores(가게) 데이터 실시간 구독 로직
   // =================================================================
-  // ✅ [수정] stores: 로그인 여부와 무관하게 구독(원본 수집) + 차단 필터는 별도 파생
   useEffect(() => {
     let unsub = null;
     let alive = true;
 
-    // 가게 목록도 최신순 정렬 + limit 적용
     const q = query(collection(db, "stores"), orderBy("createdAt", "desc"), limit(storeLimit));
 
     unsub = onSnapshot(
       q,
       async (querySnapshot) => {
-        // ✅ [핵심] storesLoaded는 "첫 snapshot 도착" 즉시 true 확정 (정규화/추가 getDoc 완료를 기다리지 않음)
-        if (storesFirstSnapshotKeyRef.current !== storesRefreshKey) {
-          storesFirstSnapshotKeyRef.current = storesRefreshKey;
-          setStoresLoaded(true);
-        }
-
         try {
           const loaded = [];
           querySnapshot.forEach((d) => {
             const storeData = d.data();
-            // type: 'store'를 추가해서 나중에 합칠 때 구분
             loaded.push({ ...storeData, id: d.id, type: "store" });
           });
 
-          // ✅ [핵심] StoreListScreen 필터/표시 스키마 정규화 + ownerIsAdmin 보강용
           const normalized = await Promise.all(
             loaded.map(async (item) => {
-              // 1) 좌표 통일: coords로 제공
               const rawCoords =
                 item?.coords ||
                 (item?.location && typeof item.location === "object"
@@ -910,19 +1024,15 @@ export const AppProvider = ({ children }) => {
                   ? { latitude: Number(rawCoords.latitude), longitude: Number(rawCoords.longitude) }
                   : null;
 
-              // 2) 위치 텍스트 통일: location은 "문자열"로 제공 (화면 표시용)
               const locationText =
                 typeof item.location === "string"
                   ? item.location
                   : (item.address || item.locationText || item.place || item.placeName || "");
 
-              // 3) 타이틀 통일: StoreListScreen에서 item.title/item.storeName 사용
               const title = item.title || item.name || item.storeName || "";
 
-              // 4) createdAt 정규화 (정렬/표시 안전성)
               const createdAtMs = item.createdAt ? new Date(item.createdAt).getTime() : 0;
 
-              // 5) 작성자 admin 여부 (거리 무제한 표시용)
               const ownerIsAdmin =
                 typeof item.ownerIsAdmin === "boolean"
                   ? item.ownerIsAdmin
@@ -933,21 +1043,25 @@ export const AppProvider = ({ children }) => {
                 title,
                 storeName: item.storeName || title,
                 address: item.address || locationText || "위치 정보 없음",
+
+                // ✅ location은 "좌표 객체"로 통일
                 location:
-  (item?.location && typeof item.location === "object" && item.location.latitude != null && item.location.longitude != null)
-    ? { latitude: Number(item.location.latitude), longitude: Number(item.location.longitude) }
-    : coords,
+                  item?.location &&
+                  typeof item.location === "object" &&
+                  item.location.latitude != null &&
+                  item.location.longitude != null
+                    ? { latitude: Number(item.location.latitude), longitude: Number(item.location.longitude) }
+                    : coords,
 
-// 거리계산용은 coords도 그대로 유지 (기존 로직 호환)
-coords,
+                // ✅ 거리계산용 coords 유지 (기존 로직 호환)
+                coords,
 
-createdAtMs,
-ownerIsAdmin,
+                createdAtMs,
+                ownerIsAdmin,
               };
             })
           );
 
-          // ✅ 가게 데이터도 날짜 기준 최신순 정렬 보장
           const sorted = normalized.sort((a, b) => {
             const dateA = a.createdAt ? new Date(a.createdAt).getTime() : (a.createdAtMs || 0);
             const dateB = b.createdAt ? new Date(b.createdAt).getTime() : (b.createdAtMs || 0);
@@ -955,20 +1069,17 @@ ownerIsAdmin,
           });
 
           if (alive) setRawStores(sorted);
+          setStoresLoaded(true);
         } catch (e) {
           console.warn("stores onSnapshot 처리 실패:", e);
           if (alive) setRawStores([]);
+          setStoresLoaded(true);
         }
       },
       (e) => {
         console.warn("stores onSnapshot Error:", e);
         if (alive) setRawStores([]);
-
-        // ✅ 에러가 나도 홈이 영구 봉쇄되지 않도록: refreshKey 기준 1회만 true 처리
-        if (storesFirstSnapshotKeyRef.current !== storesRefreshKey) {
-          storesFirstSnapshotKeyRef.current = storesRefreshKey;
-          setStoresLoaded(true);
-        }
+        setStoresLoaded(true);
       }
     );
 
@@ -978,7 +1089,6 @@ ownerIsAdmin,
     };
   }, [storeLimit, storesRefreshKey]);
 
-  // ✅ [추가] rawStores + blockedUsers로 stores 파생(차단 변경 시에도 즉시 반영)
   useEffect(() => {
     const loaded = [];
     for (const s of rawStores || []) {
@@ -987,7 +1097,6 @@ ownerIsAdmin,
       }
     }
 
-    // ✅ 가게 데이터도 날짜 기준 최신순 정렬 보장
     const sorted = loaded.sort((a, b) => {
       const dateA = a.createdAt ? new Date(a.createdAt).getTime() : (a.createdAtMs || 0);
       const dateB = b.createdAt ? new Date(b.createdAt).getTime() : (b.createdAtMs || 0);
@@ -1001,12 +1110,10 @@ ownerIsAdmin,
     setPostLimit((prev) => prev + 5);
   };
 
-  // ✅ [추가] 가게 목록 더 불러오기 함수
   const loadMoreStores = () => {
     setStoreLimit((prev) => prev + 5);
   };
 
-  // ✅ [추가] 진짜 새로고침(구독 재시작 + loaded 플래그 리셋)
   const refreshPostsAndStores = async () => {
     setPostsLoaded(false);
     setStoresLoaded(false);
@@ -1033,7 +1140,6 @@ ownerIsAdmin,
     }
   };
 
-  // ✅ [수정] 중복 팝업 방지용 옵션 추가 (기본값 false)
   const reportUser = async (targetUserId, contentId, reason, type = "post", silent = false) => {
     if (!user) {
       if (!silent) openModal("알림", "로그인이 필요합니다.");
@@ -1057,7 +1163,6 @@ ownerIsAdmin,
     }
   };
 
-  // ✅ [수정] 차단 저장이 앱 재시작 후에도 유지되도록 merge setDoc + silent 옵션
   const blockUser = async (targetUserId, silent = false) => {
     if (!user) return;
     if (targetUserId === user.uid) {
@@ -1066,20 +1171,17 @@ ownerIsAdmin,
     }
 
     try {
-      // ✅ 중복 차단 방지
       if (blockedUsers.includes(targetUserId)) {
         if (!silent) openModal("알림", "이미 차단된 사용자입니다.");
         return;
       }
 
-      // ✅ users 문서가 없더라도 저장되도록 merge setDoc 사용
       await setDoc(
         doc(db, "users", user.uid),
         { blockedUsers: arrayUnion(targetUserId) },
         { merge: true }
       );
 
-      // ✅ 즉시 UI 반영 (중복 제거)
       setBlockedUsers((prev) => [...new Set([...prev, targetUserId])]);
     } catch (e) {
       console.error("차단 실패:", e);
@@ -1088,215 +1190,40 @@ ownerIsAdmin,
   };
 
   /* =========================
-      위치 인증
+      위치 인증 (좌표만)
   ========================= */
+
   const checkSavedVerification = async () => {
     try {
       const saved = await AsyncStorage.getItem(STORAGE_KEY);
+
       if (saved) {
-        const { dong, coords, timestamp } = JSON.parse(saved);
-        if (
-          Date.now() - timestamp < 7 * 24 * 60 * 60 * 1000 &&
-          dong &&
-          dong !== "내 동네"
-        ) {
-          setCurrentLocation(dong);
-          setMyCoords(coords);
+        const parsed = JSON.parse(saved) || {};
+        const timestamp = parsed?.timestamp || 0;
+
+        const rawC = parsed?.coords || null;
+        const c =
+          rawC && rawC.latitude != null && rawC.longitude != null
+            ? { latitude: Number(rawC.latitude), longitude: Number(rawC.longitude) }
+            : null;
+
+        if (c && timestamp && Date.now() - timestamp < 7 * 24 * 60 * 60 * 1000) {
+          setMyCoords(c);
           setIsVerified(true);
           setLocationChecked(true);
           return;
         }
       }
-      verifyLocation();
+
+      await refreshMyCoords();
     } catch {
-      verifyLocation();
+      await refreshMyCoords();
     }
   };
 
+  // ✅ 기존 호출 호환용: verifyLocation은 이제 "좌표 갱신"만 수행
   const verifyLocation = async () => {
-    setCurrentLocation("위치 확인 중...");
-    let { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== "granted") {
-      setCurrentLocation("위치 권한 필요");
-      setLocationChecked(true);
-      return;
-    }
-
-    try {
-      // ✅ 1) 짧은 watch로 best accuracy 좌표 확보
-      const coords = await getBestCoordsWithShortWatch();
-      if (!coords?.latitude || !coords?.longitude) {
-        setCurrentLocation("위치 확인 불가");
-        setLocationChecked(true);
-        return;
-      }
-
-      // ✅ 현재 좌표는 항상 최신으로 갱신
-      setMyCoords(coords);
-
-      const nowTs = Date.now();
-      const gridKey = makeGridKey(coords);
-
-      // ✅ 3) 기존 성공값 유지(동이 없으면 저장값 유지) + 성공시에만 캐시 저장
-      let savedDong = null;
-      try {
-        const saved = await AsyncStorage.getItem(STORAGE_KEY);
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          const d = parsed?.dong;
-          const ts = parsed?.timestamp;
-          if (d && d !== "내 동네" && ts && nowTs - ts < DONG_CACHE_TTL_MS) {
-            savedDong = d;
-          }
-        }
-      } catch {}
-
-      // ✅ 1차: expo-location reverseGeocodeAsync()로 동 추출 시도 (1~2회 재시도)
-      let dong = null;
-      let gu = null;
-      const expoResult = await getDongFromExpoReverseGeocode(coords);
-      dong = expoResult?.dong || null;
-      gu = expoResult?.gu || null;
-
-      // ✅ expo에서 동 성공이면 즉시 저장/표시
-      if (dong && isValidDongLabel(dong)) {
-        const authData = { dong, coords, timestamp: nowTs };
-        await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(authData));
-
-        setCurrentLocation(dong);
-        setIsVerified(true);
-        setLocationChecked(true);
-        return;
-      }
-
-      // ✅ 2차: expo에서 동 실패 시, "그리드 캐시" 먼저 확인 (같은 좌표 근처 재호출 금지)
-      if (gridKey) {
-        try {
-          const cacheStr = await AsyncStorage.getItem(KAKAO_DONG_CACHE_KEY);
-          if (cacheStr) {
-            const cache = JSON.parse(cacheStr) || {};
-            const hit = cache?.[gridKey];
-            if (hit?.dong && hit?.ts && nowTs - hit.ts < DONG_CACHE_TTL_MS) {
-              // ✅ 캐시 hit는 성공으로 간주(표시만) + 원본 STORAGE_KEY에도 저장해둠
-              const cachedDong = hit.dong;
-              if (isValidDongLabel(cachedDong)) {
-                const authData = { dong: cachedDong, coords, timestamp: nowTs };
-                await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(authData));
-
-                setCurrentLocation(cachedDong);
-                setIsVerified(true);
-                setLocationChecked(true);
-                return;
-              }
-            }
-          }
-        } catch {}
-      }
-
-      // ✅ 3차: 동/구 fallback + 기존 성공값 유지
-      // (동이 없고 저장된 dong가 있으면 그걸 유지)
-      if (savedDong) {
-        setCurrentLocation(savedDong);
-      } else if (gu) {
-        setCurrentLocation(gu);
-      } else {
-        setCurrentLocation("내 동네");
-      }
-      setIsVerified(true);
-
-      // ✅ 4) 카카오 로컬(좌표→행정동) : "동 추출 실패할 때만" 호출
-      // ✅ 호출 빈도 제한(스로틀) + 거리 제한(150~300m) + 그리드 캐시로 반복 방지
-      // ※ 동을 찾으면 성공으로 간주하고 캐시에 저장 + STORAGE_KEY에도 저장
-      if (gridKey && KAKAO_REST_API_KEY) {
-        let canCall = true;
-
-        try {
-          const metaStr = await AsyncStorage.getItem(KAKAO_GEO_META_KEY);
-          if (metaStr) {
-            const meta = JSON.parse(metaStr) || {};
-            const lastTs = meta?.lastTs || 0;
-            const lastCoords = meta?.coords || null;
-            const lastGrid = meta?.gridKey || null;
-
-            // 같은 그리드에서 연타 방지
-            if (lastGrid && lastGrid === gridKey && nowTs - lastTs < KAKAO_THROTTLE_MS) {
-              canCall = false;
-            }
-
-            // 거리 기준 + 시간 기준 연타 방지
-            if (canCall && lastCoords?.latitude && lastCoords?.longitude && nowTs - lastTs < KAKAO_THROTTLE_MS) {
-              const dist = getDistanceFromLatLonInKm(
-                lastCoords.latitude,
-                lastCoords.longitude,
-                coords.latitude,
-                coords.longitude
-              );
-              if (dist < KAKAO_DISTANCE_KM) {
-                canCall = false;
-              }
-            }
-          }
-        } catch {
-          // meta 파싱 실패해도 호출은 허용
-          canCall = true;
-        }
-
-        if (canCall) {
-          // meta 업데이트(호출 직전에 기록)
-          try {
-            await AsyncStorage.setItem(
-              KAKAO_GEO_META_KEY,
-              JSON.stringify({ lastTs: nowTs, coords: { latitude: coords.latitude, longitude: coords.longitude }, gridKey })
-            );
-          } catch {}
-
-          const kakaoDong = await getDongFromKakao(coords);
-
-          if (kakaoDong && isValidDongLabel(kakaoDong)) {
-            // ✅ Kakao 성공: 그리드 캐시에 저장
-            try {
-              const cacheStr = await AsyncStorage.getItem(KAKAO_DONG_CACHE_KEY);
-              const cache = cacheStr ? JSON.parse(cacheStr) || {} : {};
-
-              // 간단한 사이즈 제한(너무 커지는 것 방지): 250개 초과 시 오래된 것부터 제거
-              const nextCache = { ...cache, [gridKey]: { dong: kakaoDong, ts: nowTs } };
-
-              const keys = Object.keys(nextCache);
-              if (keys.length > 250) {
-                const sorted = keys
-                  .map((k) => ({ k, ts: Number(nextCache[k]?.ts || 0) }))
-                  .sort((a, b) => a.ts - b.ts);
-                const removeCount = keys.length - 250;
-                for (let i = 0; i < removeCount; i++) {
-                  delete nextCache[sorted[i].k];
-                }
-              }
-
-              await AsyncStorage.setItem(KAKAO_DONG_CACHE_KEY, JSON.stringify(nextCache));
-            } catch {}
-
-            // ✅ 성공시에만 STORAGE_KEY 캐시 저장
-            const authData = { dong: kakaoDong, coords, timestamp: nowTs };
-            await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(authData));
-
-            setCurrentLocation(kakaoDong);
-            setIsVerified(true);
-            setLocationChecked(true);
-            return;
-          }
-        }
-      }
-
-      // ✅ Kakao도 실패 시: 저장된 dong가 있으면 유지, 아니면 현재 표시 유지(내 동네/구)
-      // (여기서는 저장 덮어쓰기 금지)
-      if (savedDong) {
-        setCurrentLocation(savedDong);
-      }
-      setLocationChecked(true);
-    } catch (e) {
-      setCurrentLocation("위치 확인 불가");
-      setLocationChecked(true);
-    }
+    return await refreshMyCoords();
   };
 
   /* =========================
@@ -1309,7 +1236,6 @@ ownerIsAdmin,
     return signInWithCredential(auth, credential);
   };
 
-  // ✅ [수정] API_BASE_URL 사용
   const loginWithKakao = async (accessToken) => {
     try {
       const resp = await fetch(`${API_BASE_URL}/nbbang/auth/kakao`, {
@@ -1354,7 +1280,6 @@ ownerIsAdmin,
       blockedUsers: [],
       email: email,
 
-      // ✅ [추가] 핫플레이스 멤버십/월 카운트 기본값
       membershipType: "free",
       hotplaceMonthKey: null,
       hotplaceCount: 0,
@@ -1370,7 +1295,6 @@ ownerIsAdmin,
 
   const logout = async () => {
     try {
-      // ✅ RevenueCat user detach
       if (Purchases.logOut) {
         await Purchases.logOut();
       }
@@ -1405,17 +1329,12 @@ ownerIsAdmin,
     setDailyPostCountDate(today);
   };
 
-  // ✅ [추가] KST 기준 monthKey(YYYY-MM)
   const getCurrentMonthKeyKST = () => {
     const now = new Date();
     const kst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
     return kst.toISOString().slice(0, 7);
   };
 
-  // ✅ [추가] 핫플레이스 eligibility enum + 데이터 반환
-  // - 글쓰기 버튼에서 입구 컷 용도:
-  //   - decision: "ALLOW" | "DENY" | "PROMPT_PURCHASE"
-  //   - recommendedUsageType: "membership" | "paid_extra"
   const checkHotplaceEligibility = () => {
     const monthKey = getCurrentMonthKeyKST();
     const type = membershipType || "free";
@@ -1476,16 +1395,16 @@ ownerIsAdmin,
     };
   };
 
-  // ✅ [추가] 핫플레이스 카운트 증가 (usageType: "membership" | "paid_extra")
-  // - 글 등록 성공 후 호출 (사후 처리)
-  // - paid_extra 인 경우, purchaseInfo가 있으면 결제 기록도 저장
   const incrementHotplaceCount = async ({ usageType, purchaseInfo } = {}) => {
     if (!user?.uid) return;
 
     const monthKey = getCurrentMonthKeyKST();
 
     if (usageType === "paid_extra") {
-      const baseCount = hotplacePaidExtraMonthKey === monthKey ? (typeof hotplacePaidExtraCount === "number" ? hotplacePaidExtraCount : 0) : 0;
+      const baseCount =
+        hotplacePaidExtraMonthKey === monthKey
+          ? (typeof hotplacePaidExtraCount === "number" ? hotplacePaidExtraCount : 0)
+          : 0;
       const nextCount = baseCount + 1;
 
       await updateDoc(doc(db, "users", user.uid), {
@@ -1528,12 +1447,11 @@ ownerIsAdmin,
     if (!user) return;
     await addDoc(collection(db, "posts"), {
       ...newPostData,
-      // ✅ [수정] 업종(category)을 포함한 모든 데이터가 무조건 DB에 박히도록 처리
       category: newPostData.category,
       ownerId: user.uid,
       ownerEmail: user.email,
       createdAt: new Date().toISOString(),
-      location: currentLocation,
+      location: homeDong || currentLocation,
     });
   };
 
@@ -1562,32 +1480,36 @@ ownerIsAdmin,
         myCoords,
         setMyCoords,
 
+        // ✅ 홈 동(표시/검증)
+        homeDong,
+        homeDongVerified,
+        homeDongVerifiedAt,
+        loadHomeDongFromStorage,
+        saveHomeDong,
+        clearHomeDong,
+        refreshMyCoords,
+        verifyHomeDongByGps,
+
         posts,
-        stores, // ✅ [추가] stores 내보내기
+        stores,
         addPost,
         updatePost,
         deletePost,
 
         loadMorePosts,
-        loadMoreStores, // ✅ [추가] loadMoreStores 내보내기
+        loadMoreStores,
 
-        // ✅ [추가] 홈 새로고침(진짜 새로고침)
         refreshPostsAndStores,
 
         getDistanceFromLatLonInKm,
         verifyLocation,
         isVerified,
 
-        // ✅ [추가] 홈 게이팅(커스텀 모달)용 준비 상태
         authChecked,
         locationChecked,
         postsLoaded,
         storesLoaded,
         isBooting,
-
-        // ✅ [추가] HomeScreen 전용 게이트(최소 조건)
-        isHomeReady,
-        isHomeBooting,
 
         isPremium,
         premiumUntil,
@@ -1595,7 +1517,6 @@ ownerIsAdmin,
         dailyPostCountDate,
         incrementDailyPostCount,
 
-        // ✅ [추가] 핫플레이스 멤버십/월 카운트/eligibility/카운트 증가 함수
         membershipType,
         hotplaceMonthKey,
         hotplaceCount,
@@ -1605,7 +1526,6 @@ ownerIsAdmin,
         checkHotplaceEligibility,
         incrementHotplaceCount,
 
-        // ✅ [추가] $0.99 단건(Consumable) 결제 구매 함수
         purchaseHotplaceConsumable,
         purchaseHotplaceExtra: purchaseHotplaceConsumable,
 
@@ -1623,7 +1543,6 @@ ownerIsAdmin,
     >
       {children}
 
-      {/* ✅ Alert.alert 대체 커스텀 모달 (문구/제목 동일 유지) */}
       <CustomModal
         visible={modalVisible}
         title={modalTitle}

@@ -118,6 +118,7 @@ export default function HomeScreen({ navigation }) {
     loadMoreStores,
     refreshPostsAndStores,
     verifyLocation,
+    checkSavedVerification,
     isVerified,
     isBooting,
     checkHotplaceEligibility,
@@ -163,6 +164,8 @@ export default function HomeScreen({ navigation }) {
     ROUTES?.HOTPLACE_WRITE ||
     ROUTES?.STORE_WRITE_SCREEN;
 
+  const MY_TOWN_ROUTE = ROUTES?.MY_TOWN;
+
   // ✅ [수정] (3) 게이트 visible 조건 최소화:
   // - isBooting이 boolean이면 그대로 쓰지 않고, "위치 인증"과 "좌표 존재"만 최소 조건으로 사용
   // - storesLoaded 때문에 영구 봉쇄되는 케이스 차단
@@ -197,15 +200,15 @@ export default function HomeScreen({ navigation }) {
       return;
     }
 
-    // ✅ [수정] (2) 게이트 확인 버튼에서 refreshPostsAndStores로 loaded 리셋하지 않음
-    // - 여기서는 위치 재검증만 수행 (필요 시 좌표 갱신)
     setGateTimeoutPassed(false);
 
-    if (typeof verifyLocation === "function") {
-      try {
-        await verifyLocation();
-      } catch (e) {}
-    }
+    try {
+      if (typeof checkSavedVerification === "function") {
+        await checkSavedVerification(true); // ✅ 강제 재인증
+      } else if (typeof verifyLocation === "function") {
+        await verifyLocation(); // fallback
+      }
+    } catch (e) {}
   };
 
   // ✅ [수정] (1) useFocusEffect에서 refreshPostsAndStores 호출 제거 (loaded 리셋 방지)
@@ -356,7 +359,11 @@ export default function HomeScreen({ navigation }) {
     if (isLocationLoading) return;
     setIsLocationLoading(true);
     try {
-      await verifyLocation(); 
+      if (typeof checkSavedVerification === "function") {
+        await checkSavedVerification(true); // ✅ 강제 재인증
+      } else if (typeof verifyLocation === "function") {
+        await verifyLocation(); // fallback
+      }
     } catch (e) {
       console.error(e);
     } finally {
@@ -365,7 +372,15 @@ export default function HomeScreen({ navigation }) {
   };
 
   useEffect(() => {
-    handleRefreshLocation();
+    (async () => {
+      try {
+        if (typeof checkSavedVerification === "function") {
+          await checkSavedVerification(false); // ✅ 캐시 우선
+        } else if (typeof verifyLocation === "function") {
+          await verifyLocation(); // fallback
+        }
+      } catch (e) {}
+    })();
   }, []);
 
   useEffect(() => {
@@ -476,27 +491,45 @@ export default function HomeScreen({ navigation }) {
 
   return (
     <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
+      {/* ✅ 수정된 헤더: 클릭 시 내 동네 설정 화면으로 이동 */}
       <View style={styles.header}>
         <TouchableOpacity 
-          onPress={handleRefreshLocation} 
+          onPress={() => MY_TOWN_ROUTE && navigation.navigate(MY_TOWN_ROUTE)}  
           style={{ flexDirection: "row", alignItems: "center" }}
           activeOpacity={0.7}
         >
-          <Text style={styles.location}>{currentLocation} {isAdmin ? "(관리자)" : ""}</Text>
-          {isLocationLoading ? (
-            <ActivityIndicator size="small" color="white" style={{ marginLeft: 4 }} />
-          ) : (
-            <MaterialIcons name="keyboard-arrow-down" size={24} color="white" />
-          )}
+          <View style={{ flexDirection: "row", alignItems: "center" }}>
+            <Text style={styles.location}>{isVerified ? (currentLocation || "내 동네") : "내 동네 설정"}</Text>
+            {/* ✅ 우리 컨셉에 맞춘 네온 그린/레드 상태 표시 배지 */}
+            <View style={[
+              styles.miniBadge, 
+              { backgroundColor: isVerified ? theme.primary : "rgba(255, 68, 68, 0.2)" },
+              { borderColor: isVerified ? theme.primary : "#FF4444", borderWidth: 1 }
+            ]}>
+              <Text style={[
+                styles.miniBadgeText, 
+                { color: isVerified ? "black" : "#FF4444" }
+              ]}>
+                {isVerified ? "동네인증" : "동네미인증"}
+              </Text>
+            </View>
+            <MaterialIcons name="keyboard-arrow-down" size={22} color="white" style={{ marginLeft: 2 }} />
+          </View>
         </TouchableOpacity>
 
         <View style={{ flexDirection: "row", gap: 14, alignItems: "center" }}>
-          <TouchableOpacity onPress={() => navigation.navigate(ROUTES.CHAT_ROOMS)}>
-            <Ionicons name="chatbubbles-outline" size={26} color="white" />
+          <TouchableOpacity
+            onPress={() => navigation.navigate(ROUTES.CHAT_ROOMS)}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="chatbubbles-outline" size={24} color="white" />
           </TouchableOpacity>
 
-          <TouchableOpacity onPress={() => navigation.navigate(ROUTES.PROFILE)}>
-            <MaterialIcons name="account-circle" size={30} color="white" />
+          <TouchableOpacity
+            onPress={() => navigation.navigate(ROUTES?.PROFILE || "Profile")}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="person-circle-outline" size={26} color="white" />
           </TouchableOpacity>
         </View>
       </View>
@@ -775,6 +808,24 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.background },
   header: { flexDirection: "row", justifyContent: "space-between", padding: 16, alignItems: "center" },
   location: { color: "white", fontSize: 20, fontWeight: "bold" },
+  miniBadge: {
+    marginLeft: 8,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    justifyContent: 'center',
+    alignItems: 'center',
+    // 살짝 빛나는 효과를 위한 그림자 (iOS)
+    shadowColor: theme.primary,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.5,
+    shadowRadius: 4,
+  },
+  miniBadgeText: {
+    fontSize: 9,
+    fontWeight: "900", // 아주 두껍게
+    letterSpacing: 0.5,
+  },
   categoryRow: { flexDirection: "row", justifyContent: "space-between", paddingHorizontal: 16, paddingBottom: 10, borderBottomWidth: 1, borderBottomColor: "#333", backgroundColor: theme.background },
   categoryBtn: { paddingVertical: 6, paddingHorizontal: 8, borderRadius: 15 },
   categoryBtnActive: { backgroundColor: theme.primary },

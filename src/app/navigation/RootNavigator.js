@@ -28,6 +28,9 @@ import TermsOfServiceScreen from "../../features/profile/screens/TermsOfServiceS
 import PrivacyPolicyScreen from "../../features/profile/screens/PrivacyPolicyScreen";
 import OperationPolicyScreen from "../../features/profile/screens/OperationPolicyScreen";
 
+// ✅ [추가] 내 동네 설정 화면 import
+import MyTownScreen from "../../features/location/screens/MyTownScreen";
+
 // ✅ [추가] 알림 화면 import
 import NotificationScreen from "../../features/profile/screens/NotificationScreen";
 
@@ -110,7 +113,7 @@ export default function RootNavigator() {
             <Stack.Screen name={ROUTES.STORE_WRITE} component={StoreWriteScreen} options={{ title: "핫플레이스 스토어등록" }} />
 
             {/* ✅ [추가] 스토어 리스트 화면 등록 */}
-            <Stack.Screen name="StoreList" component={StoreListScreen} options={{ title: "핫플레이스 목록" }} />
+            <Stack.Screen name={ROUTES.STORE_LIST} component={StoreListScreen} options={{ title: "핫플레이스 목록" }} />
 
             {/* ✅ [추가] 스토어 상세 화면 등록 (여기 추가됨) */}
             <Stack.Screen name={ROUTES.STORE_DETAIL} component={StoreDetailScreen} options={{ title: "핫플레이스 상세" }} />
@@ -152,6 +155,13 @@ export default function RootNavigator() {
             <Stack.Screen name={ROUTES.TERMS_OF_SERVICE} component={TermsOfServiceScreen} options={{ title: "서비스 이용약관" }} />
             <Stack.Screen name={ROUTES.PRIVACY_POLICY} component={PrivacyPolicyScreen} options={{ title: "개인정보 처리방침" }} />
             <Stack.Screen name={ROUTES.OPERATION_POLICY} component={OperationPolicyScreen} options={{ title: "운영정책" }} />
+
+            {/* ✅ [추가] 내 동네 설정 화면 등록 */}
+            <Stack.Screen 
+              name={ROUTES.MY_TOWN} 
+              component={MyTownScreen} 
+              options={{ title: "내 동네", headerShown: true }} 
+            />
           </>
         )}
       </Stack.Navigator>

@@ -262,7 +262,7 @@ export default function StoreWriteScreen({ route, navigation }) {
 
         await addDoc(collection(db, "stores"), newStoreData);
 
-        if (typeof incrementHotplaceCount === "function") {
+        if (typeof incrementHotplaceCount === "function" && !isAdmin) { 
           const usageType = paymentType === "single" ? "paid_extra" : "membership";
           await incrementHotplaceCount({ usageType, purchaseInfo: purchaseInfo ?? null });
         }
