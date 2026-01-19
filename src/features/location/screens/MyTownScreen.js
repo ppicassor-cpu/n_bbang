@@ -1,4 +1,4 @@
-// ================================================================================
+// ================================================================================ 
 //  FILE: src/features/location/screens/MyTownScreen.js
 // ================================================================================
 
@@ -15,12 +15,14 @@ import {
   Modal,  
   KeyboardAvoidingView,
   Platform,
-  StatusBar
+  StatusBar,
+  ScrollView,
+  Pressable
 } from "react-native";
 import MapView, { Polygon, Marker, PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-
+import { useAppContext } from "../../../app/providers/AppContext";
 // ✅ Turf 라이브러리 (없으면 크래쉬 남)
 import booleanPointInPolygon from "@turf/boolean-point-in-polygon";
 import { point, polygon, multiPolygon } from "@turf/helpers";
@@ -30,6 +32,7 @@ import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 
 // ✅ 데이터 파일 (경로 정확해야 함)
 import GJSON_DATA from "../../../../assets/geo/HangJeongDong.json";
+import DONG_INDEX from "../../../../assets/geo/DongSearchIndex.json";
 
 const { width } = Dimensions.get("window");
 const PRIMARY_COLOR = "#CCFF00"; // 라임 그린
@@ -228,6 +231,8 @@ const MyTownScreen = ({ navigation }) => {
   const insets = useSafeAreaInsets();
   const mapRef = useRef(null);
 
+  const { saveHomeDong, verifyHomeDongByGps } = useAppContext();
+
   // GeoJSON 검증용 Ref
   const geoIsWgs84Ref = useRef(null);
   const geoCheckedRef = useRef(false);
@@ -246,10 +251,145 @@ const MyTownScreen = ({ navigation }) => {
   // ✅ [추가] TopoJSON/GeoJSON 자동 판별 후, 실제로 사용할 features 준비
   const geoPrepared = useMemo(() => _buildGeoFeatures(GJSON_DATA), []);
 
+  // ✅ [추가] DongSearchIndex.json (key -> entries[]) 빠른 조회용 맵 (한번만 생성)
+  const dongIndexMap = useMemo(() => {
+    const m = new Map();
+    const arr = Array.isArray(DONG_INDEX) ? DONG_INDEX : [];
+
+    for (let i = 0; i < arr.length; i++) {
+      const it = arr[i] || {};
+      const k = String(it.key || "");
+      if (!k) continue;
+
+      if (!m.has(k)) m.set(k, []);
+      m.get(k).push(it);
+    }
+    return m;
+  }, []);
+
+  // ✅ [추가] adm_cd -> GeoJSON feature 빠른 조회용 맵 (features 준비되면 생성)
+  const featureByAdmCd = useMemo(() => {
+    const m = new Map();
+    const feats = geoPrepared?.features || [];
+
+    for (let i = 0; i < feats.length; i++) {
+      const f = feats[i];
+      const cd = f?.properties?.adm_cd;
+      if (cd) m.set(String(cd), f);
+    }
+    return m;
+  }, [geoPrepared]);
+
+  // ✅ [추가] adm_cd2(10자리) -> GeoJSON feature 빠른 조회용 맵
+  // - DongSearchIndex.json의 3번째 값(예: 2711010100)이 실제로는 adm_cd2 형태로 들어오는 케이스가 많음
+  const featureByAdmCd2 = useMemo(() => {
+    const m = new Map();
+    const feats = geoPrepared?.features || [];
+
+    for (let i = 0; i < feats.length; i++) {
+      const f = feats[i];
+      const cd2 = f?.properties?.adm_cd2;
+      if (cd2) m.set(String(cd2), f);
+    }
+    return m;
+  }, [geoPrepared]);
+
+// ✅ [추가] adm_nm(공백 제거) -> GeoJSON feature 빠른 조회용 맵 (법정동 라벨 매핑용)
+  const featureByAdmNm = useMemo(() => {
+    const m = new Map();
+    const feats = geoPrepared?.features || [];
+
+    const norm = (s) => String(s || "").replace(/\s+/g, "").trim();
+
+    for (let i = 0; i < feats.length; i++) {
+      const f = feats[i];
+      const nm = norm(f?.properties?.adm_nm);
+      if (nm) {
+        // 중복일 수 있으나, 기본은 첫 번째 유지
+        if (!m.has(nm)) m.set(nm, f);
+      }
+    }
+    return m;
+  }, [geoPrepared]);
+
+  const _normalizeAdmCd = (v) => {
+    const s = String(v ?? "").trim();
+    if (!s) return null;    
+    return s;
+  };
+
+  // ✅ [추가] DongSearchIndex entry.label -> HangJeongDong feature 매칭
+  const _resolveFeatureFromLabel = (label) => {
+    try {
+      if (!label || !geoPrepared?.ok) return null;
+
+      const norm = (s) => String(s || "").replace(/\s+/g, "").trim();
+      const raw = String(label || "").trim();
+
+      // 1) 가장 우선: 공백 제거 후 adm_nm 완전일치
+      const exact = featureByAdmNm.get(norm(raw));
+      if (exact) return exact;
+
+      // 2) 토큰 점수 기반 best-match (동명 중복 대응)
+      const tokens = raw.split(/\s+/).filter(Boolean);
+      if (!tokens.length) return null;
+
+      const feats = geoPrepared?.features || [];
+      let best = null;
+      let bestScore = 0;
+
+      for (let i = 0; i < feats.length; i++) {
+        const f = feats[i];
+        const admNm = String(f?.properties?.adm_nm || "");
+        if (!admNm) continue;
+
+        let score = 0;
+        for (const t of tokens) {
+          if (admNm.includes(t)) score += 1;
+        }
+
+        // 최소 2토큰 이상 매칭(예: "동구"+"삼정동")이면 후보로 인정
+        if (score >= 2 && score > bestScore) {
+          bestScore = score;
+          best = f;
+        }
+      }
+
+      return best;
+    } catch {
+      return null;
+    }
+  };
   // ✅ [추가] 주소 검색 결과(중복 대응) 드롭다운 상태
   const [searchOptions, setSearchOptions] = useState([]);
   const [selectedSearchOption, setSelectedSearchOption] = useState(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
+
+  // ✅ [추가] 지오코딩 캐시 (adm_cd 없는 항목 선택 시)
+  const geocodeCacheRef = useRef(new Map());
+
+  // ✅ [추가] 검색 버튼 기준 드롭다운 위치 계산용
+  const searchBtnRef = useRef(null);
+  const [dropdownAnchor, setDropdownAnchor] = useState(null);
+
+  // ✅ [추가] selectedDong가 없으면 인증 상태는 무조건 false
+  useEffect(() => {
+    if (!selectedDong) {
+      setIsVerified(false);
+    }
+  }, [selectedDong]);
+
+  // ✅ [추가] 검색 버튼 위치 측정(드롭다운을 검색 버튼 바로 밑에 띄우기 위함)
+  const _measureSearchBtnAnchor = () => {
+    try {
+      if (!searchBtnRef.current?.measureInWindow) return;
+      requestAnimationFrame(() => {
+        searchBtnRef.current.measureInWindow((x, y, w, h) => {
+          setDropdownAnchor({ x, y, w, h });
+        });
+      });
+    } catch {}
+  };
 
   useEffect(() => {
     _getCurrentLocation();
@@ -259,9 +399,28 @@ const MyTownScreen = ({ navigation }) => {
     if (activeTab === "current") {
       _getCurrentLocation();
     } else {
+      // ✅ search 탭 진입 시: 이전(current 탭) 선택 동이 남아있어서 "불일치"가 뜨는 걸 방지
+      setSelectedDong(null);
       setIsVerified(false);
+
+      // ✅ (선택) 검색 상태도 초기화(UX 안정화)
+      setSearchCoords(null);
+      setSearchOptions([]);
+      setSelectedSearchOption(null);
+      setDropdownOpen(false);
     }
   }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== "search") return;
+    if (!myCoords) return;
+    if (!selectedDong) return;
+
+    _checkVerification(
+      { latitude: myCoords.latitude, longitude: myCoords.longitude },
+      selectedDong
+    );
+  }, [activeTab, myCoords, selectedDong]);
 
   // ✅ [수정] 첫 좌표는 "실제 사용 features" 기준으로 뽑기 (TopoJSON도 지원)
   const _getFirstGeoCoord = () => {
@@ -374,7 +533,13 @@ const MyTownScreen = ({ navigation }) => {
 
       if (found) {
         setSelectedDong(found);
-        const baseCoords = activeTab === "search" && searchCoords ? searchCoords : coords;
+
+        // ✅ search 탭에서도 "인증 기준"은 내 GPS(myCoords)로만 판단
+        // - coords는 _findDongByCoords에 들어온 좌표(검색 좌표일 수 있음)라서 사용하면 안 됨
+        const baseCoords = myCoords
+          ? { latitude: myCoords.latitude, longitude: myCoords.longitude }
+          : coords;
+
         _checkVerification(baseCoords, found);
         _focusMap(coords);
       } else {
@@ -416,15 +581,421 @@ const MyTownScreen = ({ navigation }) => {
     _findDongByCoords(coords);
   };
 
-  const _formatOptionLabel = (addr, fallbackText) => {
+    const _formatOptionLabel = (addr, fallbackText) => {
     try {
-      const region = (addr?.region || "").trim(); // 시/도
-      const cityOrCounty = (addr?.city || addr?.subregion || "").trim(); // 시/군/구
-      const label = [region, cityOrCounty].filter(Boolean).join(" ").trim();
-      return label || String(fallbackText || "");
+      // ✅ region/city/subregion이 비어있을 때도 라벨이 최대한 구체적으로 나오도록 보강
+      const region = String(addr?.region || "").trim(); // 시/도
+      const cityOrCounty = String(addr?.city || addr?.subregion || "").trim(); // 시/군/구
+
+      const district = String(
+        addr?.district || addr?.county || addr?.municipality || ""
+      ).trim(); // 기기/플랫폼에 따라 내려오는 추가 행정단위
+
+      const street = String(addr?.street || "").trim();
+      const name = String(addr?.name || "").trim();
+
+      const label = [region, cityOrCounty, district]
+        .filter(Boolean)
+        .join(" ")
+        .trim();
+
+      // label이 비면 street/name까지 fallback으로 붙임 (드롭다운에서 구분 가능하게)
+      const fallback = [region, cityOrCounty, district, street, name]
+        .filter(Boolean)
+        .join(" ")
+        .trim();
+
+      return label || fallback || String(fallbackText || "");
     } catch {
       return String(fallbackText || "");
     }
+  };
+
+  // =========================================================
+  // ✅ [추가] HangJeongDong.json 기반 "동 이름 검색" (중복 후보 100% 리스트업)
+  // =========================================================
+  const _normalizeDongQuery = (q) => {
+    const raw = String(q || "").trim();
+    // 공백 제거 + 끝의 '동/읍/면'은 입력이 있든 없든 매칭되게 처리
+    const noSpace = raw.replace(/\s+/g, "");
+    return noSpace;
+  };
+
+  const _getDongTokenFromAdmNm = (admNm) => {
+    const full = String(admNm || "").trim();
+    if (!full) return "";
+    // 보통 "시/도 구/군 동/읍/면" 형태 → 마지막 토큰이 동 이름
+    const tokens = full.split(/\s+/).filter(Boolean);
+    return String(tokens[tokens.length - 1] || "").trim();
+  };
+
+  const _calcFeatureCenter = (feature) => {
+    try {
+      const geom = feature?.geometry;
+      if (!geom?.type || !geom?.coordinates) return null;
+
+      // Polygon: coordinates[0] (outer ring)
+      // MultiPolygon: coordinates[0][0] (첫 polygon의 outer ring)
+      const ring =
+        geom.type === "Polygon"
+          ? geom.coordinates?.[0]
+          : geom.type === "MultiPolygon"
+          ? geom.coordinates?.[0]?.[0]
+          : null;
+
+      if (!Array.isArray(ring) || ring.length < 2) return null;
+
+      let minLon = Infinity;
+      let maxLon = -Infinity;
+      let minLat = Infinity;
+      let maxLat = -Infinity;
+
+      for (const c of ring) {
+        const lon = c?.[0];
+        const lat = c?.[1];
+        if (typeof lon !== "number" || typeof lat !== "number") continue;
+        if (lon < minLon) minLon = lon;
+        if (lon > maxLon) maxLon = lon;
+        if (lat < minLat) minLat = lat;
+        if (lat > maxLat) maxLat = lat;
+      }
+
+      if (!isFinite(minLon) || !isFinite(minLat) || !isFinite(maxLon) || !isFinite(maxLat)) return null;
+
+      return {
+        latitude: (minLat + maxLat) / 2,
+        longitude: (minLon + maxLon) / 2,
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  // ✅ [추가] adm_cd 없는 항목 선택 시 지오코딩(주소 -> 좌표) fallback
+  const _geocodeToCoords = async (label) => {
+    try {
+      const q = String(label || "").trim();
+      if (!q) return null;
+
+      const cached = geocodeCacheRef.current.get(q);
+      if (cached) return cached;
+
+      const geocoded = await Location.geocodeAsync(q);
+      if (Array.isArray(geocoded) && geocoded.length > 0) {
+        const { latitude, longitude } = geocoded[0] || {};
+        if (typeof latitude === "number" && typeof longitude === "number") {
+          const coords = { latitude, longitude };
+          geocodeCacheRef.current.set(q, coords);
+          return coords;
+        }
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  };
+
+  // ✅ [수정] 검색 결과 선택 핸들러
+  const _handleSelectSearchOption = async (opt) => {
+    try {
+      setSelectedSearchOption(opt);
+      setDropdownOpen(false);
+
+      // =========================================================
+      // CASE A: feature가 이미 있으면 그대로 사용 (폴리곤 + 중심점 이동)
+      // =========================================================
+      if (opt?.feature) {
+        const feature = opt.feature;
+        const center = opt?.coords || _calcFeatureCenter(feature);
+
+        if (center) {
+          setSearchCoords(center);
+          _focusMap(center);
+        }
+
+        setSelectedDong(feature);
+
+        if (myCoords) {
+          _checkVerification(
+            { latitude: myCoords.latitude, longitude: myCoords.longitude },
+            feature
+          );
+        } else {
+          setIsVerified(false);
+        }
+
+        return;
+      }
+
+      // =========================================================
+      // CASE A-2: adm_cd가 존재함 -> featureByAdmCd에서 재조회
+      // =========================================================
+      if (opt?.adm_cd) {
+        const admCd = _normalizeAdmCd(opt.adm_cd);
+        const feature = admCd ? featureByAdmCd.get(admCd) : null;
+
+        if (feature) {
+          const center = opt?.coords || _calcFeatureCenter(feature);
+
+          if (center) {
+            setSearchCoords(center);
+            _focusMap(center);
+          }
+
+          setSelectedDong(feature);
+
+          if (myCoords) {
+            _checkVerification(
+              { latitude: myCoords.latitude, longitude: myCoords.longitude },
+              feature
+            );
+          } else {
+            setIsVerified(false);
+          }
+
+          return;
+        }
+      }
+
+      // =========================================================
+      // CASE A-3: DongSearchIndex의 bjd_cd(10자리) -> HangJeongDong의 adm_cd2로 feature 재조회
+      // =========================================================
+      if (opt?.bjd_cd) {
+        const cd2 = String(opt.bjd_cd || "").trim();
+        const feature = cd2 ? featureByAdmCd2.get(cd2) : null;
+
+        if (feature) {
+          const center = opt?.coords || _calcFeatureCenter(feature);
+
+          if (center) {
+            setSearchCoords(center);
+            _focusMap(center);
+          }
+
+          setSelectedDong(feature);
+
+          if (myCoords) {
+            _checkVerification(
+              { latitude: myCoords.latitude, longitude: myCoords.longitude },
+              feature
+            );
+          } else {
+            setIsVerified(false);
+          }
+
+          return;
+        }
+      }
+
+      // =========================================================
+      // CASE B: adm_cd 없음 -> 지오코딩 + 폴리곤 OFF
+      // =========================================================
+      const coords = await _geocodeToCoords(opt?.label);
+      if (coords) {
+        setSearchCoords(coords);
+        _focusMap(coords);
+
+        // ✅ 핵심: 폴리곤 끄기 + 인증 끄기
+        setSelectedDong(null);
+        setIsVerified(false);
+      } else {
+        setSelectedDong(null);
+        setIsVerified(false);
+        _showModal("검색 실패", "위치를 검색할 수 없습니다.");
+      }
+    } catch {
+      setSelectedDong(null);
+      setIsVerified(false);
+      _showModal("오류", "위치 이동 중 문제가 발생했습니다.");
+    }
+  };
+
+  const _buildDongOptionsFromGeo = (q) => {
+    const query = _normalizeDongQuery(q);
+    if (!query) return [];
+    if (!geoPrepared?.ok) return [];
+
+    const qKey = query;
+    const out = [];
+
+    const seenAdmCd = new Set();
+    const seenLabelNoAdm = new Set();
+
+    let entries = [];
+
+    // ✅ 1) 기존 배열 구조([{key,label,adm_cd,...}, ...]) 지원
+    if (Array.isArray(DONG_INDEX)) {
+      entries = dongIndexMap?.get(qKey) || [];
+
+      // 2) 정확 매칭이 없으면 부분 매칭(너무 많은 경우 대비 제한)
+      if (!entries.length) {
+        const arr = Array.isArray(DONG_INDEX) ? DONG_INDEX : [];
+        const temp = [];
+        const LIMIT = 300;
+
+        for (let i = 0; i < arr.length; i++) {
+          const it = arr[i] || {};
+          const k = String(it.key || "");
+          if (!k) continue;
+          if (k.includes(qKey)) {
+            temp.push(it);
+            if (temp.length >= LIMIT) break;
+          }
+        }
+        entries = temp;
+      }
+    }
+
+    // ✅ 2) 압축 구조({v,labels,keys}) 지원: keys[key] = [[adm_cd,labelId,bjd_cd], ...]
+    if (
+      !entries.length &&
+      DONG_INDEX &&
+      typeof DONG_INDEX === "object" &&
+      Array.isArray(DONG_INDEX.labels) &&
+      (DONG_INDEX.keys || DONG_INDEX.index)
+    ) {
+      const labels = Array.isArray(DONG_INDEX.labels) ? DONG_INDEX.labels : [];
+      const keysObj =
+        (DONG_INDEX.keys && typeof DONG_INDEX.keys === "object")
+          ? DONG_INDEX.keys
+          : (DONG_INDEX.index && typeof DONG_INDEX.index === "object")
+          ? DONG_INDEX.index
+          : {};
+
+      const _rowToEntry = (row, k) => {
+        const a0 = row?.[0];
+        const a1 = row?.[1];
+        const a2 = row?.[2];
+
+        let lid = null;
+        let adm_cd = "";
+        let bjd_cd = "";
+
+        // 케이스 1) [labelId, adm_cd, bjd_cd] (실제 파일에서 흔함)
+        if (typeof a0 === "number" && labels[a0] != null) {
+          lid = a0;
+          adm_cd = a1 != null ? String(a1) : "";
+          bjd_cd = a2 != null ? String(a2) : "";
+        }
+        // 케이스 2) [adm_cd, labelId, bjd_cd]
+        else if (typeof a1 === "number" && labels[a1] != null) {
+          lid = a1;
+          adm_cd = a0 != null ? String(a0) : "";
+          bjd_cd = a2 != null ? String(a2) : "";
+        }
+        // 예외: 판별 불가하면 기존 가정 유지
+        else {
+          adm_cd = a0 != null ? String(a0) : "";
+          lid = typeof a1 === "number" ? a1 : null;
+          bjd_cd = a2 != null ? String(a2) : "";
+        }
+
+        const label =
+          (typeof lid === "number" && labels[lid] != null) ? String(labels[lid]) : "";
+
+        return { key: k, label, adm_cd: adm_cd || null, bjd_cd: bjd_cd || null };
+      };
+
+      const list = Array.isArray(keysObj[qKey]) ? keysObj[qKey] : [];
+      entries = list.map((row) => _rowToEntry(row, qKey));
+
+      if (!entries.length) {
+        const temp = [];
+        const LIMIT = 300;
+        const allKeys = Object.keys(keysObj);
+
+        for (let i = 0; i < allKeys.length; i++) {
+          const k = String(allKeys[i] || "");
+          if (!k) continue;
+          if (k.includes(qKey)) {
+            const rows = Array.isArray(keysObj[k]) ? keysObj[k] : [];
+            for (let r = 0; r < rows.length; r++) {
+              temp.push(_rowToEntry(rows[r], k));
+              if (temp.length >= LIMIT) break;
+            }
+          }
+          if (temp.length >= LIMIT) break;
+        }
+        entries = temp;
+      }
+    }
+
+    for (let i = 0; i < entries.length; i++) {
+      const it = entries[i] || {};
+
+      let admCd = it.adm_cd != null ? _normalizeAdmCd(it.adm_cd) : null;
+      if (admCd === "") admCd = null;
+
+      const label = String(it.label || it.key || query).trim();
+      const bjdCd = it.bjd_cd != null ? String(it.bjd_cd) : null;
+
+      // =========================================================
+      // CASE A: adm_cd 존재 -> GeoJSON 폴리곤 + 중심점 좌표로 옵션 생성
+      // =========================================================
+      if (admCd) {
+        const feature = featureByAdmCd.get(admCd);
+        if (!feature) continue;
+
+        if (seenAdmCd.has(admCd)) continue;
+        seenAdmCd.add(admCd);
+
+        const center = _calcFeatureCenter(feature);
+        if (!center) continue;
+
+        out.push({
+          id: `${admCd}_${i}`,
+          label,
+          coords: center,
+          feature,
+          adm_cd: admCd,
+          bjd_cd: bjdCd,
+        });
+        continue;
+      }
+
+      // =========================================================
+      // CASE B: adm_cd 없음 -> 지오코딩으로 센터링만 할 옵션 생성(폴리곤 없음)
+      // =========================================================
+      if (bjdCd) {
+        const feature = featureByAdmCd2.get(String(bjdCd));
+        if (feature) {
+          const center = _calcFeatureCenter(feature);
+          if (center) {
+            const cd = feature?.properties?.adm_cd ? String(feature.properties.adm_cd) : null;
+            out.push({
+              id: `${cd || bjdCd}_${i}`,
+              label,
+              coords: center,
+              feature,
+              adm_cd: cd,
+              bjd_cd: bjdCd,
+            });
+            continue;
+          }
+        }
+      }
+
+      // =========================================================
+      // CASE C: feature를 못 찾으면 지오코딩으로 센터링만 할 옵션 생성(폴리곤 없음)
+      // =========================================================
+      const labelKey = String(label || "").trim();
+      if (!labelKey) continue;
+
+      if (seenLabelNoAdm.has(labelKey)) continue;
+      seenLabelNoAdm.add(labelKey);
+
+      out.push({
+        id: `NOADM_${i}`,
+        label,
+        coords: null,
+        feature: null,
+        adm_cd: null,
+        bjd_cd: bjdCd,
+      });
+    }
+
+    out.sort((a, b) => String(a.label).localeCompare(String(b.label)));
+    return out;
   };
 
   const _onSearchAddress = async () => {
@@ -441,34 +1012,64 @@ const MyTownScreen = ({ navigation }) => {
       setSelectedSearchOption(null);
       setDropdownOpen(false);
 
-      const result = await Location.geocodeAsync(q);
-      if (result?.length) {
-        const limited = result.slice(0, 6);
-        const optionList = [];
+      // =========================================================
+      // ✅ [교체] OS 지오코더가 아니라 HangJeongDong.json에서 직접 후보를 만든다
+      // =========================================================
+      const optionList = _buildDongOptionsFromGeo(q);
 
-        for (let i = 0; i < limited.length; i++) {
-          const r = limited[i];
-          const coords = { latitude: r.latitude, longitude: r.longitude };
-
-          let label = q;
-          try {
-            const rev = await Location.reverseGeocodeAsync(coords);
-            const addr = rev?.[0] || null;
-            label = _formatOptionLabel(addr, q);
-          } catch {}
-
-          optionList.push({
-            id: `${coords.latitude}_${coords.longitude}_${i}`,
-            label,
-            coords,
-          });
-        }
-
+      if (optionList.length) {
         setSearchOptions(optionList);
-        const first = optionList[0] || null;
-        setSelectedSearchOption(first);
-        if (first?.coords) {
-          _applySearchCoords(first.coords);
+
+        // ✅ 중복(2개 이상)일 때: 자동 이동 금지 + 드롭다운 자동 오픈 (100% 동작)
+        if (optionList.length === 1) {
+          const only = optionList[0] || null;
+          setSelectedSearchOption(only);
+
+          if (only?.adm_cd && only?.feature) {
+            const center = only?.coords || _calcFeatureCenter(only.feature);
+
+            if (center) {
+              setSearchCoords(center);
+              _focusMap(center);
+            }
+
+            setSelectedDong(only.feature);
+
+            if (myCoords) {
+              _checkVerification(
+                { latitude: myCoords.latitude, longitude: myCoords.longitude },
+                only.feature
+              );
+            } else {
+              setIsVerified(false);
+            }
+          } else {
+            // ✅ adm_cd가 없으면 지오코딩으로 센터링만
+            const coords = await _geocodeToCoords(only?.label);
+            if (coords) {
+              setSearchCoords(coords);
+              _focusMap(coords);
+
+              setSelectedDong(null);
+              setIsVerified(false);
+            } else {
+              setSelectedDong(null);
+              setIsVerified(false);
+              _showModal("검색 실패", "위치를 검색할 수 없습니다.");
+            }
+          }
+        } else {
+          setSelectedSearchOption(null);
+
+          _measureSearchBtnAnchor();
+          setDropdownOpen(true);
+
+          // 중복 후보는 사용자가 고르게 해야 하므로, 현재 선택/인증은 초기화
+          setSelectedDong(null);
+          setIsVerified(false);
+
+          // ✅ 자동 이동 금지: map 이동/selectedDong 세팅 하지 않음
+          // (사용자가 드롭다운에서 하나 선택하면 그때 이동)
         }
       } else {
         setSelectedDong(null);
@@ -497,24 +1098,25 @@ const MyTownScreen = ({ navigation }) => {
 
   // ✅ [수정] 저장 요구사항: 4개 키를 AsyncStorage에 각각 저장
   const _onSave = async () => {
-    if (!isVerified || !selectedDong) return;
-    try {
-      const fullName = selectedDong?.properties?.adm_nm || "";
-      const dongName = fullName ? fullName.split(" ").pop() : "";
-      const dongCode = selectedDong?.properties?.adm_cd ? String(selectedDong.properties.adm_cd) : "";
+  if (!isVerified || !selectedDong) return;
 
-      await AsyncStorage.multiSet([
-        [HOME_DONG_NAME, String(dongName)],
-        [HOME_DONG_CODE, String(dongCode)],
-        [HOME_DONG_VERIFIED, "true"],
-        [HOME_DONG_VERIFIED_AT, new Date().toISOString()],
-      ]);
+  try {
+    const fullName = selectedDong?.properties?.adm_nm || "";
+    const dongName = fullName ? fullName.split(" ").pop() : "";
+    const dongCode = selectedDong?.properties?.adm_cd ? String(selectedDong.properties.adm_cd) : "";
 
-      _showModal("완료", "동네 설정이 저장되었습니다.", () => navigation.goBack());
-    } catch {
-      _showModal("오류", "저장에 실패했습니다.");
-    }
-  };
+    // ✅ 핵심: AppContext state(homeDong) + AsyncStorage(키들)까지 같이 처리
+    await saveHomeDong({ dongName, dongCode, featureId: null });
+
+    // ✅ (선택) VERIFIED/AT까지 지금 화면 기준으로 동기화하려면 실행
+    // - AppContext가 HOME_DONG_VERIFIED / HOME_DONG_VERIFIED_AT 저장까지 담당
+    await verifyHomeDongByGps({ polygon: selectedDong?.geometry });
+
+    _showModal("완료", "동네 설정이 저장되었습니다.", () => navigation.goBack());
+  } catch {
+    _showModal("오류", "저장에 실패했습니다.");
+  }
+};
 
   const _showModal = (title, msg, onConfirm = null) => {
     setModalConfig({ title, msg, onConfirm });
@@ -549,11 +1151,14 @@ const MyTownScreen = ({ navigation }) => {
     return Math.max(base, base + extra);
   }, [insets]);
 
+  const canConfirm = Boolean(isVerified && selectedDong);
+
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <View style={styles.safeArea}>
       <StatusBar barStyle="light-content" backgroundColor="black" />
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.container}>
-        {/* 상단 헤더 & 탭 */}
+        
+        {/* ✅ [수정] paddingTop: insets.top 제거 -> 상단 여백을 없애서 위로 딱 붙임 */}
         <View style={styles.header}>          
           <View style={styles.tabBar}>
             <TouchableOpacity
@@ -580,7 +1185,7 @@ const MyTownScreen = ({ navigation }) => {
                   <Ionicons name="search" size={20} color="#666" />
                   <TextInput
                     style={styles.input}
-                    placeholder="동 이름을 입력하세요 (예: 논현동)"
+                    placeholder="동 이름을 입력하세요 (예: 중앙동)"
                     placeholderTextColor="#666"
                     value={searchText}
                     onChangeText={setSearchText}
@@ -588,51 +1193,75 @@ const MyTownScreen = ({ navigation }) => {
                     onSubmitEditing={_onSearchAddress}
                   />
                 </View>
-                <TouchableOpacity style={styles.searchBtn} onPress={_onSearchAddress}>
+                <TouchableOpacity
+                  ref={searchBtnRef}
+                  collapsable={false}
+                  style={styles.searchBtn}
+                  onPress={_onSearchAddress}
+                >
                   <Text style={styles.searchBtnText}>검색</Text>
                 </TouchableOpacity>
               </View>
-
-              {(searchOptions?.length > 1) && (
-                <View style={styles.dropdownWrap}>
-                  <View style={styles.dropdownRight}>
-                    <TouchableOpacity
-                      style={styles.dropdownBtn}
-                      onPress={() => setDropdownOpen((v) => !v)}
-                      activeOpacity={0.8}
+              
+              {dropdownOpen && (
+                <Modal
+                  visible={dropdownOpen}
+                  transparent
+                  animationType="none"
+                  onRequestClose={() => setDropdownOpen(false)}
+                >
+                  <Pressable
+                    style={styles.dropdownBackdrop}
+                    onPress={() => setDropdownOpen(false)}
+                  >
+                    <Pressable
+                      style={[
+                        styles.dropdownPanel,
+                        dropdownAnchor
+                          ? {
+                              top: dropdownAnchor.y + dropdownAnchor.h + 48,
+                              right: Math.max(16, width - (dropdownAnchor.x + dropdownAnchor.w)),
+                            }
+                          : null,
+                      ]}
+                      onPress={() => {}}
                     >
-                      <Text style={styles.dropdownBtnText} numberOfLines={1}>
-                        {selectedSearchOption?.label || "지역 선택"}
-                      </Text>
-                      <MaterialIcons name={dropdownOpen ? "keyboard-arrow-up" : "keyboard-arrow-down"} size={20} color={PRIMARY_COLOR} />
-                    </TouchableOpacity>
-
-                    {dropdownOpen && (
                       <View style={styles.dropdownList}>
-                        {searchOptions.map((opt) => {
-                          const isActive = selectedSearchOption?.id === opt.id;
-                          return (
-                            <TouchableOpacity
-                              key={opt.id}
-                              style={[styles.dropdownItem, isActive && styles.dropdownItemActive]}
-                              onPress={() => {
-                                setSelectedSearchOption(opt);
-                                setDropdownOpen(false);
-                                if (opt?.coords) _applySearchCoords(opt.coords);
-                              }}
-                              activeOpacity={0.8}
-                            >
-                              <Text style={[styles.dropdownItemText, isActive && styles.dropdownItemTextActive]} numberOfLines={1}>
-                                {opt.label}
-                              </Text>
-                            </TouchableOpacity>
-                          );
-                        })}
+                        <ScrollView
+                          style={styles.dropdownScroll}
+                          contentContainerStyle={styles.dropdownScrollContent}
+                          showsVerticalScrollIndicator={true}
+                          nestedScrollEnabled={true}
+                          keyboardShouldPersistTaps="handled"
+                        >
+                          {searchOptions.map((opt) => {
+                            const isActive = selectedSearchOption?.id === opt.id;
+
+                            return (
+                              <TouchableOpacity
+                                key={opt.id}
+                                style={[styles.dropdownItem, isActive && styles.dropdownItemActive]}
+                                onPress={() => {
+                                  _handleSelectSearchOption(opt);
+                                }}
+                                activeOpacity={0.8}
+                              >
+                                <Text
+                                  style={[styles.dropdownItemText, isActive && styles.dropdownItemTextActive]}
+                                  numberOfLines={1}
+                                >
+                                  {opt.label}
+                                </Text>
+                              </TouchableOpacity>
+                            );
+                          })}
+                        </ScrollView>
                       </View>
-                    )}
-                  </View>
-                </View>
+                    </Pressable>
+                  </Pressable>
+                </Modal>
               )}
+
             </>
           )}
         </View>
@@ -646,6 +1275,10 @@ const MyTownScreen = ({ navigation }) => {
             customMapStyle={MAP_STYLE}
             initialRegion={{ latitude: 37.5665, longitude: 126.978, latitudeDelta: 0.05, longitudeDelta: 0.05 }}
             showsCompass={true}
+            scrollEnabled={!dropdownOpen}
+            zoomEnabled={!dropdownOpen}
+            rotateEnabled={!dropdownOpen}
+            pitchEnabled={!dropdownOpen}
           >
             {selectedDong && (
               <Polygon
@@ -700,12 +1333,12 @@ const MyTownScreen = ({ navigation }) => {
             </View>
 
             <TouchableOpacity
-              style={[styles.confirmBtn, !isVerified && styles.confirmBtnDisabled]}
+              style={[styles.confirmBtn, !canConfirm && styles.confirmBtnDisabled]}
               onPress={_onSave}
-              disabled={!isVerified}
+              disabled={!canConfirm}
               activeOpacity={0.8}
             >
-              <Text style={[styles.confirmBtnText, !isVerified && { color: "#666" }]}>이 동네로 확정하기</Text>
+              <Text style={[styles.confirmBtnText, !canConfirm && { color: "#666" }]}>이 동네로 확정하기</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -735,7 +1368,7 @@ const MyTownScreen = ({ navigation }) => {
           </View>
         )}
       </KeyboardAvoidingView>
-    </SafeAreaView>
+    </View>
   );
 };
 
@@ -746,8 +1379,9 @@ const styles = StyleSheet.create({
   // 헤더
   header: {
     backgroundColor: "black",
-    paddingTop: 0,
     zIndex: 10,
+    elevation: 10,
+    position: "relative", // ✅ Android에서 드롭다운 터치가 맵으로 새는 것 방지
   },
   headerTop: {
     flexDirection: "row",
@@ -830,42 +1464,61 @@ const styles = StyleSheet.create({
   },
 
   // 드롭다운
-  dropdownWrap: {
+    dropdownWrap: {
+    position: "absolute",   // ✅ 레이아웃 밀지 않음 (지도 내려감 방지)
+    top: 44,            // ✅ header(검색탭 영역) 바로 아래에 붙임
+    left: 0,
+    right: 0,
     paddingHorizontal: 16,
     paddingTop: 0,
     paddingBottom: 10,
-    backgroundColor: "black",
+    backgroundColor: "transparent",
+    zIndex: 9999,
+    elevation: 9999,
+  },
+  dropdownBtn: {
+    width: 260,
+    height: 42,
+    backgroundColor: "#1A1A1A",
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#333",
+    paddingHorizontal: 12,
+    justifyContent: "center",
+  },
+  dropdownBtnText: {
+    color: "white",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  dropdownScroll: {
+    maxHeight: 300,
   },
   dropdownRight: {
     alignItems: "flex-end",
+    position: "relative",
   },
-  dropdownBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    width: 180,
-    backgroundColor: "#1A1A1A",
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    height: 38,
-    borderWidth: 1,
-    borderColor: "#333",
+
+  dropdownListOverlay: {
+    position: "absolute",
+    top: 44,
+    right: 0,
+    zIndex: 9999,
+    elevation: 9999,
   },
-  dropdownBtnText: {
-    flex: 1,
-    color: "white",
-    fontSize: 12,
-    fontWeight: "700",
-    marginRight: 8,
-  },
+
   dropdownList: {
-    marginTop: 8,
-    width: 180,
+    width: 260,
+    maxHeight: 300,
     backgroundColor: "#1A1A1A",
     borderRadius: 8,
     borderWidth: 1,
     borderColor: "#333",
     overflow: "hidden",
+  },
+
+  dropdownScrollContent: {
+    paddingVertical: 0,
   },
   dropdownItem: {
     paddingHorizontal: 12,
@@ -881,8 +1534,23 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "700",
   },
+
   dropdownItemTextActive: {
     color: PRIMARY_COLOR,
+  },
+
+  dropdownBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 9999,
+    elevation: 9999,
+    backgroundColor: "transparent",
+  },
+
+  dropdownPanel: {
+    position: "absolute",
+    top: 88,
+    right: 16,
+    width: 260,
   },
 
   mapWrap: { flex: 1 },

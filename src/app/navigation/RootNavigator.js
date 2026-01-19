@@ -110,13 +110,13 @@ export default function RootNavigator() {
             <Stack.Screen name={ROUTES.FREE_DETAIL} component={FreeDetailScreen} options={{ title: "무료나눔 상세" }} />
 
             {/* ✅ [추가] 스토어 글쓰기 화면 */}
-            <Stack.Screen name={ROUTES.STORE_WRITE} component={StoreWriteScreen} options={{ title: "핫플레이스 스토어등록" }} />
+            <Stack.Screen name={ROUTES.STORE_WRITE} component={StoreWriteScreen} options={{ title: "핫스토어 등록" }} />
 
             {/* ✅ [추가] 스토어 리스트 화면 등록 */}
-            <Stack.Screen name={ROUTES.STORE_LIST} component={StoreListScreen} options={{ title: "핫플레이스 목록" }} />
+            <Stack.Screen name={ROUTES.STORE_LIST} component={StoreListScreen} options={{ title: "핫스토어 목록" }} />
 
             {/* ✅ [추가] 스토어 상세 화면 등록 (여기 추가됨) */}
-            <Stack.Screen name={ROUTES.STORE_DETAIL} component={StoreDetailScreen} options={{ title: "핫플레이스 상세" }} />
+            <Stack.Screen name={ROUTES.STORE_DETAIL} component={StoreDetailScreen} options={{ title: "우리동네 핫스토어" }} />
 
             <Stack.Screen name={ROUTES.PROFILE} component={ProfileScreen} options={{ title: "내 정보" }} />
             <Stack.Screen name={ROUTES.CHAT_ROOMS} component={ChatRoomsScreen} options={{ title: "채팅" }} />

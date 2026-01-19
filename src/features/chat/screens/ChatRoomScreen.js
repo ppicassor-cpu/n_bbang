@@ -436,7 +436,7 @@ export default function ChatRoomScreen({ route, navigation }) {
       <View style={[styles.msgContainer, isMy ? styles.myMsgContainer : styles.otherMsgContainer]}>
         {!isMy && (
           <Text style={styles.senderName}>
-            {item.senderNickname || item.senderEmail?.split("@")[0] || "알 수 없음"}
+            {item.senderNickname || item.senderName || "사용자"}
           </Text>
         )}
         <View style={{ flexDirection: isMy ? "row-reverse" : "row", alignItems: "flex-end" }}>

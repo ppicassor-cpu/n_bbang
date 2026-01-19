@@ -123,7 +123,11 @@ export default function HomeScreen({ navigation }) {
     isBooting,
     checkHotplaceEligibility,
     incrementHotplaceCount,
-    purchaseHotplaceExtra
+    purchaseHotplaceExtra,
+
+    // ✅ [추가] 동네 확정/인증 상태 (뱃지 표기용)
+    homeDong,
+    homeDongVerified
   } = useAppContext();
   
   const insets = useSafeAreaInsets();
@@ -140,6 +144,7 @@ export default function HomeScreen({ navigation }) {
   // ✅ [추가] 닉네임 설정 관련 상태
   const [nicknameModalVisible, setNicknameModalVisible] = useState(false);
   const [newNickname, setNewNickname] = useState("");
+  const [hasNickname, setHasNickname] = useState(false);
 
   // ✅ [추가] 커스텀 알림 모달 상태 (Alert 대체용)
   const [alertModalVisible, setAlertModalVisible] = useState(false);
@@ -169,7 +174,7 @@ export default function HomeScreen({ navigation }) {
   // ✅ [수정] (3) 게이트 visible 조건 최소화:
   // - isBooting이 boolean이면 그대로 쓰지 않고, "위치 인증"과 "좌표 존재"만 최소 조건으로 사용
   // - storesLoaded 때문에 영구 봉쇄되는 케이스 차단
-  const locationGateVisible = !(isVerified && myCoords && myCoords.latitude && myCoords.longitude);
+  const locationGateVisible = !(myCoords && myCoords.latitude && myCoords.longitude);
 
   const isPermissionIssue = (currentLocation === "위치 권한 필요" || currentLocation === "위치 확인 불가");
   const gateTitle = isPermissionIssue ? "위치 권한이 필요합니다" : "데이터를 불러오고 있습니다";
@@ -215,30 +220,61 @@ export default function HomeScreen({ navigation }) {
   // 상세 화면에서 참여 후 돌아왔을 때 숫자 업데이트는 AppContext의 실시간 스냅샷/상세화면 처리로 해결해야 함
   useFocusEffect(
     useCallback(() => {
-      return () => {};
-    }, [])
-  );
+      let isActive = true; // 화면이 떠났는지 체크하는 안전장치
 
-  // ✅ [추가] 닉네임 미설정 여부 확인 (앱 실행 시) - displayName 필드 확인
-  useEffect(() => {
-    const checkNickname = async () => {
-      if (!user?.uid) return;
-      try {
-        const userRef = doc(db, "users", user.uid);
-        const userSnap = await getDoc(userRef);
-        if (userSnap.exists()) {
-          const userData = userSnap.data();
-          // ✅ [수정] nickname -> displayName (필드명 변경)
-          if (!userData.displayName || userData.displayName.trim() === "") {
-            setNicknameModalVisible(true);
-          }
-        }
-      } catch (e) {
-        console.log("닉네임 확인 실패:", e);
+      // ✅ 게이트(좌표 로딩/권한 안내) 끝난 뒤에만 닉네임 체크 실행
+      if (locationGateVisible) {
+        setNicknameModalVisible(false);
+        return () => {
+          isActive = false;
+        };
       }
-    };
-    checkNickname();
-  }, [user]);
+
+      const checkNickname = async () => {
+        // 1. 유저 정보가 없으면 검사 안 함
+        if (!user?.uid) return;
+
+        try {
+          // ✅ 기준: "displayName" (닉네임 = displayName)
+          // - Firestore displayName 우선
+          // - Firestore가 비었는데 Auth displayName이 있으면 닉네임 있는 것으로 취급
+          const userRef = doc(db, "users", user.uid);
+          const userSnap = await getDoc(userRef);
+
+          let dbName = "";
+          if (userSnap.exists()) {
+            const userData = userSnap.data();
+            dbName = String(userData?.displayName || "").trim();
+          }
+
+          const authName = String(user?.displayName || "").trim();
+          const ok = Boolean(dbName || authName);
+
+          if (!isActive) return;
+
+          setHasNickname(ok);
+          setNicknameModalVisible(!ok);
+        } catch (e) {
+          console.log("닉네임 확인 실패:", e);
+
+          // ✅ DB 확인 실패 시에는 Auth displayName으로만 판단
+          const authName = String(user?.displayName || "").trim();
+          const ok = Boolean(authName);
+
+          if (!isActive) return;
+
+          setHasNickname(ok);
+          setNicknameModalVisible(!ok);
+        }
+      };
+
+      checkNickname();
+
+      return () => {
+        isActive = false; // 화면 벗어나면 로직 중단
+      };
+    }, [user, locationGateVisible]) // ✅ 게이트 종료 후 실행되도록 의존성 추가
+  );
 
   // ✅ [추가] 닉네임 저장 및 유효성 검사 로직 - Alert 대신 CustomModal 사용
   const handleSaveNickname = async () => {
@@ -276,6 +312,7 @@ export default function HomeScreen({ navigation }) {
         displayName: trimmed
       });
 
+      setHasNickname(true);
       setNicknameModalVisible(false);
       showCustomAlert("환영합니다!", "닉네임이 설정되었습니다.");
 
@@ -499,18 +536,18 @@ export default function HomeScreen({ navigation }) {
           activeOpacity={0.7}
         >
           <View style={{ flexDirection: "row", alignItems: "center" }}>
-            <Text style={styles.location}>{isVerified ? (currentLocation || "내 동네") : "내 동네 설정"}</Text>
-            {/* ✅ 우리 컨셉에 맞춘 네온 그린/레드 상태 표시 배지 */}
+            <Text style={styles.location}>{homeDong ? (currentLocation || "내 동네") : "내 동네 설정"}</Text>
+            {/* ✅ 동네 뱃지는 GPS(isVerified)가 아니라 '동네 확정 + 동네인증(homeDongVerified)' 기준 */}
             <View style={[
               styles.miniBadge, 
-              { backgroundColor: isVerified ? theme.primary : "rgba(255, 68, 68, 0.2)" },
-              { borderColor: isVerified ? theme.primary : "#FF4444", borderWidth: 1 }
+              { backgroundColor: (homeDong && homeDongVerified) ? theme.primary : "rgba(255, 68, 68, 0.2)" },
+              { borderColor: (homeDong && homeDongVerified) ? theme.primary : "#FF4444", borderWidth: 1 }
             ]}>
               <Text style={[
                 styles.miniBadgeText, 
-                { color: isVerified ? "black" : "#FF4444" }
+                { color: (homeDong && homeDongVerified) ? "black" : "#FF4444" }
               ]}>
-                {isVerified ? "동네인증" : "동네미인증"}
+                {(homeDong && homeDongVerified) ? "동네인증" : "동네미인증"}
               </Text>
             </View>
             <MaterialIcons name="keyboard-arrow-down" size={22} color="white" style={{ marginLeft: 2 }} />
@@ -594,7 +631,19 @@ export default function HomeScreen({ navigation }) {
 
       <TouchableOpacity 
         style={[styles.fab, { bottom: 20 + insets.bottom }]} 
-        onPress={() => setWriteModalVisible(true)}
+        onPress={() => {
+          // ✅ 글쓰기 버튼 눌렀을 때도 displayName(닉네임) 없으면 강제 모달
+          // - hasNickname은 DB 체크 결과
+          // - DB 체크 타이밍 전이라면 Auth displayName으로 한 번 더 안전판
+          const authName = String(user?.displayName || "").trim();
+          const ok = Boolean(hasNickname || authName);
+
+          if (!ok) {
+            setNicknameModalVisible(true);
+            return;
+          }
+          setWriteModalVisible(true);
+        }}
       >
         <MaterialIcons name="post-add" size={30} color="black" />
       </TouchableOpacity>

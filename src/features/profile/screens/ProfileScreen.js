@@ -22,17 +22,21 @@ import { useNavigation } from '@react-navigation/native';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import { checkNotifications, requestNotifications } from 'react-native-permissions';
-// ✅ [수정] arrayRemove, doc, getDoc, updateDoc 추가 (차단 해제 및 정보 조회용)
-import { collection, query, where, onSnapshot, doc, getDoc, updateDoc, arrayRemove } from "firebase/firestore";
+
+// ✅ [수정] 탈퇴 처리를 위해 writeBatch, getDocs 추가됨
+import { 
+  collection, query, where, onSnapshot, doc, getDoc, updateDoc, 
+  arrayRemove, deleteDoc, getDocs, writeBatch 
+} from "firebase/firestore";
+import { deleteUser } from "firebase/auth"; 
 import Purchases from "react-native-purchases";
 
+import { db, auth } from "../../../firebaseConfig"; 
 import { theme } from '../../../theme';
 import { ROUTES } from '../../../app/navigation/routes';
 import { useAppContext } from '../../../app/providers/AppContext';
 import CustomModal from '../../../components/CustomModal';
-// ✅ [추가] 커스텀 이미지 피커 모달 import
 import CustomImagePickerModal from '../../../components/CustomImagePickerModal';
-import { db } from "../../../firebaseConfig";
 import { hasBadWord } from "../../../utils/badWordFilter";
 
 // ✅ [추가] 이미지 압축/캐시
@@ -87,6 +91,82 @@ export default function ProfileScreen() {
 
   // ✅ [신규] 정책 메뉴 모달 상태
   const [policyModalVisible, setPolicyModalVisible] = useState(false);
+
+  const [deleteAccountModalVisible, setDeleteAccountModalVisible] = useState(false);
+
+  const handleDeleteAccount = async () => {
+    setDeleteAccountModalVisible(false); // 모달 닫기
+
+    const currentUser = auth.currentUser;
+    if (!currentUser) return;
+    const uid = currentUser.uid;
+
+    try {
+      // 1. 내가 쓴 게시글(posts) 삭제
+      const postsQ = query(collection(db, "posts"), where("ownerId", "==", uid));
+      const postsSnap = await getDocs(postsQ);
+      const batch1 = writeBatch(db);
+      postsSnap.forEach((doc) => {
+        batch1.delete(doc.ref);
+      });
+      await batch1.commit();
+
+      // 2. 내가 등록한 가게(stores) 삭제
+      const storesQ = query(collection(db, "stores"), where("ownerId", "==", uid));
+      const storesSnap = await getDocs(storesQ);
+      const batch2 = writeBatch(db);
+      storesSnap.forEach((doc) => {
+        batch2.delete(doc.ref);
+      });
+      await batch2.commit();
+
+      // 3. 내 알림(notifications) 하위 컬렉션 삭제
+      const notiQ = query(collection(db, "users", uid, "notifications"));
+      const notiSnap = await getDocs(notiQ);
+      const batch3 = writeBatch(db);
+      notiSnap.forEach((doc) => {
+        batch3.delete(doc.ref);
+      });
+      await batch3.commit();
+
+      // 4. 참여 중인 채팅방에서 나가기 처리 (유령 회원 방지)
+      const chatQ = query(collection(db, "chatRooms"), where("participants", "array-contains", uid));
+      const chatSnap = await getDocs(chatQ);
+      const batch4 = writeBatch(db);
+      chatSnap.forEach((chatDoc) => {
+        batch4.update(chatDoc.ref, {
+          participants: arrayRemove(uid)
+        });
+      });
+      await batch4.commit();
+
+      // 5. 내 유저 정보 문서 삭제
+      await deleteDoc(doc(db, "users", uid));
+
+      // 6. Auth 계정 삭제 (최종 탈퇴)
+      await deleteUser(currentUser);
+
+    } catch (e) {
+      console.error("탈퇴 실패:", e);
+      if (e.code === 'auth/requires-recent-login') {
+        // ✅ [수정] 4번째 파라미터에 '닫기 함수' 추가
+        openModal(
+          "인증 필요", 
+          "보안을 위해 로그아웃 후 다시 로그인한 뒤 시도해주세요.", 
+          "alert", 
+          () => setModalVisible(false) // 👈 확인 누르면 닫힘!
+        );
+      } else {
+        // ✅ 여기도 마찬가지로 추가
+        openModal(
+          "오류", 
+          "탈퇴 처리 중 문제가 발생했습니다.\n관리자에게 문의해주세요.", 
+          "alert",
+          () => setModalVisible(false) // 👈 확인 누르면 닫힘!
+        );
+      }
+    }
+  };
 
   // ✅ [수정] 닉네임 모달만 키보드 올라올 때 "모달 자체"가 위로 이동하도록 (CustomModal 중앙 고정 영향 제거)
   const nicknameModalTranslateY = useRef(new Animated.Value(0)).current;
@@ -692,6 +772,19 @@ export default function ProfileScreen() {
             color="white"
             onPress={handleLogoutPress}
           />
+        {/* 👇 [여기] 아래 코드를 추가하세요 (회원 탈퇴 버튼) */}
+          {/* ================================================= */}
+          <View style={{ marginTop: 20, marginBottom: 10 }}>
+            <MenuLink
+              IconComponent={Ionicons}
+              icon="trash-outline"
+              label="회원 탈퇴"
+              color="#666" // 너무 튀지 않게 회색 처리
+              onPress={() => setDeleteAccountModalVisible(true)}
+            />
+          </View>
+          {/* ================================================= */}
+
         </View>
 
         {/* ✅ [신규] 서비스 이용약관 및 정책 버튼 */}
@@ -879,6 +972,19 @@ export default function ProfileScreen() {
         }}
         confirmText="확인"
       />
+      {/* 👇 [여기] 아래 코드를 추가하세요 (탈퇴 경고 모달) */}
+      {/* ================================================= */}
+      <CustomModal
+        visible={deleteAccountModalVisible}
+        title="회원 탈퇴"
+        // 줄바꿈(\n)을 사용하여 경고 내용을 명확히 전달
+        message={"탈퇴 시 계정 및 모든 데이터가 삭제되며\n복구할 수 없습니다.\n\n남은 유료 기간에 대한 환불은 불가능합니다.\n정말 탈퇴하시겠습니까?"}
+        type="confirm"
+        onConfirm={handleDeleteAccount} // 확인 버튼 (기본 테마색, 빨간색 아님)
+        onCancel={() => setDeleteAccountModalVisible(false)} // 취소 버튼
+        confirmText="탈퇴하기" // 버튼 텍스트 변경
+      />
+      {/* ================================================= */}
 
     </SafeAreaView>
   );

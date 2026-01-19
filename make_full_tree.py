@@ -4,7 +4,7 @@ make_full_tree.py
 
 ✅ 더블클릭(인자 없이 실행) 시 기본 동작
 - root: C:\\Myproject (존재하면)
-- out : C:\\Myproject\\project_file_tree.txt (항상 저장)
+- out : C:\\Myproject\\project_file_tree_YYYY-MM-DD_HH-MM-SS.txt (항상 저장)
 - 작업 완료 후 자동 종료(엔터 대기 없음)
 
 ✅ PowerShell/CLI에서 실행 예시
@@ -17,17 +17,17 @@ make_full_tree.py
   [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 """
 
-
-
 from __future__ import annotations
 
 import argparse
 import fnmatch
 import os
 import sys
+from datetime import datetime  # ✅ [추가] 날짜/시간 포맷팅용
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Set, Tuple
+
 HERE = Path(__file__).resolve().parent
 
 def _norm(s: str) -> str:
@@ -86,7 +86,11 @@ DEFAULT_EXCLUDE_GLOBS: Tuple[str, ...] = (
 # 기본값(더블클릭용 고정)
 # =========================================================
 DEFAULT_ROOT_WINDOWS = str(HERE)
-DEFAULT_OUT_WINDOWS  = str(HERE / f"{HERE.name}_tree.txt")
+
+# ✅ [수정] 기본 파일명 생성 함수 (날짜/시간 포함)
+def get_default_out_path():
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    return str(HERE / f"{HERE.name}_tree_{timestamp}.txt")
 
 
 @dataclass
@@ -199,13 +203,15 @@ def _default_root() -> str:
 
 
 def _default_out() -> str:
-    # Windows 기본 저장 위치 고정
+    # Windows 기본 저장 위치 (날짜 시간 포함)
     if os.name == "nt":
-        return DEFAULT_OUT_WINDOWS
+        return get_default_out_path()
     return ""  # 비-Windows는 기본 stdout
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    # ✅ [수정] argparse 기본값 설정 시 함수 호출이 아닌 None으로 설정 후 내부 처리
+    # (매번 실행 시점의 시간을 반영하기 위함)
     p = argparse.ArgumentParser(
         description="Generate a filtered project file tree (Explorer-friendly)."
     )
@@ -218,8 +224,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument(
         "-o",
         "--out",
-        default=_default_out(),
-        help="Output file path (default on Windows: C:\\Myproject\\project_file_tree.txt).",
+        default=None, # None으로 설정 후 아래에서 처리
+        help="Output file path (default: current_folder_tree_YYYY-MM-DD_HH-MM-SS.txt).",
     )
     p.add_argument(
         "--stdout",
@@ -266,6 +272,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"ERROR: root is not a directory: {root}", file=sys.stderr)
         return 2
 
+    # ✅ [수정] --out 옵션이 없으면 기본값(날짜 포함) 생성
+    out_file = args.out
+    if not out_file and not args.stdout:
+        out_file = _default_out()
+        # Windows가 아니거나 _default_out이 비어있으면 현재 경로 기준 생성
+        if not out_file:
+             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+             out_file = f"file_tree_{timestamp}.txt"
+
     if args.no_default_excludes:
         base_exclude_dirs = set()
         base_exclude_path_contains: Tuple[str, ...] = tuple()
@@ -296,7 +311,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     text = "\n".join(lines) + "\n"
 
     # 출력
-    if args.stdout or not args.out:
+    if args.stdout:
         try:
             sys.stdout.reconfigure(encoding="utf-8")
         except Exception:
@@ -304,10 +319,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         sys.stdout.write(text)
         return 0
 
-    out_path = Path(args.out)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(text, encoding="utf-8")
-    print(f"✅ 완료: {out_path}")
+    if out_file:
+        out_path = Path(out_file)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(text, encoding="utf-8")
+        print(f"✅ 완료: {out_path}")
 
     return 0
 

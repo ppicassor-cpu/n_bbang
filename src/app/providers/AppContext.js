@@ -1,7 +1,7 @@
 ﻿// FILE: src/app/providers/AppContext.js
 
 import React, { createContext, useState, useContext, useEffect, useRef } from "react";
-import { Platform } from "react-native";
+import { Platform, AppState } from "react-native";
 import * as Location from "expo-location";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { auth, db } from "../../firebaseConfig";
@@ -29,6 +29,7 @@ import {
   setDoc,
   limit,
   arrayUnion,
+  arrayRemove,
   serverTimestamp,
 } from "firebase/firestore";
 import Purchases from "react-native-purchases";
@@ -205,6 +206,10 @@ export const AppProvider = ({ children }) => {
   const [homeDongPolygonId, setHomeDongPolygonId] = useState(null);
   const [homeDongVerified, setHomeDongVerified] = useState(false);
   const [homeDongVerifiedAt, setHomeDongVerifiedAt] = useState(null);
+
+  // ✅ [추가] HOME_DONG_* 변경 감지/동기화용 ref
+  const homeDongLastNameRef = useRef(null);
+  const homeDongSyncTimerRef = useRef(null);
 
   // ✅ [추가] 초기 로딩 게이팅용 상태(홈 모달에서 사용)
   const [authChecked, setAuthChecked] = useState(false);
@@ -563,6 +568,7 @@ export const AppProvider = ({ children }) => {
 
         setHomeDong(kName);
         setHomeDongCode(kCode);
+        homeDongLastNameRef.current = kName ? String(kName) : "";
         setHomeDongPolygonId(null);
         setHomeDongVerified(kVerified);
         setHomeDongVerifiedAt(kVerifiedAt);
@@ -587,6 +593,7 @@ export const AppProvider = ({ children }) => {
       if (!raw) {
         setHomeDong(null);
         setHomeDongCode(null);
+        homeDongLastNameRef.current = "";
         setHomeDongPolygonId(null);
         setHomeDongVerified(false);
         setHomeDongVerifiedAt(null);
@@ -602,6 +609,7 @@ export const AppProvider = ({ children }) => {
 
       setHomeDong(dongName);
       setHomeDongCode(dongCode);
+      homeDongLastNameRef.current = dongName ? String(dongName) : "";
       setHomeDongPolygonId(featureId);
       setHomeDongVerified(verified);
       setHomeDongVerifiedAt(verifiedAt);
@@ -618,10 +626,26 @@ export const AppProvider = ({ children }) => {
     } catch {
       setHomeDong(null);
       setHomeDongCode(null);
+      homeDongLastNameRef.current = "";
       setHomeDongPolygonId(null);
       setHomeDongVerified(false);
       setHomeDongVerifiedAt(null);
     }
+  };
+
+  // ✅ [추가] HOME_DONG_*가 다른 화면에서 직접 저장될 때도 감지해서 state 갱신
+  const syncHomeDongFromStorageIfChanged = async () => {
+    try {
+      const storedNameRaw = await AsyncStorage.getItem(HOME_DONG_NAME_KEY);
+      const storedName = storedNameRaw ? String(storedNameRaw) : "";
+
+      const currentName = homeDong ? String(homeDong) : "";
+      const lastName = homeDongLastNameRef.current != null ? String(homeDongLastNameRef.current) : currentName;
+
+      if (storedName !== currentName || storedName !== lastName) {
+        await loadHomeDongFromStorage();
+      }
+    } catch {}
   };
 
   // ✅ [추가] 홈 동 저장(사용자 확정)
@@ -647,6 +671,7 @@ export const AppProvider = ({ children }) => {
 
     setHomeDong(next.dongName);
     setHomeDongCode(next.dongCode);
+    homeDongLastNameRef.current = next.dongName ? String(next.dongName) : "";
     setHomeDongPolygonId(next.featureId);
     setHomeDongVerified(false);
     setHomeDongVerifiedAt(null);
@@ -666,6 +691,7 @@ export const AppProvider = ({ children }) => {
 
     setHomeDong(null);
     setHomeDongCode(null);
+    homeDongLastNameRef.current = "";
     setHomeDongPolygonId(null);
     setHomeDongVerified(false);
     setHomeDongVerifiedAt(null);
@@ -693,16 +719,7 @@ export const AppProvider = ({ children }) => {
       };
 
       setMyCoords(coords);
-      setIsVerified(true);
-      setLocationChecked(true);
-
-      try {
-        await AsyncStorage.setItem(
-          STORAGE_KEY,
-          JSON.stringify({ coords: { latitude: coords.latitude, longitude: coords.longitude }, timestamp: Date.now() })
-        );
-      } catch {}
-
+      
       return coords;
     } catch {
       setLocationChecked(true);
@@ -754,9 +771,46 @@ export const AppProvider = ({ children }) => {
     setCurrentLocation(homeDong ? String(homeDong) : "내 동네 설정");
   }, [homeDong]);
 
+  // ✅ [추가] 다른 화면에서 AsyncStorage만 바꿔도 홈 동 표시가 갱신되도록 안전장치
+  useEffect(() => {
+    let appStateSub = null;
+
+    const startTimer = () => {
+      if (homeDongSyncTimerRef.current) return;
+      homeDongSyncTimerRef.current = setInterval(() => {
+        syncHomeDongFromStorageIfChanged();
+      }, 1200);
+    };
+
+    const stopTimer = () => {
+      if (homeDongSyncTimerRef.current) {
+        clearInterval(homeDongSyncTimerRef.current);
+        homeDongSyncTimerRef.current = null;
+      }
+    };
+
+    syncHomeDongFromStorageIfChanged();
+
+    appStateSub = AppState.addEventListener("change", (nextState) => {
+      if (nextState === "active") {
+        syncHomeDongFromStorageIfChanged();
+        startTimer();
+      } else {
+        stopTimer();
+      }
+    });
+
+    startTimer();
+
+    return () => {
+      stopTimer();
+      if (appStateSub && appStateSub.remove) appStateSub.remove();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     loadHomeDongFromStorage();
-    checkSavedVerification();
 
     let customerInfoListener = null;
 
@@ -788,8 +842,30 @@ export const AppProvider = ({ children }) => {
         setHotplacePaidExtraMonthKey(null);
         setHotplacePaidExtraCount(0);
 
+        await AsyncStorage.removeItem(STORAGE_KEY);
+        await clearHomeDong();
+
+        // ✅ [추가] 로그아웃 상태면 인증도 초기화!
+        setIsVerified(false);
+        setLocationChecked(true); // 위치 체크는 끝난 걸로 처리
+
         rcLoggedInUidRef.current = null;
         return;
+      }
+
+      // ✅ 핵심: 로그인된 uid 기준으로만 인증 복구 판단
+      const metadata = currentUser.metadata;
+      const isNewUser = metadata.creationTime && (Date.now() - new Date(metadata.creationTime).getTime() < 10000);
+
+      if (isNewUser) {
+        // 1. 신규 유저: 무조건 초기화
+        await AsyncStorage.removeItem(STORAGE_KEY);
+        await clearHomeDong();
+        setIsVerified(false);
+        setLocationChecked(true);
+      } else {
+        // 2. 기존 유저: 저장된 기록 확인 (uid 검증 포함)
+        await checkSavedVerification(currentUser.uid);
       }
 
       try {
@@ -1146,6 +1222,7 @@ export const AppProvider = ({ children }) => {
       return;
     }
     try {
+      // 1. 신고 내역 저장
       await addDoc(collection(db, "reports"), {
         reporterId: user.uid,
         reporterEmail: user.email,
@@ -1156,6 +1233,21 @@ export const AppProvider = ({ children }) => {
         createdAt: serverTimestamp(),
         status: "pending",
       });
+
+      // ✅ [추가] 게시글 신고 시, 관련 채팅방에서 즉시 퇴장 처리 (유령 회원 방지)
+      if (type === "post" && contentId) {
+        try {
+          // 채팅방 ID 규칙: post_{게시글ID}
+          const roomId = `post_${contentId}`;
+          await updateDoc(doc(db, "chatRooms", roomId), {
+            participants: arrayRemove(user.uid)
+          });
+        } catch (ignore) {
+          // 채팅방이 없거나(아직 참여 안함), 이미 나간 경우 에러 무시
+          // console.log("채팅방 퇴장 스킵:", ignore);
+        }
+      }
+
       if (!silent) openModal("신고 완료", "신고가 접수되었습니다. 검토 후 조치하겠습니다.");
     } catch (e) {
       console.error("신고 실패:", e);
@@ -1193,12 +1285,35 @@ export const AppProvider = ({ children }) => {
       위치 인증 (좌표만)
   ========================= */
 
-  const checkSavedVerification = async () => {
+  const checkSavedVerification = async (currentUid = null) => {
     try {
       const saved = await AsyncStorage.getItem(STORAGE_KEY);
 
       if (saved) {
         const parsed = JSON.parse(saved) || {};
+        const savedUid = parsed?.uid != null ? String(parsed.uid) : "";
+        const nowUid = currentUid != null ? String(currentUid) : "";
+
+        // ✅ [추가] 구버전 저장값(uid 없음)은 무조건 폐기 (자동인증 방지)
+        if (nowUid && !savedUid) {
+          try {
+            await AsyncStorage.removeItem(STORAGE_KEY);
+          } catch {}
+          setIsVerified(false);
+          setLocationChecked(true);
+          return;
+        }
+
+        // ✅ 핵심: 다른 계정 기록이면 무조건 폐기(재가입/계정변경 자동인증 방지)
+        if (savedUid && nowUid && savedUid !== nowUid) {
+          try {
+            await AsyncStorage.removeItem(STORAGE_KEY);
+          } catch {}
+          setIsVerified(false);
+          setLocationChecked(true);
+          return;
+        }
+
         const timestamp = parsed?.timestamp || 0;
 
         const rawC = parsed?.coords || null;
@@ -1207,23 +1322,46 @@ export const AppProvider = ({ children }) => {
             ? { latitude: Number(rawC.latitude), longitude: Number(rawC.longitude) }
             : null;
 
+        // 7일 이내 기록이 있으면 -> 인증 상태 복구 (OK)
         if (c && timestamp && Date.now() - timestamp < 7 * 24 * 60 * 60 * 1000) {
           setMyCoords(c);
-          setIsVerified(true);
+          setIsVerified(true); // ✅ 저장된 게 있으니 인증됨
           setLocationChecked(true);
           return;
         }
       }
 
+      // 저장된 게 없거나 만료됨 -> 좌표는 잡지만 인증은 안 함!
       await refreshMyCoords();
+      setIsVerified(false); // ✅ 확실하게 미인증으로 시작
+
     } catch {
       await refreshMyCoords();
+      setIsVerified(false); // ✅ 에러 시에도 미인증
     }
   };
 
   // ✅ 기존 호출 호환용: verifyLocation은 이제 "좌표 갱신"만 수행
   const verifyLocation = async () => {
-    return await refreshMyCoords();
+    const coords = await refreshMyCoords();
+    if (coords) {
+      setIsVerified(true); // ✅ 명시적 인증 성공 시 true 설정
+
+      // ✅ 인증 정보 저장 (유효기간 체크용) + uid 바인딩
+      try {
+        await AsyncStorage.setItem(
+          STORAGE_KEY,
+          JSON.stringify({
+            uid: user?.uid ? String(user.uid) : null,
+            coords: { latitude: coords.latitude, longitude: coords.longitude },
+            timestamp: Date.now()
+          })
+        );
+      } catch {}
+
+      return true;
+    }
+    return false;
   };
 
   /* =========================
@@ -1263,6 +1401,12 @@ export const AppProvider = ({ children }) => {
   };
 
   const signup = async (email, password, nickname) => {
+    // 1. 혹시 남아있을지 모를 이전 인증 기록 삭제
+    await AsyncStorage.removeItem(STORAGE_KEY);
+    setIsVerified(false); // 강제 미인증 처리
+    await clearHomeDong();
+
+    // 2. 회원가입 진행
     const userCredential = await createUserWithEmailAndPassword(auth, email, password);
 
     if (nickname) {
@@ -1271,6 +1415,7 @@ export const AppProvider = ({ children }) => {
     }
 
     await setDoc(doc(db, "users", userCredential.user.uid), {
+      displayName: nickname ? String(nickname) : "",
       premiumUntil: null,
       isPremium: false,
       isAdmin: false,
@@ -1295,11 +1440,18 @@ export const AppProvider = ({ children }) => {
 
   const logout = async () => {
     try {
+      // 1. 폰에 저장된 인증 정보 삭제
+      await AsyncStorage.removeItem(STORAGE_KEY); 
+      await clearHomeDong();
+      
+      // 2. 상태 초기화
+      setIsVerified(false); 
+
       if (Purchases.logOut) {
         await Purchases.logOut();
       }
     } catch (e) {
-      console.warn("RevenueCat logOut 실패(무시 가능):", e);
+      console.warn("LogOut process error:", e);
     }
     rcLoggedInUidRef.current = null;
     return signOut(auth);

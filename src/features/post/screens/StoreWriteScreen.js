@@ -1,6 +1,6 @@
 // FILE: src/features/post/screens/StoreWriteScreen.js
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   View,
   Text,
@@ -11,7 +11,6 @@ import {
   Image,
   KeyboardAvoidingView,
   Platform,
-  Alert,
   ActivityIndicator,
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
@@ -25,21 +24,22 @@ import { useAppContext } from "../../../app/providers/AppContext";
 import CustomModal from "../../../components/CustomModal";
 import CustomImagePickerModal from "../../../components/CustomImagePickerModal";
 
-import { db, storage } from "../../../firebaseConfig";
+import { storage, db } from "../../../firebaseConfig";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-// ✅ [수정] updateDoc, doc 추가
 import { collection, addDoc, serverTimestamp, updateDoc, doc } from "firebase/firestore";
 
 const CATEGORIES = ["식당/카페", "운동/헬스", "미용/뷰티", "병원/약국", "생활/편의", "학원/교육", "기타"];
 
 export default function StoreWriteScreen({ route, navigation }) {
   const insets = useSafeAreaInsets();
-
   const { user, myCoords, incrementHotplaceCount, isAdmin } = useAppContext();
 
-  // ✅ [수정] 파라미터에서 mode와 storeData 받아오기
-  const { paymentType = "membership", purchaseInfo = null, mode, storeData } = route?.params || {};
+  const params = route.params || {};
+  const { paymentType = "membership", purchaseInfo = null, mode, storeData } = params;
+  
   const isEditMode = mode === "edit" && !!storeData;
+
+  const [isReady, setIsReady] = useState(!isEditMode); 
 
   const [name, setName] = useState("");
   const [desc, setDesc] = useState("");
@@ -47,9 +47,7 @@ export default function StoreWriteScreen({ route, navigation }) {
   const [homepage, setHomepage] = useState("");
   const [address, setAddress] = useState("");
   const [selectedCategory, setSelectedCategory] = useState(CATEGORIES[0]);
-
   const [images, setImages] = useState([]);
-  const [loading, setLoading] = useState(false);
 
   const [region, setRegion] = useState({
     latitude: myCoords?.latitude || 37.5665,
@@ -58,38 +56,61 @@ export default function StoreWriteScreen({ route, navigation }) {
     longitudeDelta: 0.005,
   });
 
+  const [loading, setLoading] = useState(false);
+
   const [galleryVisible, setGalleryVisible] = useState(false);
   const [alertVisible, setAlertVisible] = useState(false);
   const [alertMsg, setAlertMsg] = useState("");
-
   const [uploadingVisible, setUploadingVisible] = useState(false);
   const [successVisible, setSuccessVisible] = useState(false);
 
-  // ✅ [추가] 수정 모드일 때 기존 데이터 채워넣기
+  // ✅ [수정] 타이틀 '핫플레이스' -> '핫스토어'로 변경
+  useEffect(() => {
+    navigation.setOptions({ 
+      title: isEditMode ? "핫스토어 수정" : "핫플레이스 등록" 
+    });
+  }, [isEditMode, navigation]);
+
   useEffect(() => {
     if (isEditMode && storeData) {
-      setName(storeData.name || "");
-      setDesc(storeData.description || "");
-      setPhone(storeData.phone || "");
-      setHomepage(storeData.homepage || "");
-      setAddress(storeData.address || "");
-      setSelectedCategory(storeData.category || CATEGORIES[0]);
-      
-      // 이미지는 배열 그대로 (URL 문자열 배열)
-      setImages(storeData.images || []);
+      try {
+        setName(storeData.name || "");
+        setDesc(storeData.description || "");
+        setPhone(storeData.phone || "");
+        setHomepage(storeData.homepage || "");
+        setAddress(storeData.address || "");
+        setSelectedCategory(storeData.category || CATEGORIES[0]);
+        setImages(storeData.images || []);
 
-      if (storeData.location) {
-        setRegion({
-          latitude: Number(storeData.location.latitude),
-          longitude: Number(storeData.location.longitude),
-          latitudeDelta: 0.005,
-          longitudeDelta: 0.005,
-        });
+        if (storeData.location?.latitude && storeData.location?.longitude) {
+          const lat = Number(storeData.location.latitude);
+          const lng = Number(storeData.location.longitude);
+          
+          if (!isNaN(lat) && !isNaN(lng)) {
+            setRegion({
+              latitude: lat,
+              longitude: lng,
+              latitudeDelta: 0.005,
+              longitudeDelta: 0.005,
+            });
+          }
+        }
+      } catch (e) {
+        console.warn("데이터 로드 중 에러(무시됨):", e);
+      } finally {
+        setIsReady(true);
       }
-      
-      navigation.setOptions({ title: "핫플레이스 수정" });
+    } else if (!isEditMode) {
+        if (myCoords?.latitude) {
+            setRegion((prev) => ({
+                ...prev,
+                latitude: myCoords.latitude,
+                longitude: myCoords.longitude
+            }));
+        }
+        setIsReady(true);
     }
-  }, [isEditMode, storeData, navigation]);
+  }, [isEditMode, storeData, myCoords]);
 
   const canSubmit = useMemo(() => {
     return (
@@ -100,17 +121,6 @@ export default function StoreWriteScreen({ route, navigation }) {
       images.length > 0
     );
   }, [user, name, desc, phone, images]);
-
-  useEffect(() => {
-    // ✅ [수정] 수정 모드가 아닐 때만 내 위치로 초기화 (수정 중인데 위치 덮어쓰기 방지)
-    if (!isEditMode && myCoords?.latitude && myCoords?.longitude) {
-      setRegion((prev) => ({
-        ...prev,
-        latitude: myCoords.latitude,
-        longitude: myCoords.longitude,
-      }));
-    }
-  }, [myCoords, isEditMode]);
 
   const showAlert = (msg) => {
     setAlertMsg(String(msg || ""));
@@ -149,7 +159,6 @@ export default function StoreWriteScreen({ route, navigation }) {
 
   const handleGallerySelect = async (selectedUris) => {
     if (!selectedUris || !Array.isArray(selectedUris)) return;
-
     let count = images.length;
     for (const uri of selectedUris) {
       if (!uri) continue;
@@ -163,7 +172,6 @@ export default function StoreWriteScreen({ route, navigation }) {
     if (images.length >= 5) return showAlert("사진은 최대 5장까지입니다.");
     const ok = await ensureCameraPermission();
     if (!ok) return showAlert("카메라 권한이 필요합니다.");
-
     const result = await ImagePicker.launchCameraAsync({ allowsEditing: false, quality: 1 });
     if (!result?.canceled && result?.assets?.[0]?.uri) {
       await processAndAddImage(result.assets[0].uri);
@@ -177,26 +185,19 @@ export default function StoreWriteScreen({ route, navigation }) {
   const uploadImages = async () => {
     if (!user) throw new Error("NO_USER");
     if (!images || images.length === 0) return [];
-
     const urls = [];
     for (let i = 0; i < images.length; i++) {
       const uri = images[i];
       if (!uri) continue;
-
-      // ✅ [수정] 이미 http로 시작하는 URL(기존 이미지)은 업로드 건너뛰고 그대로 사용
       if (uri.startsWith("http")) {
         urls.push(uri);
         continue;
       }
-
       const response = await fetch(uri);
       const blob = await response.blob();
-
       const filename = `stores/${user.uid}/${Date.now()}_${i}.webp`;
       const storageRef = ref(storage, filename);
-
       const metadata = { cacheControl: "public,max-age=31536000" };
-
       await uploadBytes(storageRef, blob, metadata);
       const url = await getDownloadURL(storageRef);
       urls.push(url);
@@ -206,7 +207,6 @@ export default function StoreWriteScreen({ route, navigation }) {
 
   const handleSubmit = async () => {
     if (loading) return;
-
     if (!user) return showAlert("로그인이 필요합니다.");
     if (!name.trim()) return showAlert("업체명을 입력해주세요.");
     if (!desc.trim()) return showAlert("업체 소개를 입력해주세요.");
@@ -217,8 +217,6 @@ export default function StoreWriteScreen({ route, navigation }) {
     setUploadingVisible(true);
     try {
       const imageUrls = await uploadImages();
-
-      // ✅ [수정] 공통 데이터 객체 생성
       const commonData = {
         name: name.trim(),
         description: desc.trim(),
@@ -232,23 +230,14 @@ export default function StoreWriteScreen({ route, navigation }) {
         },
         imageUrl: imageUrls?.[0] || null,
         images: imageUrls || [],
-        // 수정 시에도 업데이트 시간 갱신
-        updatedAt: serverTimestamp(), // 나중에 Firestore 타임스탬프로 저장됨(여기서는 안보여도 됨)
+        updatedAt: serverTimestamp(),
       };
 
       if (isEditMode) {
-        // ✅ [수정 모드 로직] updateDoc 사용
-        await updateDoc(doc(db, "stores", storeData.id), {
-          ...commonData,
-          // updatedAt은 serverTimestamp()로 처리하되, 여기서는 위에서 정의한 것 사용
-          // 기존 필드 유지 (status, isPremium 등은 변경 안 함)
-        });
-
+        await updateDoc(doc(db, "stores", storeData.id), { ...commonData });
       } else {
-        // ✅ [신규 등록 로직] addDoc 사용
         const now = new Date();
         const expirationDate = new Date(now.setMonth(now.getMonth() + 1));
-
         const newStoreData = {
           ...commonData,
           ownerId: user.uid,
@@ -259,19 +248,16 @@ export default function StoreWriteScreen({ route, navigation }) {
           createdAt: new Date().toISOString(),
           expiresAt: expirationDate.toISOString(),
         };
-
         await addDoc(collection(db, "stores"), newStoreData);
-
         if (typeof incrementHotplaceCount === "function" && !isAdmin) { 
           const usageType = paymentType === "single" ? "paid_extra" : "membership";
           await incrementHotplaceCount({ usageType, purchaseInfo: purchaseInfo ?? null });
         }
       }
-
       setUploadingVisible(false);
       setSuccessVisible(true);
     } catch (e) {
-      console.error(e); // 에러 로그 추가
+      console.error(e);
       setUploadingVisible(false);
       showAlert(isEditMode ? "수정 중 오류가 발생했습니다." : "등록 중 오류가 발생했습니다.");
     } finally {
@@ -279,10 +265,16 @@ export default function StoreWriteScreen({ route, navigation }) {
     }
   };
 
+  if (!isReady) {
+    return (
+      <View style={{ flex: 1, backgroundColor: theme.background, justifyContent: "center", alignItems: "center" }}>
+        <ActivityIndicator size="large" color={theme.primary} />
+      </View>
+    );
+  }
+
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
-      {/* 상단 헤더 삭제됨 */}
-
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
           <Text style={styles.sectionLabel}>매장 사진 (최대 5장)</Text>
@@ -393,8 +385,8 @@ export default function StoreWriteScreen({ route, navigation }) {
         </ScrollView>
       </KeyboardAvoidingView>
 
-      {/* 하단 완료 버튼 영역 */}
-      <View style={styles.bottomArea}>
+      {/* ✅ [수정] 하단 safe area + 20px 만큼 패딩을 줘서 시스템바와 안 겹치게 처리 */}
+      <View style={[styles.bottomArea, { paddingBottom: insets.bottom + 5}]}>
         <TouchableOpacity
           style={[styles.submitBtn, (!canSubmit || loading) && { opacity: 0.5 }]}
           onPress={handleSubmit}
@@ -405,7 +397,6 @@ export default function StoreWriteScreen({ route, navigation }) {
             <ActivityIndicator color="black" />
           ) : (
             <Text style={styles.submitBtnText}>
-              {/* ✅ [수정] 수정 모드일 때 텍스트 변경 */}
               {isEditMode ? "수정 완료" : "등록 완료"}
             </Text>
           )}
@@ -422,17 +413,20 @@ export default function StoreWriteScreen({ route, navigation }) {
       <CustomModal
         visible={uploadingVisible}
         title={isEditMode ? "수정 중" : "업로드 중"}
-        message="요청을 처리 중입니다. 잠시만 기다려주세요."
+        // ✅ [수정] 줄바꿈(\n) 추가하여 가운데 정렬 느낌 살림
+        message={"요청을 처리 중입니다.\n잠시만 기다려주세요."}
+        loading={true}
         onConfirm={() => {}}
       />
 
       <CustomModal
         visible={successVisible}
         title={isEditMode ? "수정 완료" : "등록 완료"}
-        message={isEditMode ? "핫플레이스 정보가 수정되었습니다." : "핫플레이스 등록이 완료되었습니다!"}
+        message={isEditMode ? "핫스토어 정보가 수정되었습니다." : "핫스토어 등록이 완료되었습니다!"}
         onConfirm={() => {
           setSuccessVisible(false);
           navigation.goBack();
+          if (route.params?.onRefresh) route.params.onRefresh();
         }}
       />
 
@@ -448,12 +442,8 @@ export default function StoreWriteScreen({ route, navigation }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.background },
-
-  // 기존 헤더 스타일 삭제됨
-
   sectionLabel: { color: "white", fontSize: 16, fontWeight: "bold", marginBottom: 10, marginTop: 10 },
   label: { color: "#AAA", fontSize: 14, marginBottom: 6, marginTop: 16 },
-
   input: {
     backgroundColor: "#222",
     color: "white",
@@ -463,7 +453,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#333",
   },
-
   imageBtn: {
     width: 74,
     height: 74,
@@ -476,7 +465,6 @@ const styles = StyleSheet.create({
     backgroundColor: "#1A1A1A",
   },
   btnText: { color: "grey", fontSize: 11, marginTop: 4 },
-
   imageWrapper: { position: "relative", marginRight: 10 },
   imagePreview: { width: 74, height: 74, borderRadius: 12, backgroundColor: "#111" },
   deleteBtn: {
@@ -489,7 +477,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.08)",
   },
-
   categoryContainer: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   catChip: {
     paddingVertical: 7,
@@ -502,7 +489,6 @@ const styles = StyleSheet.create({
   catChipSelected: { backgroundColor: theme.primary, borderColor: theme.primary },
   catText: { color: "#CCC", fontSize: 13 },
   catTextSelected: { color: "black", fontWeight: "bold" },
-
   mapContainer: {
     height: 220,
     borderRadius: 12,
@@ -528,10 +514,7 @@ const styles = StyleSheet.create({
     borderColor: "rgba(255,255,255,0.08)",
   },
   mapOverlayText: { color: "white", fontSize: 11 },
-
   infoText: { color: "#666", fontSize: 12, marginTop: 26, textAlign: "center" },
-
-  // 하단 버튼 스타일 추가
   bottomArea: {
     padding: 20,
     backgroundColor: theme.background,

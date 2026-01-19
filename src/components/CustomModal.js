@@ -1,4 +1,6 @@
-﻿import React, { useEffect, useRef } from "react";
+﻿// FILE: src/components/CustomModal.js
+
+import React, { useEffect, useRef } from "react";
 import {
   Modal,
   View,
@@ -27,6 +29,9 @@ const CustomModal = ({
 
   // ✅ [추가] 하드웨어(안드로이드) 뒤로가기 버튼으로 모달 닫힘 방지 (기본 false)
   disableBackClose = false,
+
+  // ✅ [신규 추가] 확인 버튼 비활성화 (기본 false)
+  confirmDisabled = false, 
 }) => {
   // ✅ [추가] 키보드 높이에 따라 모달을 위로 이동 (센터 고정은 유지하되, 필요한 경우만 translateY 적용)
   const translateY = useRef(new Animated.Value(0)).current;
@@ -125,8 +130,21 @@ const CustomModal = ({
                       <Text style={styles.cancelButtonText}>취소</Text>
                     </TouchableOpacity>
                   )}
-                  <TouchableOpacity style={[styles.button, styles.confirmButton]} onPress={onConfirm}>
-                    <Text style={styles.confirmButtonText}>확인</Text>
+                  <TouchableOpacity 
+                    style={[
+                      styles.button, 
+                      styles.confirmButton, 
+                      confirmDisabled && { backgroundColor: "#555", opacity: 0.7 } // 비활성화 스타일
+                    ]} 
+                    onPress={onConfirm}
+                    disabled={confirmDisabled} // 버튼 클릭 차단
+                  >
+                    <Text style={[
+                      styles.confirmButtonText, 
+                      confirmDisabled && { color: "#AAA" } // 비활성화 텍스트 색상
+                    ]}>
+                      확인
+                    </Text>
                   </TouchableOpacity>
                 </View>
               )}

@@ -1,5 +1,7 @@
+// FILE: src/features/profile/screens/NotificationScreen.js
+
 import React, { useState, useEffect } from "react";
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator } from "react-native"; // ✅ Alert 제거
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator } from "react-native"; 
 import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -9,7 +11,7 @@ import { db } from "../../../firebaseConfig";
 import { theme } from "../../../theme";
 import { useAppContext } from "../../../app/providers/AppContext";
 import { ROUTES } from "../../../app/navigation/routes";
-import CustomModal from "../../../components/CustomModal"; // ✅ 커스텀 모달 추가
+import CustomModal from "../../../components/CustomModal"; 
 
 export default function NotificationScreen() {
   const navigation = useNavigation();
@@ -19,7 +21,7 @@ export default function NotificationScreen() {
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // ✅ [추가] 모달 상태 관리
+  // 모달 상태 관리
   const [modalVisible, setModalVisible] = useState(false);
   const [modalConfig, setModalConfig] = useState({
     title: "",
@@ -61,6 +63,27 @@ export default function NotificationScreen() {
 
     let unsubscribe = () => {};
 
+    // ✅ [추가] 중복 제거 로직 함수 (같은 채팅방은 최신 1개만)
+    const processUniqueNotifications = (rawList) => {
+      const uniqueList = [];
+      const visitedRoomIds = new Set();
+
+      rawList.forEach((item) => {
+        // 채팅 알림이고 roomId가 있는 경우
+        if (item.type === "chat" && item.roomId) {
+          if (!visitedRoomIds.has(item.roomId)) {
+            visitedRoomIds.add(item.roomId);
+            uniqueList.push(item); // 해당 방의 첫 번째(최신) 알림만 추가
+          }
+          // 이미 본 방이면(더 예전 알림이면) 패스
+        } else {
+          // 채팅이 아니거나 roomId가 없으면 무조건 추가
+          uniqueList.push(item);
+        }
+      });
+      return uniqueList;
+    };
+
     const attachWithOrder = () =>
       onSnapshot(
         q,
@@ -69,7 +92,10 @@ export default function NotificationScreen() {
             id: d.id,
             ...d.data(),
           }));
-          setNotifications(loaded);
+          
+          // ✅ 가져온 데이터를 필터링 후 저장
+          const filtered = processUniqueNotifications(loaded);
+          setNotifications(filtered);
           setLoading(false);
         },
         (error) => {
@@ -109,7 +135,9 @@ export default function NotificationScreen() {
                     return bt - at;
                   });
 
-                setNotifications(loaded2);
+                // ✅ 폴백에서도 필터링 적용
+                const filtered2 = processUniqueNotifications(loaded2);
+                setNotifications(filtered2);
                 setLoading(false);
               },
               (error2) => {
@@ -130,7 +158,7 @@ export default function NotificationScreen() {
     return () => unsubscribe();
   }, [user]);
 
-  // ✅ [추가] 모달 열기 헬퍼 함수
+  // 모달 열기 헬퍼 함수
   const openModal = (title, message, type = "alert", onConfirm = () => {}) => {
     setModalConfig({ title, message, type, onConfirm });
     setModalVisible(true);
@@ -150,7 +178,6 @@ export default function NotificationScreen() {
     try {
       await deleteDoc(doc(db, "users", user.uid, "notifications", id));
     } catch (e) {
-      // ✅ [수정] Alert -> CustomModal
       openModal("오류", "삭제에 실패했습니다.", "alert", () => setModalVisible(false));
     }
   };
@@ -162,6 +189,7 @@ export default function NotificationScreen() {
       const batch = writeBatch(db);
       let updateCount = 0;
 
+      // 화면에 보이는 것만 읽음 처리
       notifications.forEach((noti) => {
         if (!noti.isRead) {
           const ref = doc(db, "users", user.uid, "notifications", noti.id);
@@ -174,7 +202,6 @@ export default function NotificationScreen() {
         await batch.commit();
       }
     } catch (e) {
-      // ✅ [수정] Alert -> CustomModal
       openModal("오류", "일괄 처리 중 문제가 발생했습니다.", "alert", () => setModalVisible(false));
     }
   };
@@ -183,15 +210,15 @@ export default function NotificationScreen() {
     if (!user) return;
     if (notifications.length === 0) return;
 
-    // ✅ [수정] Alert.alert -> CustomModal (confirm 타입)
     openModal(
       "알림 전체 삭제",
       "정말 모든 알림을 삭제하시겠습니까?",
       "confirm",
       async () => {
-        setModalVisible(false); // 확인 누르면 일단 모달 닫고 작업 시작
+        setModalVisible(false);
         try {
           const batch = writeBatch(db);
+          // 화면에 보이는 목록 기준 삭제
           notifications.forEach((noti) => {
             const ref = doc(db, "users", user.uid, "notifications", noti.id);
             batch.delete(ref);
@@ -199,7 +226,6 @@ export default function NotificationScreen() {
           await batch.commit();
         } catch (e) {
           console.error("전체 삭제 실패:", e);
-          // 실패 시 다시 알림 모달
           setTimeout(() => {
             openModal("오류", "삭제 중 문제가 발생했습니다.", "alert", () => setModalVisible(false));
           }, 300);
@@ -308,7 +334,7 @@ export default function NotificationScreen() {
         />
       )}
 
-      {/* ✅ [추가] 커스텀 모달 렌더링 */}
+      {/* 커스텀 모달 렌더링 */}
       <CustomModal
         visible={modalVisible}
         title={modalConfig.title}

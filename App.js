@@ -103,11 +103,11 @@ export default function App() {
         <RootNavigator />
       </AppProvider>
 
-      {/* ✅ [수정 시작] Alert.alert → 커스텀 업데이트 모달 */}
+      {/* ✅ [수정] Alert.alert → 커스텀 업데이트 모달 (테마 적용 및 가운데 정렬) */}
       <Modal visible={updateModalVisible} transparent animationType="fade" onRequestClose={() => {}}>
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>업데이트 알림</Text>
+            <Text style={styles.modalTitle}>업데이트 알림 🚀</Text>
             <Text style={styles.modalMessage}>
               새로운 기능이 추가되었습니다.{"\n"}앱을 재실행하여 적용하시겠습니까?
             </Text>
@@ -135,13 +135,14 @@ export default function App() {
                 }}
                 activeOpacity={0.8}
               >
-                <Text style={styles.btnText}>지금 적용</Text>
+                {/* 테마색 배경에는 검은 글씨가 가독성이 좋습니다 */}
+                <Text style={styles.btnConfirmText}>지금 적용</Text>
               </TouchableOpacity>
             </View>
           </View>
         </View>
       </Modal>
-      {/* ✅ [수정 끝] Alert.alert → 커스텀 업데이트 모달 */}
+      {/* ✅ [수정 끝] */}
     </View>
   );
 }
@@ -149,52 +150,63 @@ export default function App() {
 const styles = StyleSheet.create({
   modalBackdrop: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.6)",
+    backgroundColor: "rgba(0,0,0,0.7)", // 배경을 조금 더 어둡게
     justifyContent: "center",
     alignItems: "center",
     padding: 20,
   },
   modalCard: {
     width: "100%",
-    maxWidth: 360,
+    maxWidth: 320, // 폭을 조금 줄여서 오밀조밀하게
     backgroundColor: "#1e1e1e",
-    borderRadius: 14,
-    paddingVertical: 18,
-    paddingHorizontal: 16,
+    borderRadius: 16,
+    paddingVertical: 24,
+    paddingHorizontal: 20,
+    alignItems: "center", // ✅ 카드 내부 요소 가운데 정렬
+    borderWidth: 1,
+    borderColor: "#333",
   },
   modalTitle: {
     color: "white",
-    fontSize: 18,
-    fontWeight: "700",
-    marginBottom: 10,
+    fontSize: 20,
+    fontWeight: "bold",
+    marginBottom: 12,
+    textAlign: "center", // ✅ 텍스트 가운데 정렬
   },
   modalMessage: {
-    color: "white",
-    fontSize: 14,
-    lineHeight: 20,
-    marginBottom: 16,
+    color: "#cccccc",
+    fontSize: 15,
+    lineHeight: 22,
+    marginBottom: 24,
+    textAlign: "center", // ✅ 텍스트 가운데 정렬
   },
   modalButtons: {
     flexDirection: "row",
-    justifyContent: "flex-end",
-    gap: 10,
+    justifyContent: "center", // ✅ 버튼들도 가운데 정렬
+    gap: 12,
+    width: "100%",
   },
   btn: {
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 10,
-    minWidth: 88,
+    flex: 1, // 버튼 크기 균등 분배
+    paddingVertical: 14,
+    borderRadius: 12,
     alignItems: "center",
+    justifyContent: "center",
   },
   btnCancel: {
-    backgroundColor: "#3a3a3a",
+    backgroundColor: "#333333",
   },
   btnConfirm: {
-    backgroundColor: "#4a4a4a",
+    backgroundColor: "#CCFF00", // ✅ 테마 색상 (라임 그린) 적용
   },
   btnText: {
-    color: "white",
-    fontSize: 14,
+    color: "#ffffff",
+    fontSize: 15,
     fontWeight: "600",
+  },
+  btnConfirmText: {
+    color: "#000000", // ✅ 라임 배경 위엔 검은 글씨
+    fontSize: 15,
+    fontWeight: "bold",
   },
 });
