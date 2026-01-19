@@ -1,4 +1,4 @@
-// FILE: src/features/store/screens/StoreDetailScreen.js
+// FILE: src/features/store/screens/StoreDetailScreen.js 
 
 import React, { useState, useEffect, useCallback } from "react";
 import { 
@@ -8,7 +8,8 @@ import {
   ScrollView, 
   TouchableOpacity, 
   Linking, 
-  Dimensions
+  Dimensions,
+  ActivityIndicator
 } from "react-native";
 import { useFocusEffect } from "@react-navigation/native"; // ✅ [추가] 화면 포커스 감지
 
@@ -42,7 +43,7 @@ export default function StoreDetailScreen({ route, navigation }) {
   const [store, setStore] = useState(initialStore);
 
   const insets = useSafeAreaInsets();
-  const { user, isAdmin, reportUser } = useAppContext();
+  const { user, isAdmin, reportUser, checkBoostEligibility, applyBoostToContent, clearExpiredActiveBoostIfNeeded } = useAppContext();
 
   const [loading, setLoading] = useState(false);
   const [isImageViewVisible, setIsImageViewVisible] = useState(false);
@@ -55,6 +56,10 @@ export default function StoreDetailScreen({ route, navigation }) {
     type: "alert", 
     onConfirm: null,
   });
+
+  // ✅ [추가] 부스트 모달/로딩 상태
+  const [boostModalVisible, setBoostModalVisible] = useState(false);
+  const [boostLoading, setBoostLoading] = useState(false);
 
   // ✅ [핵심 수정] 화면에 들어올 때마다 최신 데이터 새로고침
   useFocusEffect(
@@ -176,11 +181,134 @@ export default function StoreDetailScreen({ route, navigation }) {
     reportUser(store.ownerId, store.id, reason, "store");
   };
 
+  /* =========================
+      Boost(부스트) - Store
+  ========================= */
+
+  const _toMs = (v) => {
+    if (!v) return 0;
+    if (typeof v === "number") return v;
+    if (typeof v?.toDate === "function") return v.toDate().getTime();
+    const t = new Date(v).getTime();
+    return Number.isFinite(t) ? t : 0;
+  };
+
+  const _isBoostActive = () => _toMs(store?.boostUntil) > Date.now();
+
+  const openBoostModal = async () => {
+    if (!isOwner) {
+      showAlert("알림", "내 가게만 부스트할 수 있습니다.");
+      return;
+    }
+
+    if (_isBoostActive()) {
+      showAlert("알림", "이미 부스트가 진행 중인 가게입니다.");
+      return;
+    }
+
+    try {
+      if (clearExpiredActiveBoostIfNeeded) {
+        await clearExpiredActiveBoostIfNeeded();
+      }
+    } catch {}
+
+    if (_isBoostActive()) {
+      showAlert("알림", "이미 부스트가 진행 중인 가게입니다.");
+      return;
+    }
+
+    setBoostModalVisible(true);
+  };
+
+  const _boostErrorMessage = (elig) => {
+    const status = String(elig?.status || elig?.code || "");
+    if (status === "HAS_ACTIVE_BOOST") return "이미 진행 중인 부스트가 있습니다. (동시에 1개만 가능)";
+    if (status === "NOT_OWNER") return "내 가게만 부스트할 수 있습니다.";
+    if (status === "NEED_PURCHASE") return "부스트 결제가 필요합니다.";
+
+    // ✅ 줄바꿈(\n) 안 먹는 CustomModal 대비: 구분점으로 3줄 느낌
+    const reason = String(elig?.reason || elig?.message || "");
+    const codePart = status ? ` · 코드: ${status}` : " · 코드: UNKNOWN";
+    const reasonPart = reason ? ` · 사유: ${reason}` : "";
+
+    return `부스트 조건을 만족하지 않습니다.${codePart}${reasonPart}`;
+  };
+
+  const runBoost = async (mode) => {
+    if (!store?.id) return;
+
+    if (!isOwner) {
+      setBoostModalVisible(false);
+      showAlert("알림", "내 가게만 부스트할 수 있습니다.");
+      return;
+    }
+
+    if (_isBoostActive()) {
+      setBoostModalVisible(false);
+      showAlert("알림", "이미 부스트가 진행 중인 가게입니다.");
+      return;
+    }
+
+    if (typeof checkBoostEligibility !== "function" || typeof applyBoostToContent !== "function") {
+      setBoostModalVisible(false);
+      showAlert("오류", "부스트 기능이 아직 준비되지 않았습니다.");
+      return;
+    }
+
+    setBoostLoading(true);
+    try {
+      const elig = await checkBoostEligibility({
+        contentType: "store",
+        contentId: store.id,
+        ownerId: store.ownerId, // ✅ [추가] 체크 로직에서 필요할 수 있어 전달
+        mode,
+      });
+
+      if (!elig?.ok) {
+        setBoostModalVisible(false);
+        showAlert("알림", _boostErrorMessage(elig));
+        return;
+      }
+
+      const res = await applyBoostToContent({
+        contentType: "store",
+        contentId: store.id,
+        mode,
+        durationHours: 24 * 30,
+      });
+
+      if (res?.ok) {
+        const fallbackUntil = Date.now() + 24 * 30 * 60 * 60 * 1000;
+        const nextBoostUntil = res?.boostUntil ?? res?.data?.boostUntil ?? fallbackUntil;
+        const nextBoostAppliedAt = res?.boostAppliedAt ?? res?.data?.boostAppliedAt ?? Date.now();
+
+        setStore((prev) => ({
+          ...prev,
+          boostUntil: nextBoostUntil,
+          boostAppliedAt: nextBoostAppliedAt,
+        }));
+
+        setBoostModalVisible(false);
+        showAlert("알림", "부스트가 적용되었습니다. (1개월)");
+        return;
+      }
+
+      setBoostModalVisible(false);
+      showAlert("오류", "부스트 적용에 실패했습니다.");
+    } catch (e) {
+      console.warn("runBoost 실패:", e);
+      setBoostModalVisible(false);
+      showAlert("오류", "부스트 처리 중 오류가 발생했습니다.");
+    } finally {
+      setBoostLoading(false);
+    }
+  };
+
   const images = store.images && store.images.length > 0 ? store.images : [];
 
   return (
     <View style={styles.container}>
-      <ScrollView contentContainerStyle={{ paddingBottom: 100 }}>
+      <ScrollView contentContainerStyle={{ paddingBottom: 50 }}>
         
         <View style={styles.imageContainer}>
           {images.length > 0 ? (
@@ -311,6 +439,24 @@ export default function StoreDetailScreen({ route, navigation }) {
             </View>
           )}
 
+          {isOwner && (
+            <View style={styles.boostRow}>
+              <TouchableOpacity
+                style={styles.boostBtn}
+                onPress={openBoostModal}
+                disabled={boostLoading || _isBoostActive()}
+              >
+                {boostLoading ? (
+                  <ActivityIndicator size="small" color="black" />
+                ) : (
+                  <Text style={styles.boostBtnText}>
+                    {_isBoostActive() ? "🚀 부스트중" : "🚀 부스트(1개월)"}
+                  </Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          )}
+
         </View>
       </ScrollView>
 
@@ -343,6 +489,32 @@ export default function StoreDetailScreen({ route, navigation }) {
             </TouchableOpacity>
           </View>
         )}
+      </CustomModal>
+
+      <CustomModal
+        visible={boostModalVisible}
+        title="🚀 부스트"
+        message="부스트 방식을 선택해주세요."
+        onCancel={() => setBoostModalVisible(false)}
+        onConfirm={() => setBoostModalVisible(false)}
+      >
+        <View style={{ gap: 10, width: '100%', marginTop: 10 }}>
+          <TouchableOpacity
+            style={styles.boostOptionBtn}
+            onPress={() => runBoost("paid")}
+            disabled={boostLoading}
+          >
+            <Text style={styles.boostOptionText}>핫스토어 부스트 (1개월)</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.boostOptionBtn, { backgroundColor: "#333" }]}
+            onPress={() => setBoostModalVisible(false)}
+            disabled={boostLoading}
+          >
+            <Text style={[styles.boostOptionText, { color: "#BBB" }]}>닫기</Text>
+          </TouchableOpacity>
+        </View>
       </CustomModal>
 
       <ImageDetailModal
@@ -451,4 +623,32 @@ const styles = StyleSheet.create({
     borderColor: "#333"
   },
   reasonText: { color: "white", fontSize: 14 },
+
+  boostRow: {
+    marginTop: 12,
+  },
+  boostBtn: {
+    width: "100%",
+    height: 52,
+    backgroundColor: theme.primary,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  boostBtnText: { fontSize: 15, fontWeight: "bold", color: "black" },
+  boostOptionBtn: {
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#2A2A2A",
+    paddingVertical: 14,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#444",
+  },
+  boostOptionText: {
+    color: "white",
+    fontSize: 14,
+    fontWeight: "bold",
+  },
 });

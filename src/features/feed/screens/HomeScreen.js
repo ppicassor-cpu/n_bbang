@@ -147,8 +147,11 @@ export default function HomeScreen({ navigation }) {
   const [hasNickname, setHasNickname] = useState(false);
 
   // ✅ [추가] 커스텀 알림 모달 상태 (Alert 대체용)
-  const [alertModalVisible, setAlertModalVisible] = useState(false);
+   const [alertModalVisible, setAlertModalVisible] = useState(false);
   const [alertModalConfig, setAlertModalConfig] = useState({ title: "", message: "" });
+
+  // ✅ [추가] 동네 미인증 시 글쓰기 진입 차단 모달
+  const [townGuardModalVisible, setTownGuardModalVisible] = useState(false);
 
   // ✅ [추가] 위치/인증 게이트 무한 방지용 타임아웃 상태
   const [gateTimeoutPassed, setGateTimeoutPassed] = useState(false);
@@ -156,6 +159,14 @@ export default function HomeScreen({ navigation }) {
   const showCustomAlert = (title, message) => {
     setAlertModalConfig({ title, message });
     setAlertModalVisible(true);
+  };
+
+  const handleTownGuardConfirm = () => {
+    setTownGuardModalVisible(false);
+    setWriteModalVisible(false);
+    if (MY_TOWN_ROUTE) {
+      navigation.navigate(MY_TOWN_ROUTE);
+    }
   };
 
   const MEMBERSHIP_ROUTE =
@@ -451,34 +462,14 @@ export default function HomeScreen({ navigation }) {
     // 2. 게시글과 가게 합치기
     const allData = [...(posts || []), ...normalizedStores];
 
-    // 3. 날짜순 정렬 (최신순)
-    const now = Date.now();
-
-    // 1) 전체 데이터를 먼저 '생성일자' 기준으로 완벽하게 역순 정렬
-    const sortedByDate = allData.sort((a, b) => {
-      const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-      const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-      return dateB - dateA;
-    });
-
-    // 2) 정렬된 데이터에서 끌올(Boosted)과 일반(Normal)을 분리 (이미 최신순인 상태)
-    const boosted = sortedByDate.filter(
-      (item) => item.boostUntil && new Date(item.boostUntil).getTime() > now
-    );
-    const normal = sortedByDate.filter(
-      (item) => !(item.boostUntil && new Date(item.boostUntil).getTime() > now)
-    );
-
-    // 3) 최종 합치기: [최신순 끌올] + [최신순 일반] 순서로 배치 (새 글은 normal의 맨 위로 감)
-    const finalSorted = [...boosted, ...normal];
-
-    return finalSorted.reduce((acc, item) => {
+        // 3. 거리/카테고리 필터 + distText 부여
+    const filtered = allData.reduce((acc, item) => {
       // ✅ item.coords가 있어야 거리 계산 가능 (위에서 매핑해줌)
       if (!myCoords || !item.coords) {
-         if (selectedCategory === "전체" || item.category === selectedCategory) {
-           acc.push({ ...item, distText: "" }); 
-         }
-         return acc;
+        if (selectedCategory === "전체" || item.category === selectedCategory) {
+          acc.push({ ...item, distText: "" });
+        }
+        return acc;
       }
 
       const dist = getDistanceFromLatLonInKm(
@@ -489,11 +480,165 @@ export default function HomeScreen({ navigation }) {
       // ✅ 관리자(isAdmin)이면 거리 제한 무시, 아니면 5km 제한
       if (isAdmin || item.ownerIsAdmin || dist <= 5) {
         if (selectedCategory === "전체" || item.category === selectedCategory) {
-           acc.push({ ...item, distText: ` ${dist.toFixed(1)}km` });
+          acc.push({ ...item, distText: ` ${dist.toFixed(1)}km` });
         }
       }
       return acc;
     }, []);
+
+        // 4. 부스트 후보/일반 후보 분리 + 정렬 (updatedAt 끌올 악용 방지: updatedAt 사용 안 함)
+    const now = Date.now();
+
+    const _toMs = (v) => {
+      if (!v) return 0;
+      if (typeof v === "number") return v;
+      // Firestore Timestamp 형태 대응
+      if (typeof v?.toDate === "function") return v.toDate().getTime();
+      const t = new Date(v).getTime();
+      return Number.isFinite(t) ? t : 0;
+    };
+
+    const _boostUntilMs = (item) => _toMs(item?.boostUntil);
+    const _boostAppliedAtMs = (item) => _toMs(item?.boostAppliedAt);
+    const _createdAtMs = (item) => _toMs(item?.createdAt);
+
+    const _isBoosted = (item) => _boostUntilMs(item) > now;
+
+    // ✅ 부스트 정렬: boostUntil(유효성/강도) → boostAppliedAt(최근 부스트) → createdAt
+    const _sortBoosted = (a, b) => {
+      const endA = _boostUntilMs(a);
+      const endB = _boostUntilMs(b);
+      if (endB !== endA) return endB - endA;
+
+      const apA = _boostAppliedAtMs(a);
+      const apB = _boostAppliedAtMs(b);
+      if (apB !== apA) return apB - apA;
+
+      return _createdAtMs(b) - _createdAtMs(a);
+    };
+
+    // ✅ 일반 정렬: createdAt 최신순 유지
+    const _sortNormal = (a, b) => _createdAtMs(b) - _createdAtMs(a);
+
+    const boostedCandidates = filtered.filter(_isBoosted).sort(_sortBoosted);
+    const normalCandidates = filtered.filter((item) => !_isBoosted(item)).sort(_sortNormal);
+
+    // 5. 상단 3슬롯 구성: 부스트 우선 + 부족하면 일반으로 채움
+    const SLOT_TOTAL = 3;
+    const isHotplaceTab = selectedCategory === "핫플레이스";
+
+    // ✅ 전체 탭: 핫스토어 최대 1개 + 게시글 최소 2개
+    // ✅ 핫플레이스 탭: 전부 스토어이므로 예외(스토어 3개 허용, 게시글 최소 조건 해제)
+    const capStore = isHotplaceTab ? SLOT_TOTAL : 1;
+
+    // ✅ [핵심] 부스트가 1개라도 있으면 '게시글 최소 2개 선점' 규칙을 끈다
+    // - 부스트가 있으면 그게 1등이 되도록(부스트 우선)
+    // - 부스트끼리 우선순위: 일반 게시글 부스트 > 핫스토어(스토어) 부스트
+    const hasBoost = boostedCandidates.length > 0;
+    const minPost = isHotplaceTab ? 0 : (hasBoost ? 0 : 2);
+
+    const capPerUser = 1;
+
+    const _isStoreItem = (item) => item?.type === "store";
+
+    const _ownerKey = (item) => {
+      return String(
+        item?.userId ??
+        item?.ownerId ??
+        item?.uid ??
+        item?.authorId ??
+        item?.writerId ??
+        ""
+      );
+    };
+
+    // ✅ [중요] idx 기반 fallback 제거: 같은 아이템은 항상 같은 key가 나오도록 고정
+    const _itemKey = (item) => {
+      return String(
+        item?.id ??
+        item?.postId ??
+        item?.storeId ??
+        item?.docId ??
+        // 마지막 fallback도 "데이터 기반"으로 (idx 금지)
+        `${item?.type ?? "item"}_${_ownerKey(item)}_${_createdAtMs(item)}`
+      );
+    };
+
+    // ✅ [핵심] 부스트 우선순위 적용:
+    // 1) 부스트된 일반 게시글(스토어 아님)
+    // 2) 부스트된 핫스토어(스토어)
+    // 3) 일반 목록
+    const boostedPosts = boostedCandidates.filter((it) => it?.type !== "store");
+    const boostedStores = boostedCandidates.filter((it) => it?.type === "store");
+
+    const combinedForSlots = hasBoost
+      ? [...boostedPosts, ...boostedStores, ...normalCandidates]
+      : [...normalCandidates];
+
+    // ✅ combined 내에서 key를 1번만 확정해서, pick/remove 모두 동일 key 사용
+    const keyedCombined = combinedForSlots.map((item) => ({
+      key: _itemKey(item),
+      owner: _ownerKey(item),
+      item,
+      isStore: _isStoreItem(item),
+    }));
+
+    const picked = [];
+    const usedKeys = new Set();
+    const usedOwners = new Set();
+    let storeCount = 0;
+    let postCount = 0;
+
+    const _canPick = (row) => {
+      if (!row?.key) return false;
+      if (usedKeys.has(row.key)) return false;
+
+      if (capPerUser === 1 && row.owner && usedOwners.has(row.owner)) return false;
+      if (row.isStore && storeCount >= capStore) return false;
+
+      return true;
+    };
+
+    const _pick = (row) => {
+      usedKeys.add(row.key);
+      if (row.owner) usedOwners.add(row.owner);
+
+      if (row.isStore) storeCount += 1;
+      else postCount += 1;
+
+      picked.push(row);
+    };
+
+    // (1) 게시글 최소 2개(전체 탭만) 먼저 확보
+    // ✅ 단, 부스트가 있으면(minPost=0) 이 단계는 건너뜀 → 부스트가 1등 가능
+    if (minPost > 0) {
+      for (let i = 0; i < keyedCombined.length; i++) {
+        const row = keyedCombined[i];
+        if (row.isStore) continue;
+        if (!_canPick(row)) continue;
+
+        _pick(row);
+        if (postCount >= minPost) break;
+        if (picked.length >= SLOT_TOTAL) break;
+      }
+    }
+
+    // (2) 나머지 슬롯 채우기
+    for (let i = 0; i < keyedCombined.length; i++) {
+      if (picked.length >= SLOT_TOTAL) break;
+
+      const row = keyedCombined[i];
+      if (!_canPick(row)) continue;
+
+      _pick(row);
+    }
+
+    // (3) 상단 슬롯에 뽑힌 아이템은 목록에서 제거하고, 나머지를 이어붙임 (동일 key로 정확히 제거)
+    const pickedKeySet = new Set(picked.map((r) => r.key));
+    const rest = keyedCombined.filter((r) => !pickedKeySet.has(r.key));
+
+    return [...picked.map((r) => r.item), ...rest.map((r) => r.item)];
+
   }, [posts, stores, myCoords, selectedCategory, isAdmin, getDistanceFromLatLonInKm]);
 
   // ✅ 렌더링 함수
@@ -632,7 +777,7 @@ export default function HomeScreen({ navigation }) {
         }
       />
 
-      <TouchableOpacity 
+       <TouchableOpacity 
         style={[styles.fab, { bottom: 20 + insets.bottom }]} 
         onPress={() => {
           // ✅ 글쓰기 버튼 눌렀을 때도 displayName(닉네임) 없으면 강제 모달
@@ -645,6 +790,13 @@ export default function HomeScreen({ navigation }) {
             setNicknameModalVisible(true);
             return;
           }
+
+          // ✅ 동네미인증이면 글쓰기 선택팝업보다 먼저 안내 모달 → 확인 시 내동네 설정 화면으로 이동
+          if (!(homeDong && homeDongVerified)) {
+            setTownGuardModalVisible(true);
+            return;
+          }
+
           setWriteModalVisible(true);
         }}
       >
@@ -699,6 +851,14 @@ export default function HomeScreen({ navigation }) {
           </TouchableOpacity>
         </View>
       </CustomModal>
+
+      <CustomModal
+        visible={townGuardModalVisible}
+        title="동네 설정 필요"
+        message="글쓰기는 동네 인증 후 · 이용할 수 있습니다. · 내 동네를 먼저 설정해주세요. · 동네 설정 화면으로 이동합니다."
+        onConfirm={handleTownGuardConfirm}
+        confirmText="내 동네 설정"
+      />
 
       <CustomModal
         visible={hotplaceModalVisible}
@@ -847,10 +1007,12 @@ export default function HomeScreen({ navigation }) {
       <CustomModal
         visible={locationGateVisible}
         title={gateTitle}
-        message={gateMessage}
+        message=""
         onConfirm={handleGateConfirm}
         loading={!gateTimeoutPassed && !isPermissionIssue}
-      />
+      >
+        <Text style={{ textAlign: "center" }}>{gateMessage}</Text>
+      </CustomModal>
 
     </SafeAreaView>
   );

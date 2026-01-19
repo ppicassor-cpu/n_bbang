@@ -31,6 +31,7 @@ import {
   arrayUnion,
   arrayRemove,
   serverTimestamp,
+  runTransaction,
 } from "firebase/firestore";
 import Purchases from "react-native-purchases";
 
@@ -46,6 +47,11 @@ const HOME_DONG_NAME_KEY = "HOME_DONG_NAME";
 const HOME_DONG_CODE_KEY = "HOME_DONG_CODE";
 const HOME_DONG_VERIFIED_KEY = "HOME_DONG_VERIFIED";
 const HOME_DONG_VERIFIED_AT_KEY = "HOME_DONG_VERIFIED_AT";
+const BOOST_DAILY_KEY_FIELD = "boostDailyKey";              // YYYY-MM-DD
+const BOOST_DAILY_FREE_USED_FIELD = "boostDailyFreeUsed";   // number
+const BOOST_MONTH_KEY_FIELD = "boostMonthKey";              // YYYY-MM
+const BOOST_MEMBERSHIP_USED_FIELD = "boostMembershipUsed";  // number
+const BOOST_ACTIVE_FIELD = "activeBoost";                   // { type, contentId, until, appliedAt }
 
 // ✅ [추가] API BASE URL (cleartext/도메인 분리용)
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || "http://152.67.213.225:4000";
@@ -250,6 +256,11 @@ export const AppProvider = ({ children }) => {
   const [hotplaceCount, setHotplaceCount] = useState(0);
   const [hotplacePaidExtraMonthKey, setHotplacePaidExtraMonthKey] = useState(null); // YYYY-MM
   const [hotplacePaidExtraCount, setHotplacePaidExtraCount] = useState(0);
+  const [boostDailyKey, setBoostDailyKey] = useState(null);           // YYYY-MM-DD
+  const [boostDailyFreeUsed, setBoostDailyFreeUsed] = useState(0);    // 0/1
+  const [boostMonthKey, setBoostMonthKey] = useState(null);           // YYYY-MM
+  const [boostMembershipUsed, setBoostMembershipUsed] = useState(0);  // 월 N회 사용
+  const [activeBoost, setActiveBoost] = useState(null);   
 
   const [isAdmin, setIsAdmin] = useState(false);
   const isAdminRef = useRef(false);
@@ -908,6 +919,12 @@ export const AppProvider = ({ children }) => {
           setHotplaceCount(typeof data.hotplaceCount === "number" ? data.hotplaceCount : 0);
           setHotplacePaidExtraMonthKey(data.hotplacePaidExtraMonthKey || null);
           setHotplacePaidExtraCount(typeof data.hotplacePaidExtraCount === "number" ? data.hotplacePaidExtraCount : 0);
+          // ✅ [추가] Boost 상태 로드
+          setBoostDailyKey(data[BOOST_DAILY_KEY_FIELD] || null);
+          setBoostDailyFreeUsed(typeof data[BOOST_DAILY_FREE_USED_FIELD] === "number" ? data[BOOST_DAILY_FREE_USED_FIELD] : 0);
+          setBoostMonthKey(data[BOOST_MONTH_KEY_FIELD] || null);
+          setBoostMembershipUsed(typeof data[BOOST_MEMBERSHIP_USED_FIELD] === "number" ? data[BOOST_MEMBERSHIP_USED_FIELD] : 0);
+          setActiveBoost(data[BOOST_ACTIVE_FIELD] || null);
 
           if (adminFlag) {
             setPremiumUntil("2099-12-31T23:59:59.999Z");
@@ -929,8 +946,15 @@ export const AppProvider = ({ children }) => {
             hotplaceCount: 0,
             hotplacePaidExtraMonthKey: null,
             hotplacePaidExtraCount: 0,
-          });
 
+            // ✅ [추가] Boost 기본값
+            [BOOST_DAILY_KEY_FIELD]: null,
+            [BOOST_DAILY_FREE_USED_FIELD]: 0,
+            [BOOST_MONTH_KEY_FIELD]: null,
+            [BOOST_MEMBERSHIP_USED_FIELD]: 0,
+            [BOOST_ACTIVE_FIELD]: null,
+          }); 
+          
           setIsAdmin(false);
           isAdminRef.current = false;
           setBlockedUsers([]);
@@ -989,6 +1013,11 @@ export const AppProvider = ({ children }) => {
             setHotplaceCount(typeof data.hotplaceCount === "number" ? data.hotplaceCount : 0);
             setHotplacePaidExtraMonthKey(data.hotplacePaidExtraMonthKey || null);
             setHotplacePaidExtraCount(typeof data.hotplacePaidExtraCount === "number" ? data.hotplacePaidExtraCount : 0);
+            setBoostDailyKey(data[BOOST_DAILY_KEY_FIELD] || null);
+            setBoostDailyFreeUsed(typeof data[BOOST_DAILY_FREE_USED_FIELD] === "number" ? data[BOOST_DAILY_FREE_USED_FIELD] : 0);
+            setBoostMonthKey(data[BOOST_MONTH_KEY_FIELD] || null);
+            setBoostMembershipUsed(typeof data[BOOST_MEMBERSHIP_USED_FIELD] === "number" ? data[BOOST_MEMBERSHIP_USED_FIELD] : 0);
+            setActiveBoost(data[BOOST_ACTIVE_FIELD] || null);
           } else {
             setBlockedUsers([]);
 
@@ -1594,6 +1623,288 @@ export const AppProvider = ({ children }) => {
     setHotplaceCount(nextCount);
   };
 
+  const getNowIso = () => new Date().toISOString();
+
+  const getTodayKSTKey = () => {
+    const now = new Date();
+    const kst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+    return kst.toISOString().slice(0, 10); // YYYY-MM-DD
+  };
+
+  const getBoostMembershipMonthlyLimit = () => {
+    // ✅ 정책값(임시 기본): monthly=2, yearly=4 (원하면 여기만 바꾸면 됨)
+    const type = membershipType || "free";
+    if (!isPremium) return 0;
+    if (type === "yearly") return 4;
+    if (type === "monthly") return 2;
+    return 0;
+  };
+
+  const _parseMs = (v) => {
+    if (!v) return 0;
+    if (typeof v === "number") return v;
+    if (typeof v?.toDate === "function") return v.toDate().getTime();
+    const t = new Date(v).getTime();
+    return Number.isFinite(t) ? t : 0;
+  };
+
+  const _isActiveBoost = (ab) => {
+    const untilMs = _parseMs(ab?.until);
+    return untilMs > Date.now();
+  };
+
+  // [수정 후]
+const checkBoostEligibility = async ({ contentType = "post", contentId, mode = "free" } = {}) => {
+  if (!user?.uid) return { status: "NO_USER", ok: false };
+  if (!contentId) return { status: "NO_CONTENT_ID", ok: false };
+
+  // ✅ 유저당 동시 1개 활성 부스트 제한 (같은 콘텐츠라도 "진행 중"이면 재부여 차단)
+  const ab = activeBoost;
+  if (ab && _isActiveBoost(ab)) {
+    // ✅ activeBoost가 걸린 콘텐츠가 삭제된 경우, 자동 해제 후 진행
+    try {
+      const abType = String(ab?.type || "");
+      const abId = String(ab?.contentId || "");
+      const abCol = abType === "store" ? "stores" : "posts";
+      const abSnap = await getDoc(doc(db, abCol, abId));
+      if (!abSnap.exists()) {
+        await updateDoc(doc(db, "users", user.uid), {
+          [BOOST_ACTIVE_FIELD]: null,
+        });
+        setActiveBoost(null);
+      } else {
+        return { status: "HAS_ACTIVE_BOOST", ok: false, activeBoost: ab };
+      }
+    } catch {
+      return { status: "HAS_ACTIVE_BOOST", ok: false, activeBoost: ab };
+    }
+  }
+
+  // ✅ 게시글/스토어 문서 확인 + 6시간 경과 조건(도배 방지)
+  // - paid도 동일하게 걸어두었음(원하면 paid만 즉시 허용으로 바꿀 수 있음)
+  const colName = contentType === "store" ? "stores" : "posts";
+  const snap = await getDoc(doc(db, colName, String(contentId)));
+  if (!snap.exists()) return { status: "NOT_FOUND", ok: false };
+
+  const data = snap.data() || {};
+  const createdAtMs = _parseMs(data?.createdAt);
+  const minAgeMs = 6 * 60 * 60 * 1000;
+  if (createdAtMs && Date.now() - createdAtMs < minAgeMs) {
+    return { status: "TOO_EARLY", ok: false, waitMs: (minAgeMs - (Date.now() - createdAtMs)) };
+  }
+
+  // ✅ 무료 부스트: 일 1회
+  if (mode === "free") {
+    const todayKey = getTodayKSTKey();
+    const used = (boostDailyKey === todayKey) ? (Number(boostDailyFreeUsed || 0)) : 0;
+
+    if (used >= 1) {
+      return { status: "FREE_DAILY_LIMIT", ok: false, todayKey, used };
+    }
+
+    return { status: "OK", ok: true, todayKey };
+  }
+
+  // ✅ 멤버십 부스트: 월 N회
+  if (mode === "membership") {
+    if (!isPremium) return { status: "NOT_PREMIUM", ok: false };
+
+    const monthKey = getCurrentMonthKeyKST();
+    const limit = getBoostMembershipMonthlyLimit();
+    const used = (boostMonthKey === monthKey) ? Number(boostMembershipUsed || 0) : 0;
+
+    if (limit <= 0) return { status: "NOT_ELIGIBLE", ok: false, monthKey, limit, used };
+    if (used >= limit) return { status: "MEMBERSHIP_LIMIT", ok: false, monthKey, limit, used };
+
+    return { status: "OK", ok: true, monthKey, limit, used };
+  }
+
+  // ✅ paid(단건 유료): 구매 검증은 이후 단계(RevenueCat/결제 연동)에서 붙일 예정
+  if (mode === "paid") {
+    return { status: "OK", ok: true };
+  }
+
+  return { status: "UNKNOWN_MODE", ok: false };
+};
+
+  // [수정 후]
+const applyBoostToContent = async ({ contentType = "post", contentId, mode = "free", durationHours = 6 } = {}) => {
+  if (!user?.uid) return { status: "NO_USER", ok: false };
+  if (!contentId) return { status: "NO_CONTENT_ID", ok: false };
+
+  try {
+    const nowMs = Date.now();
+    const untilMs = nowMs + Number(durationHours || 6) * 60 * 60 * 1000;
+
+    const appliedAtIso = new Date(nowMs).toISOString();
+    const untilIso = new Date(untilMs).toISOString();
+
+    const colName = contentType === "store" ? "stores" : "posts";
+    const userRef = doc(db, "users", user.uid);
+    const contentRef = doc(db, colName, String(contentId));
+
+    const todayKey = getTodayKSTKey();
+    const monthKey = getCurrentMonthKeyKST();
+
+    const txRes = await runTransaction(db, async (tx) => {
+      const userSnap = await tx.get(userRef);
+      const contentSnap = await tx.get(contentRef);
+
+      if (!contentSnap.exists()) {
+        return { ok: false, status: "NOT_FOUND" };
+      }
+
+      const userData = userSnap.exists() ? (userSnap.data() || {}) : {};
+
+      // ✅ activeBoost 진행 중이면 재부여 차단 (같은 콘텐츠 포함)
+      const ab = userData?.[BOOST_ACTIVE_FIELD] || null;
+      if (ab && _isActiveBoost(ab)) {
+        return { ok: false, status: "HAS_ACTIVE_BOOST", activeBoost: ab };
+      }
+
+      // ✅ 6시간 경과 조건 (기존 정책 유지)
+      const data = contentSnap.data() || {};
+      const createdAtMs = _parseMs(data?.createdAt);
+      const minAgeMs = 6 * 60 * 60 * 1000;
+      if (createdAtMs && nowMs - createdAtMs < minAgeMs) {
+        return { ok: false, status: "TOO_EARLY", waitMs: (minAgeMs - (nowMs - createdAtMs)) };
+      }
+
+      // ✅ 모드별 카운트/자격 검증 (트랜잭션 기준)
+      let nextDailyKey = userData?.[BOOST_DAILY_KEY_FIELD] || null;
+      let nextDailyUsed = typeof userData?.[BOOST_DAILY_FREE_USED_FIELD] === "number" ? userData?.[BOOST_DAILY_FREE_USED_FIELD] : 0;
+
+      let nextMonthKey = userData?.[BOOST_MONTH_KEY_FIELD] || null;
+      let nextMembershipUsed = typeof userData?.[BOOST_MEMBERSHIP_USED_FIELD] === "number" ? userData?.[BOOST_MEMBERSHIP_USED_FIELD] : 0;
+
+      if (mode === "free") {
+        const used = (nextDailyKey === todayKey) ? Number(nextDailyUsed || 0) : 0;
+        if (used >= 1) return { ok: false, status: "FREE_DAILY_LIMIT", todayKey, used };
+
+        nextDailyKey = todayKey;
+        nextDailyUsed = used + 1;
+      }
+
+      if (mode === "membership") {
+        const dbIsPremium = !!userData?.isPremium || !!userData?.isAdmin;
+        if (!isPremium && !dbIsPremium) return { ok: false, status: "NOT_PREMIUM" };
+
+        const type = userData?.membershipType || membershipType || "free";
+        const limit = (type === "yearly") ? 4 : (type === "monthly") ? 2 : 0;
+
+        const used = (nextMonthKey === monthKey) ? Number(nextMembershipUsed || 0) : 0;
+        if (limit <= 0) return { ok: false, status: "NOT_ELIGIBLE", monthKey, limit, used };
+        if (used >= limit) return { ok: false, status: "MEMBERSHIP_LIMIT", monthKey, limit, used };
+
+        nextMonthKey = monthKey;
+        nextMembershipUsed = used + 1;
+      }
+
+      // ✅ 콘텐츠 문서 부스트 필드
+      tx.update(contentRef, {
+        boostAppliedAt: appliedAtIso,
+        boostUntil: untilIso,
+        boostMode: String(mode),
+      });
+
+      // ✅ 유저 문서 activeBoost + 카운트
+      const patch = {
+        [BOOST_ACTIVE_FIELD]: {
+          type: String(contentType),
+          contentId: String(contentId),
+          appliedAt: appliedAtIso,
+          until: untilIso,
+          mode: String(mode),
+        },
+      };
+
+      if (mode === "free") {
+        patch[BOOST_DAILY_KEY_FIELD] = nextDailyKey;
+        patch[BOOST_DAILY_FREE_USED_FIELD] = nextDailyUsed;
+      }
+
+      if (mode === "membership") {
+        patch[BOOST_MONTH_KEY_FIELD] = nextMonthKey;
+        patch[BOOST_MEMBERSHIP_USED_FIELD] = nextMembershipUsed;
+      }
+
+      tx.update(userRef, patch);
+
+      return {
+        ok: true,
+        status: "BOOST_APPLIED",
+        boostAppliedAt: appliedAtIso,
+        boostUntil: untilIso,
+        mode: String(mode),
+        todayKey: nextDailyKey,
+        dailyUsed: nextDailyUsed,
+        monthKey: nextMonthKey,
+        membershipUsed: nextMembershipUsed,
+      };
+    });
+
+    if (!txRes?.ok) return { ...txRes, ok: false };
+
+    // ✅ 로컬 state 반영
+    if (mode === "free") {
+      setBoostDailyKey(txRes?.todayKey || todayKey);
+      setBoostDailyFreeUsed(typeof txRes?.dailyUsed === "number" ? txRes.dailyUsed : 0);
+    }
+
+    if (mode === "membership") {
+      setBoostMonthKey(txRes?.monthKey || monthKey);
+      setBoostMembershipUsed(typeof txRes?.membershipUsed === "number" ? txRes.membershipUsed : 0);
+    }
+
+    setActiveBoost({
+      type: String(contentType),
+      contentId: String(contentId),
+      appliedAt: txRes.boostAppliedAt,
+      until: txRes.boostUntil,
+      mode: String(mode),
+    });
+
+    return { status: "BOOST_APPLIED", ok: true, boostUntil: txRes.boostUntil, boostAppliedAt: txRes.boostAppliedAt };
+  } catch (e) {
+    console.warn("applyBoostToContent 실패:", e);
+    return { status: "FAILED", ok: false, error: e };
+  }
+};
+
+
+  const clearExpiredActiveBoostIfNeeded = async () => {
+  try {
+    if (!user?.uid) return;
+
+    const ab = activeBoost;
+    if (!ab) return;
+
+    const isActive = _isActiveBoost(ab);
+
+    // ✅ 진행 중이라도, 대상 문서가 삭제되었으면 activeBoost 해제
+    if (isActive) {
+      try {
+        const abType = String(ab?.type || "");
+        const abId = String(ab?.contentId || "");
+        const abCol = abType === "store" ? "stores" : "posts";
+        const snap = await getDoc(doc(db, abCol, abId));
+        if (snap.exists()) return;
+      } catch {
+        return;
+      }
+    }
+
+    // ✅ 만료(or 삭제) 되었으면 users.activeBoost만 비움
+    await updateDoc(doc(db, "users", user.uid), {
+      [BOOST_ACTIVE_FIELD]: null,
+    });
+
+    setActiveBoost(null);
+  } catch (e) {
+    console.warn("clearExpiredActiveBoostIfNeeded 실패:", e);
+  }
+};
+
   /* =========================
       posts CRUD
   ========================= */
@@ -1601,6 +1912,11 @@ export const AppProvider = ({ children }) => {
     if (!user) return;
     await addDoc(collection(db, "posts"), {
       ...newPostData,
+      pricePerPerson: Number(newPostData.pricePerPerson || 0),
+      tip: Number(newPostData.tip || 0),
+      maxParticipants: Number(newPostData.maxParticipants || 0),
+      currentParticipants: Number(newPostData.currentParticipants || 1), // 기본값 1(본인)
+      
       category: newPostData.category,
       ownerId: user.uid,
       ownerEmail: user.email,
@@ -1694,6 +2010,11 @@ export const AppProvider = ({ children }) => {
         activatePremium,
         refreshPremiumFromRevenueCat,
         restorePurchases,
+
+        // ✅ [추가] Boost API
+        checkBoostEligibility,
+        applyBoostToContent,
+        clearExpiredActiveBoostIfNeeded,
       }}
     >
       {children}

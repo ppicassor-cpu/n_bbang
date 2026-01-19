@@ -32,7 +32,12 @@ const REPORT_REASONS = [
 
 export default function DetailScreen({ route, navigation }) {
   const { post: initialPost } = route.params || {};
-  const { user, deletePost, posts, updatePost, reportUser, blockUser } = useAppContext(); 
+    const { 
+    user, deletePost, posts, updatePost, reportUser, blockUser,
+    checkBoostEligibility, applyBoostToContent, clearExpiredActiveBoostIfNeeded,
+    isPremium, membershipType
+  } = useAppContext(); 
+ 
   const insets = useSafeAreaInsets();
   
   const [post, setPost] = useState(initialPost || null);
@@ -54,6 +59,8 @@ export default function DetailScreen({ route, navigation }) {
   const [reportModalVisible, setReportModalVisible] = useState(false);
   const [blockModalVisible, setBlockModalVisible] = useState(false);
   const [sampleModalVisible, setSampleModalVisible] = useState(false);
+  const [boostModalVisible, setBoostModalVisible] = useState(false);
+  const [boostLoading, setBoostLoading] = useState(false);
 
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [tempStatus, setTempStatus] = useState(""); 
@@ -151,12 +158,13 @@ export default function DetailScreen({ route, navigation }) {
 
     if (isFull) return;
 
+    setLoading(true); // 로딩 표시 (선택사항)
+
     try {
       // 1. 먼저 채팅방을 생성/확인합니다.
       await ensureRoom(roomId, roomName, "group", post.ownerId);
 
-      // 2. ✅ 참여가 DB에 기록되는 순간(= participants에 실제 추가) 기준으로 카운트 증가를 확정
-      //    - 트랜잭션에서 "participants에 없을 때만" participants 추가 + currentParticipants 증가를 함께 처리
+      // 2. ✅ 참여가 DB에 기록되는 순간 카운트 증가
       if (!isMyPost) {
         let didIncrement = false;
 
@@ -166,7 +174,6 @@ export default function DetailScreen({ route, navigation }) {
 
           await runTransaction(db, async (tx) => {
             const roomSnap = await tx.get(roomRef);
-
             if (!roomSnap.exists()) {
               throw new Error("chatRooms 문서가 존재하지 않습니다.");
             }
@@ -174,16 +181,15 @@ export default function DetailScreen({ route, navigation }) {
             const roomData = roomSnap.data() || {};
             const participants = Array.isArray(roomData.participants) ? roomData.participants : [];
 
-            // 이미 참여한 유저면 아무것도 하지 않음(중복 증가 방지)
+            // 이미 참여한 유저면 중복 증가 방지
             if (participants.includes(user.uid)) {
               return;
             }
 
-            // 참여 기록(= participants 추가) + 참여자 수 증가를 한 번에 확정
+            // 참여 기록 + 카운트 증가
             tx.update(roomRef, {
               participants: arrayUnion(user.uid),
             });
-
             tx.update(postRef, {
               currentParticipants: increment(1),
             });
@@ -191,22 +197,28 @@ export default function DetailScreen({ route, navigation }) {
             didIncrement = true;
           });
 
-          // 로컬 UI 즉시 반영(트랜잭션에서 실제 증가가 발생한 경우에만)
+          // 트랜잭션 성공 시에만 로컬 UI 반영
           if (didIncrement) {
             setPost(prev => ({ ...prev, currentParticipants: Number(prev.currentParticipants || 0) + 1 }));
           }
         } catch (e) {
-          console.error("참여 기록/카운트 업데이트 실패:", e);
+          console.error("참여 트랜잭션 실패:", e);
+          // ⚠️ 여기서 에러가 나면 채팅방 입장을 막고 사용자에게 알려야 함
+          setAlertMsg("참여 처리 중 오류가 발생했습니다.\n(잠시 후 다시 시도해주세요)");
+          setErrorModalVisible(true);
+          return; // 함수 종료 (채팅방 이동 안 함)
         }
       }
 
-      // 3. 채팅방으로 이동
+      // 3. 모든 과정 성공 시 채팅방으로 이동
       navigation.navigate(ROUTES.CHAT_ROOM, { roomId, roomName });
 
     } catch (e) {
       console.error("채팅방 입장 실패:", e);
-      // 에러 발생 시에도 일단 이동은 시도해볼 수 있음
-      navigation.navigate(ROUTES.CHAT_ROOM, { roomId, roomName });
+      setAlertMsg("채팅방 입장에 실패했습니다.");
+      setErrorModalVisible(true);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -284,6 +296,128 @@ export default function DetailScreen({ route, navigation }) {
     setBlockModalVisible(false);
     navigation.goBack();
   };
+
+  /* =========================
+      Boost(부스트)
+  ========================= */
+
+  // ✅ boostUntil 기반 안전 판정 (Firestore Timestamp / number / string 모두 대응)
+  const _toMs = (v) => {
+    if (!v) return 0;
+    if (typeof v === "number") return v;
+    if (typeof v?.toDate === "function") return v.toDate().getTime();
+    const t = new Date(v).getTime();
+    return Number.isFinite(t) ? t : 0;
+  };
+
+  const _isBoostActive = () => _toMs(post?.boostUntil) > Date.now();
+
+  const openBoostModal = async () => {
+    // ✅ 이미 이 글이 boostUntil 유효면, 모달 자체를 막음 (중복 부스트 방지)
+    if (_isBoostActive()) {
+      setAlertMsg("이미 부스트가 진행 중인 글입니다.");
+      setErrorModalVisible(true);
+      return;
+    }
+
+    try {
+      if (clearExpiredActiveBoostIfNeeded) {
+        await clearExpiredActiveBoostIfNeeded();
+      }
+    } catch {}
+
+    // ✅ clear 이후에도 여전히 유효하면 방지
+    if (_isBoostActive()) {
+      setAlertMsg("이미 부스트가 진행 중인 글입니다.");
+      setErrorModalVisible(true);
+      return;
+    }
+
+    setBoostModalVisible(true);
+  };
+
+  const _boostErrorMessage = (elig) => {
+    const status = String(elig?.status || "");
+    if (status === "HAS_ACTIVE_BOOST") return "이미 진행 중인 부스트가 있습니다. (동시에 1개만 가능)";
+    if (status === "TOO_EARLY") return "작성 후 6시간이 지난 글만 무료/멤버십 부스트가 가능합니다.";
+    if (status === "FREE_DAILY_LIMIT") return "오늘 무료 부스트(1회)를 이미 사용하셨습니다.";
+    if (status === "NOT_PREMIUM") return "멤버십 부스트는 프리미엄 회원만 가능합니다.";
+    if (status === "MEMBERSHIP_LIMIT") return "이번 달 멤버십 부스트 횟수를 모두 사용하셨습니다.";
+    return "부스트 조건을 만족하지 않습니다.";
+  };
+
+  const runBoost = async (mode) => {
+    if (!post?.id) return;
+
+    // ✅ 실행 직전에도 boostUntil 재확인 (더블탭/레이스 방지)
+    if (_isBoostActive()) {
+      setBoostModalVisible(false);
+      setAlertMsg("이미 부스트가 진행 중인 글입니다.");
+      setErrorModalVisible(true);
+      return;
+    }
+
+    // ✅ 필수 함수 없으면 즉시 실패 처리
+    if (typeof checkBoostEligibility !== "function" || typeof applyBoostToContent !== "function") {
+      setBoostModalVisible(false);
+      setAlertMsg("부스트 기능이 아직 준비되지 않았습니다.");
+      setErrorModalVisible(true);
+      return;
+    }
+
+    setBoostLoading(true);
+    try {
+      const elig = await checkBoostEligibility({
+        contentType: "post",
+        contentId: post.id,
+        mode,
+      });
+
+      if (!elig?.ok) {
+        setBoostModalVisible(false);
+        setAlertMsg(_boostErrorMessage(elig));
+        setErrorModalVisible(true);
+        return;
+      }
+
+      const res = await applyBoostToContent({
+        contentType: "post",
+        contentId: post.id,
+        mode,
+        durationHours: 6,
+      });
+
+      if (res?.ok) {
+        // ✅ 성공 즉시 로컬 상태 반영 (boostUntil 기준으로 HomeScreen 슬롯에 바로 반영되도록)
+        const fallbackUntil = Date.now() + 6 * 60 * 60 * 1000;
+        const nextBoostUntil = res?.boostUntil ?? res?.data?.boostUntil ?? fallbackUntil;
+        const nextBoostAppliedAt = res?.boostAppliedAt ?? res?.data?.boostAppliedAt ?? Date.now();
+
+        setPost((prev) => ({
+          ...prev,
+          boostUntil: nextBoostUntil,
+          boostAppliedAt: nextBoostAppliedAt,
+        }));
+
+        setBoostModalVisible(false);
+        setAlertMsg("부스트가 적용되었습니다. (6시간)");
+        setSuccessModalVisible(true);
+        return;
+      }
+
+      setBoostModalVisible(false);
+      setAlertMsg("부스트 적용에 실패했습니다.");
+      setErrorModalVisible(true);
+    } catch (e) {
+      console.warn("runBoost 실패:", e);
+      setBoostModalVisible(false);
+      setAlertMsg("부스트 처리 중 오류가 발생했습니다.");
+      setErrorModalVisible(true);
+    } finally {
+      setBoostLoading(false);
+    }
+  };
+
 
   const handleScroll = (event) => {
     const slideSize = event.nativeEvent.layoutMeasurement.width;
@@ -443,12 +577,33 @@ export default function DetailScreen({ route, navigation }) {
           <Text style={styles.price}>{finalPerPerson.toLocaleString()}원</Text>
         </View>
         <View style={{ flex: 1 }} />
-        {isMyPost ? (
+                {isMyPost ? (
           <View style={{ flexDirection: "row", gap: 10 }}>
-            <TouchableOpacity style={styles.actionBtn} onPress={() => setDeleteModalVisible(true)}><Text style={{ color: "#FF6B6B" }}>삭제</Text></TouchableOpacity>
-            <TouchableOpacity style={[styles.actionBtn, { backgroundColor: theme.primary }]} onPress={handleEdit}><Text style={{ color: "black" }}>수정</Text></TouchableOpacity>
+            <TouchableOpacity style={styles.actionBtn} onPress={() => setDeleteModalVisible(true)}>
+              <Text style={{ color: "#FF6B6B" }}>삭제</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={[styles.actionBtn, { backgroundColor: theme.primary }]} onPress={handleEdit}>
+              <Text style={{ color: "black" }}>수정</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.boostBtn}
+              onPress={openBoostModal}
+              disabled={boostLoading || _isBoostActive()}
+            >
+              {boostLoading ? (
+                <ActivityIndicator size="small" color="white" />
+              ) : (
+                <Text style={styles.boostBtnText}>
+                  {_isBoostActive() ? "🚀 부스트중" : "🚀 부스트"}
+                </Text>
+              )}
+            </TouchableOpacity>
+
           </View>
         ) : (
+
           <TouchableOpacity style={[styles.chatBtn, isFull && { backgroundColor: "#222" }]} onPress={onPressChat} disabled={isFull}>
             <Text style={[styles.chatBtnText, isFull && { color: "#555" }]}>
               {isFull ? (isClosed ? "참여 마감" : "모집 마감") : "N빵 참여"}
@@ -472,6 +627,42 @@ export default function DetailScreen({ route, navigation }) {
       />
       <CustomModal visible={errorModalVisible} title="오류" message={alertMsg} onConfirm={() => setErrorModalVisible(false)} />
       <CustomModal visible={deleteModalVisible} title="삭제" message="정말로 삭제하시겠습니까?" type="confirm" onConfirm={handleDelete} onCancel={() => setDeleteModalVisible(false)} />
+        {/* ✅ [추가] 부스트 모달 */}
+      <CustomModal
+        visible={boostModalVisible}
+        title="🚀 부스트"
+        message="부스트 방식을 선택해주세요."
+        onCancel={() => setBoostModalVisible(false)}
+        onConfirm={() => setBoostModalVisible(false)}
+      >
+        <View style={{ gap: 8, marginTop: 10, width: "100%" }}>
+          <TouchableOpacity
+            style={styles.boostOptionBtn}
+            onPress={() => runBoost("free")}
+            disabled={boostLoading}
+          >
+            <Text style={styles.boostOptionText}>무료 부스트 (일 1회 / 6시간)</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.boostOptionBtn}
+            onPress={() => runBoost("membership")}
+            disabled={boostLoading || !isPremium}
+          >
+            <Text style={styles.boostOptionText}>
+              멤버십 부스트 (월 {membershipType === "yearly" ? "4" : membershipType === "monthly" ? "2" : "0"}회 / 6시간)
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.boostOptionBtn, { backgroundColor: "#333" }]}
+            onPress={() => setBoostModalVisible(false)}
+            disabled={boostLoading}
+          >
+            <Text style={[styles.boostOptionText, { color: "#BBB" }]}>닫기</Text>
+          </TouchableOpacity>
+        </View>
+      </CustomModal>
 
       {/* 안내용 모달들 */}
       <CustomModal 
@@ -572,8 +763,38 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#444'
   },
-  reportReasonText: {
+    reportReasonText: {
     color: 'white',
     fontSize: 14
+  },
+
+  // ✅ [추가] 부스트 버튼/옵션 스타일
+  boostBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: "#333",
+    minWidth: 90,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  boostBtnText: {
+    color: "white",
+    fontWeight: "bold",
+    fontSize: 14,
+  },
+  boostOptionBtn: {
+    backgroundColor: "#2A2A2A",
+    paddingVertical: 14,
+    borderRadius: 8,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#444",
+  },
+  boostOptionText: {
+    color: "white",
+    fontSize: 14,
+    fontWeight: "bold",
   }
 });
+

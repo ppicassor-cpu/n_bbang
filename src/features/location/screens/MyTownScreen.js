@@ -1318,7 +1318,7 @@ const MyTownScreen = ({ navigation }) => {
                       style={{ marginRight: 4 }}
                     />
                     <Text style={[styles.statusText, { color: isVerified ? PRIMARY_COLOR : "#F44336" }]}>
-                      {isVerified ? "인증됨" : "위치 불일치"}
+                      {isVerified ? "인증가능" : "위치 불일치"}
                     </Text>
                   </View>
                 )}

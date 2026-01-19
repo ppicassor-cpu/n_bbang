@@ -67,7 +67,7 @@ export default function StoreWriteScreen({ route, navigation }) {
   // ✅ [수정] 타이틀 '핫플레이스' -> '핫스토어'로 변경
   useEffect(() => {
     navigation.setOptions({ 
-      title: isEditMode ? "핫스토어 수정" : "핫플레이스 등록" 
+      title: isEditMode ? "핫스토어 수정" : "핫스토어 등록" 
     });
   }, [isEditMode, navigation]);
 

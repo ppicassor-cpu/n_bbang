@@ -19,7 +19,7 @@ const IMAGE_QUALITY = 0.6;
 const IMAGE_CACHE_SECONDS = 60 * 60 * 24 * 30; // 30일
 
 // ✅ [수정] 무료나눔 타입도 같은 WriteScreen에서 작성되면 분기 기준이 필요함
-const WRITABLE_CATEGORIES = ["마트/식품", "생활용품", "핫플레이스", "무료나눔"];
+const WRITABLE_CATEGORIES = ["마트/식품", "생활용품"];
 
 export default function WriteScreen({ navigation, route }) {
   const {
@@ -514,7 +514,10 @@ export default function WriteScreen({ navigation, route }) {
                     style={[styles.catBtn, category === cat && styles.catBtnActive]}
                     onPress={() => setCategory(cat)}
                 >
-                  <Text style={[styles.catText, category === cat && styles.catTextActive]}>{cat}</Text>
+                  {/* ✅ 화면에만 '핫스토어'로 보여주고, 실제 데이터는 '핫플레이스'로 유지 */}
+                <Text style={[styles.catText, category === cat && styles.catTextActive]}>
+                  {cat === "핫플레이스" ? "핫스토어" : cat}
+                </Text>
                 </TouchableOpacity>
             ))}
           </View>

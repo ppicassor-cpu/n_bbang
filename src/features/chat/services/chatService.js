@@ -110,43 +110,59 @@ export const ensureRoom = async (roomId, roomName, type, ownerId) => {
     const updateData = {};
     const participantsToAdd = [];
 
+    // ✅ 핵심:
+    // 1) participants 추가는 "participants만" 단독 update로 먼저 처리 (rules 통과)
+    // 2) updatedAt/joinedAt/type/ownerId 같은 메타는 "내가 참여자인 상태"에서만 별도 update로 처리
+    // 3) post_ 방에서 게스트는 ensureRoom이 메타 update를 하면 rules에 막히므로, 여기서는 아무것도 건드리지 않고 종료
+
+    // ✅ post_ 방: 게스트는 여기서 업데이트 금지 (참여는 DetailScreen 트랜잭션에서 처리)
+    if (isPostRoom) {
+      const resolvedOwnerId = ownerId || data.ownerId;
+
+      // 방장 본인이면 누락된 joinedAt 정도만 보정 가능(이미 participants에 있으니까)
+      if (userId === resolvedOwnerId) {
+        if (!data[`joinedAt_${resolvedOwnerId}`]) updateData[`joinedAt_${resolvedOwnerId}`] = serverTimestamp();
+        updateData.updatedAt = serverTimestamp();
+
+        if (Object.keys(updateData).length > 0) {
+          await updateDoc(roomRef, updateData);
+        }
+      }
+
+      return;
+    }
+
+    // ✅ non-post 방: 참여자 추가 필요 여부 수집
+    if (!currentParticipants.includes(userId)) {
+      participantsToAdd.push(userId);
+    }
+
+    if (ownerId && ownerId !== userId && !currentParticipants.includes(ownerId)) {
+      participantsToAdd.push(ownerId);
+    }
+
+    // 1) participants 추가는 "participants만" 단독 update
+    if (participantsToAdd.length > 0) {
+      await updateDoc(roomRef, {
+        participants: arrayUnion(...participantsToAdd),
+      });
+    }
+
+    // ✅ 이제부터 메타 업데이트 (내가 참여자인 상태에서만)
+    const willBeParticipant = currentParticipants.includes(userId) || participantsToAdd.includes(userId);
+    if (!willBeParticipant) return;
+
     updateData.updatedAt = serverTimestamp();
 
     if (type && data.type !== type) updateData.type = type;
 
-    // ✅ [수정] post_ 방은 ensureRoom에서 게스트를 participants에 자동 추가하지 않음
-    if (!isPostRoom) {
-      // 내(게스트)가 없으면 추가
-      if (!data[`joinedAt_${userId}`]) updateData[`joinedAt_${userId}`] = serverTimestamp();
-      if (!currentParticipants.includes(userId)) {
-        participantsToAdd.push(userId);
-      }
+    if (!data[`joinedAt_${userId}`]) updateData[`joinedAt_${userId}`] = serverTimestamp();
+
+    if (ownerId && ownerId !== userId && !data[`joinedAt_${ownerId}`]) {
+      updateData[`joinedAt_${ownerId}`] = serverTimestamp();
     }
 
-    // 방장 정보 업데이트 (없으면 채워넣기)
     if (ownerId && !data.ownerId) updateData.ownerId = ownerId;
-
-    // ✅ [수정] 방이 이미 있어도, 방장이 리스트에 없으면 강제로 다시 추가 (오류 복구)
-    if (ownerId && ownerId !== userId) {
-      if (!currentParticipants.includes(ownerId)) {
-        participantsToAdd.push(ownerId);
-      }
-      if (!data[`joinedAt_${ownerId}`]) {
-        updateData[`joinedAt_${ownerId}`] = serverTimestamp();
-      }
-    }
-
-    // ✅ [수정] post_ 방은 방장 joinedAt 누락만 보정
-    if (isPostRoom) {
-      const resolvedOwnerId = ownerId || data.ownerId;
-      if (resolvedOwnerId && !data[`joinedAt_${resolvedOwnerId}`]) {
-        updateData[`joinedAt_${resolvedOwnerId}`] = serverTimestamp();
-      }
-    }
-
-    if (participantsToAdd.length > 0) {
-      updateData.participants = arrayUnion(...participantsToAdd);
-    }
 
     if (Object.keys(updateData).length > 0) {
       await updateDoc(roomRef, updateData);
@@ -399,14 +415,18 @@ export const leaveRoom = async (roomId) => {
   // ✅ 카운트는 트랜잭션 밖에서 시도 (실패해도 나가기는 유지)
   if (postRef && ownerIdFromRoom && user.uid !== ownerIdFromRoom && wasParticipant) {
     try {
-      const postSnap = await getDoc(postRef);
-      if (postSnap.exists()) {
+      await runTransaction(db, async (tx) => {
+        const postSnap = await tx.get(postRef);
+        if (!postSnap.exists()) return;
+
         const postData = postSnap.data() || {};
         const cur = Number(postData.currentParticipants || 0);
-        if (cur > 0) {
-          await updateDoc(postRef, { currentParticipants: increment(-1) });
-        }
-      }
+
+        // 최소 1(방장) 유지
+        if (cur <= 1) return;
+
+        tx.update(postRef, { currentParticipants: cur - 1 });
+      });
     } catch (e) {}
   }
 };
