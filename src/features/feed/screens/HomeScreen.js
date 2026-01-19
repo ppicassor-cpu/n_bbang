@@ -208,10 +208,11 @@ export default function HomeScreen({ navigation }) {
     setGateTimeoutPassed(false);
 
     try {
-      if (typeof checkSavedVerification === "function") {
-        await checkSavedVerification(true); // ✅ 강제 재인증
-      } else if (typeof verifyLocation === "function") {
-        await verifyLocation(); // fallback
+      // ✅ 강제 재시도는 캐시 복구가 아니라 "실제 GPS 재확인"이 맞습니다.
+      if (typeof verifyLocation === "function") {
+        await verifyLocation();
+      } else if (typeof checkSavedVerification === "function") {
+        await checkSavedVerification(user?.uid || null);
       }
     } catch (e) {}
   };
@@ -396,10 +397,11 @@ export default function HomeScreen({ navigation }) {
     if (isLocationLoading) return;
     setIsLocationLoading(true);
     try {
-      if (typeof checkSavedVerification === "function") {
-        await checkSavedVerification(true); // ✅ 강제 재인증
-      } else if (typeof verifyLocation === "function") {
-        await verifyLocation(); // fallback
+      // ✅ 강제 재인증(재시도)은 verifyLocation이 정답
+      if (typeof verifyLocation === "function") {
+        await verifyLocation();
+      } else if (typeof checkSavedVerification === "function") {
+        await checkSavedVerification(user?.uid || null);
       }
     } catch (e) {
       console.error(e);
@@ -411,14 +413,15 @@ export default function HomeScreen({ navigation }) {
   useEffect(() => {
     (async () => {
       try {
+        // ✅ 캐시 복구는 uid 기반으로만
         if (typeof checkSavedVerification === "function") {
-          await checkSavedVerification(false); // ✅ 캐시 우선
+          await checkSavedVerification(user?.uid || null);
         } else if (typeof verifyLocation === "function") {
           await verifyLocation(); // fallback
         }
       } catch (e) {}
     })();
-  }, []);
+  }, [user?.uid]);
 
   useEffect(() => {
     if (myCoords && myCoords.latitude) {

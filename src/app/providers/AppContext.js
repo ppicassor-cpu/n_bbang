@@ -1334,10 +1334,12 @@ export const AppProvider = ({ children }) => {
       // 저장된 게 없거나 만료됨 -> 좌표는 잡지만 인증은 안 함!
       await refreshMyCoords();
       setIsVerified(false); // ✅ 확실하게 미인증으로 시작
+      setLocationChecked(true);
 
     } catch {
       await refreshMyCoords();
       setIsVerified(false); // ✅ 에러 시에도 미인증
+      setLocationChecked(true);
     }
   };
 
@@ -1655,6 +1657,7 @@ export const AppProvider = ({ children }) => {
 
         getDistanceFromLatLonInKm,
         verifyLocation,
+        checkSavedVerification,
         isVerified,
 
         authChecked,
