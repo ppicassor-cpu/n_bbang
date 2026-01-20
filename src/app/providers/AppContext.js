@@ -661,32 +661,36 @@ export const AppProvider = ({ children }) => {
 
   // ✅ [추가] 홈 동 저장(사용자 확정)
   const saveHomeDong = async ({ dongName, dongCode, featureId } = {}) => {
-    const next = {
-      dongName: dongName || null,
-      dongCode: dongCode || null,
-      featureId: featureId || null,
-      verified: false,
-      verifiedAt: null,
-    };
+  // ✅ 1) 동네 저장 순간에 "인증 도장(verified)"을 지우지 않음 (리셋 제거)
+  const preservedVerified = !!homeDongVerified;
+  const preservedVerifiedAt = homeDongVerifiedAt || null;
 
-    try {
-      // ✅ legacy + HOME_DONG_* 동시 저장(호환)
-      await AsyncStorage.setItem(HOME_DONG_STORAGE_KEY, JSON.stringify(next));
-      await AsyncStorage.multiSet([
-        [HOME_DONG_NAME_KEY, next.dongName ? String(next.dongName) : ""],
-        [HOME_DONG_CODE_KEY, next.dongCode ? String(next.dongCode) : ""],
-        [HOME_DONG_VERIFIED_KEY, "false"],
-        [HOME_DONG_VERIFIED_AT_KEY, ""],
-      ]);
-    } catch {}
-
-    setHomeDong(next.dongName);
-    setHomeDongCode(next.dongCode);
-    homeDongLastNameRef.current = next.dongName ? String(next.dongName) : "";
-    setHomeDongPolygonId(next.featureId);
-    setHomeDongVerified(false);
-    setHomeDongVerifiedAt(null);
+  const next = {
+    dongName: dongName || null,
+    dongCode: dongCode || null,
+    featureId: featureId || null,
+    verified: preservedVerified,
+    verifiedAt: preservedVerifiedAt,
   };
+
+  try {
+    // ✅ legacy + HOME_DONG_* 동시 저장(호환)
+    await AsyncStorage.setItem(HOME_DONG_STORAGE_KEY, JSON.stringify(next));
+    await AsyncStorage.multiSet([
+      [HOME_DONG_NAME_KEY, next.dongName ? String(next.dongName) : ""],
+      [HOME_DONG_CODE_KEY, next.dongCode ? String(next.dongCode) : ""],
+      [HOME_DONG_VERIFIED_KEY, preservedVerified ? "true" : "false"],
+      [HOME_DONG_VERIFIED_AT_KEY, preservedVerifiedAt ? String(preservedVerifiedAt) : ""],
+    ]);
+  } catch {}
+
+  setHomeDong(next.dongName);
+  setHomeDongCode(next.dongCode);
+  homeDongLastNameRef.current = next.dongName ? String(next.dongName) : "";
+  setHomeDongPolygonId(next.featureId);
+  setHomeDongVerified(preservedVerified);
+  setHomeDongVerifiedAt(preservedVerifiedAt);
+};
 
   // ✅ [추가] 홈 동 초기화
   const clearHomeDong = async () => {
@@ -739,43 +743,54 @@ export const AppProvider = ({ children }) => {
   };
 
   // ✅ [추가] 현재 GPS가 선택 동 폴리곤 안인지 검증(동 이름은 절대 변경 금지)
-  const verifyHomeDongByGps = async ({ polygon } = {}) => {
-    try {
-      const coords = myCoords?.latitude && myCoords?.longitude ? myCoords : await refreshMyCoords();
-      if (!coords?.latitude || !coords?.longitude) return false;
+  const verifyHomeDongByGps = async ({ polygon, forceFresh = false, coordsOverride = null } = {}) => {
+  try {
+    // ✅ 2) 확정 직후 인증은 "같은 기준(최신 GPS)"으로 바로 찍기
+    // - forceFresh=true면 기존 myCoords가 있어도 무조건 refreshMyCoords()로 최신 GPS를 사용
+    let coords = null;
 
-      if (!polygon || typeof polygon !== "object") return false;
-
-      const ok = pointInPolygonGeometry(Number(coords.longitude), Number(coords.latitude), polygon);
-
-      const nowIso = new Date().toISOString();
-      setHomeDongVerified(!!ok);
-      setHomeDongVerifiedAt(nowIso);
-
-      try {
-        const raw = await AsyncStorage.getItem(HOME_DONG_STORAGE_KEY);
-        const prev = raw ? JSON.parse(raw) || {} : {};
-        const next = {
-          dongName: prev?.dongName || homeDong || null,
-          dongCode: prev?.dongCode || homeDongCode || null,
-          featureId: prev?.featureId || homeDongPolygonId || null,
-          verified: !!ok,
-          verifiedAt: nowIso,
-        };
-
-        // ✅ legacy + HOME_DONG_* 동시 저장(검증 상태 동기화)
-        await AsyncStorage.setItem(HOME_DONG_STORAGE_KEY, JSON.stringify(next));
-        await AsyncStorage.multiSet([
-          [HOME_DONG_VERIFIED_KEY, ok ? "true" : "false"],
-          [HOME_DONG_VERIFIED_AT_KEY, nowIso ? String(nowIso) : ""],
-        ]);
-      } catch {}
-
-      return !!ok;
-    } catch {
-      return false;
+    if (coordsOverride?.latitude && coordsOverride?.longitude) {
+      coords = coordsOverride;
+    } else if (forceFresh) {
+      coords = await refreshMyCoords();
+    } else {
+      coords = myCoords?.latitude && myCoords?.longitude ? myCoords : await refreshMyCoords();
     }
-  };
+
+    if (!coords?.latitude || !coords?.longitude) return false;
+
+    if (!polygon || typeof polygon !== "object") return false;
+
+    const ok = pointInPolygonGeometry(Number(coords.longitude), Number(coords.latitude), polygon);
+
+    const nowIso = new Date().toISOString();
+    setHomeDongVerified(!!ok);
+    setHomeDongVerifiedAt(nowIso);
+
+    try {
+      const raw = await AsyncStorage.getItem(HOME_DONG_STORAGE_KEY);
+      const prev = raw ? JSON.parse(raw) || {} : {};
+      const next = {
+        dongName: prev?.dongName || homeDong || null,
+        dongCode: prev?.dongCode || homeDongCode || null,
+        featureId: prev?.featureId || homeDongPolygonId || null,
+        verified: !!ok,
+        verifiedAt: nowIso,
+      };
+
+      // ✅ legacy + HOME_DONG_* 동시 저장(검증 상태 동기화)
+      await AsyncStorage.setItem(HOME_DONG_STORAGE_KEY, JSON.stringify(next));
+      await AsyncStorage.multiSet([
+        [HOME_DONG_VERIFIED_KEY, ok ? "true" : "false"],
+        [HOME_DONG_VERIFIED_AT_KEY, nowIso ? String(nowIso) : ""],
+      ]);
+    } catch {}
+
+    return !!ok;
+  } catch {
+    return false;
+  }
+};
 
   // ✅ 동 표시 정책 반영: homeDong 변경 시 currentLocation 동기화
   useEffect(() => {

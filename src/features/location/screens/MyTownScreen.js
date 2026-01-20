@@ -446,14 +446,14 @@ const MyTownScreen = ({ navigation }) => {
 
     if (!geoPrepared?.ok) {
       geoIsWgs84Ref.current = false;
-      _showModal("데이터 오류", geoPrepared?.reason || "행정동 데이터를 읽을 수 없습니다.");
+      _showModal("데이터 오류", geoPrepared?.reason || "데이터를 읽을 수 없습니다.");
       return false;
     }
 
     const first = _getFirstGeoCoord();
     if (!first) {
       geoIsWgs84Ref.current = false;
-      _showModal("데이터 오류", "행정동 데이터를 읽을 수 없다 / JSON이 GeoJSON(또는 TopoJSON) 구조인지 확인");
+      _showModal("데이터 오류", "데이터를 읽을 수 없다 / JSON이 GeoJSON(또는 TopoJSON) 구조인지 확인");
       return false;
     }
 
@@ -470,49 +470,53 @@ const MyTownScreen = ({ navigation }) => {
   };
 
   const _getCurrentLocation = async () => {
-    setLoading(true);
-    try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== "granted") {
-        _showModal("권한 필요", "위치 권한을 허용해야 이용 가능합니다.");
-        return;
-      }
+  setLoading(true);
+  try {
+    const { status } = await Location.requestForegroundPermissionsAsync();
+    if (status !== "granted") {
+      _showModal("권한 필요", "위치 권한을 허용해야 이용 가능합니다.");
+      return;
+    }
 
-      let coords = null;
+    let coords = null;
+
+      // ✅ 1) 최신 GPS 우선 (캐시(lastKnown)보다 현재값 먼저 시도)
       try {
-        const last = await Location.getLastKnownPositionAsync({});
-        if (last?.coords) coords = last.coords;
+        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Highest });
+        coords = loc?.coords;
       } catch {}
 
+      // ✅ 2) 실패 시에만 lastKnown fallback
       if (!coords) {
         try {
-          const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-          coords = loc?.coords;
+          const last = await Location.getLastKnownPositionAsync({});
+          if (last?.coords) coords = last.coords;
         } catch {}
       }
 
-      if (!coords) {
-        _showModal("오류", "위치를 가져올 수 없습니다.");
-        return;
-      }
-
-      setMyCoords({ latitude: coords.latitude, longitude: coords.longitude });
-      _focusMap(coords);
-
-      if (activeTab === "current") {
-        setTimeout(() => _findDongByCoords(coords), 100);
-      }
-    } catch (e) {
-      console.warn(e);
-    } finally {
-      setLoading(false);
+    if (!coords) {
+      _showModal("오류", "위치를 가져올 수 없습니다.");
+      return;
     }
-  };
 
-  const _findDongByCoords = (coords) => {
+    setMyCoords({ latitude: coords.latitude, longitude: coords.longitude });
+    _focusMap(coords);
+
+    if (activeTab === "current") {
+      // ✅ 최신 GPS(coords) 기준으로만 즉시 검증되게 고정 (버튼 흔들림 제거)
+      setTimeout(() => _findDongByCoords(coords, coords), 100);
+    }
+  } catch (e) {
+    console.warn(e);
+  } finally {
+    setLoading(false);
+  }
+};
+
+  const _findDongByCoords = (coords, verifyCoordsOverride = null) => {
     if (!coords?.latitude || !_ensureGeoWgs84()) return;
     if (!geoPrepared?.ok) {
-      _showModal("데이터 오류", geoPrepared?.reason || "행정동 데이터를 읽을 수 없습니다.");
+      _showModal("데이터 오류", geoPrepared?.reason || "데이터를 읽을 수 없습니다.");
       return;
     }
 
@@ -534,24 +538,28 @@ const MyTownScreen = ({ navigation }) => {
       if (found) {
         setSelectedDong(found);
 
-        // ✅ search 탭에서도 "인증 기준"은 내 GPS(myCoords)로만 판단
-        // - coords는 _findDongByCoords에 들어온 좌표(검색 좌표일 수 있음)라서 사용하면 안 됨
-        const baseCoords = myCoords
-          ? { latitude: myCoords.latitude, longitude: myCoords.longitude }
-          : coords;
+        // ✅ 판정 기준 좌표
+        // - search 탭: 내 GPS(myCoords) 기준 유지
+        // - current 탭: verifyCoordsOverride(있으면) → 없으면 coords
+        const verifyCoords = verifyCoordsOverride || coords;
+
+        const baseCoords =
+          activeTab === "search" && myCoords
+            ? { latitude: myCoords.latitude, longitude: myCoords.longitude }
+            : verifyCoords;
 
         _checkVerification(baseCoords, found);
         _focusMap(coords);
       } else {
         setSelectedDong(null);
         setIsVerified(false);
-        _showModal("알림", "해당 위치의 행정동 정보를 찾을 수 없습니다.");
+        _showModal("알림", "해당 위치의 정보를 찾을 수 없습니다.");
       }
     } catch (e) {
       console.warn("Find Dong Error", e);
       setSelectedDong(null);
       setIsVerified(false);
-      _showModal("오류", "행정동 탐색 중 오류가 발생했습니다.");
+      _showModal("오류", "탐색 중 오류가 발생했습니다.");
     }
   };
 
@@ -1105,12 +1113,11 @@ const MyTownScreen = ({ navigation }) => {
     const dongName = fullName ? fullName.split(" ").pop() : "";
     const dongCode = selectedDong?.properties?.adm_cd ? String(selectedDong.properties.adm_cd) : "";
 
-    // ✅ 핵심: AppContext state(homeDong) + AsyncStorage(키들)까지 같이 처리
+    // ✅ 1) 확정할 때 "미인증으로 리셋" 금지 (AppContext에서 리셋 제거됨)
     await saveHomeDong({ dongName, dongCode, featureId: null });
 
-    // ✅ (선택) VERIFIED/AT까지 지금 화면 기준으로 동기화하려면 실행
-    // - AppContext가 HOME_DONG_VERIFIED / HOME_DONG_VERIFIED_AT 저장까지 담당
-    await verifyHomeDongByGps({ polygon: selectedDong?.geometry });
+    // ✅ 2) 확정 직후 인증은 "최신 GPS"로 강제 갱신해서 같은 기준으로 즉시 저장/반영
+    await verifyHomeDongByGps({ polygon: selectedDong?.geometry, forceFresh: true });
 
     _showModal("완료", "동네 설정이 저장되었습니다.", () => navigation.goBack());
   } catch {
