@@ -222,7 +222,19 @@ export const AppProvider = ({ children }) => {
   const [locationChecked, setLocationChecked] = useState(false);
   const [postsLoaded, setPostsLoaded] = useState(false);
   const [storesLoaded, setStoresLoaded] = useState(false);
-  const isBooting = !(authChecked && locationChecked && postsLoaded && storesLoaded);
+
+  // ✅ [추가] "최초 진입" 전용 준비 완료 신호 (한 번 true가 되면 다시 false로 내려가지 않게 고정)
+  // - postsLoaded/storesLoaded가 refresh로 false가 되어도, 최초 진입 로더가 다시 뜨는 루프 방지용
+  const [initialReady, setInitialReady] = useState(false);
+
+useEffect(() => {
+  if (!initialReady && authChecked && locationChecked && postsLoaded && storesLoaded) {
+    setInitialReady(true);
+  }
+}, [initialReady, authChecked, locationChecked, postsLoaded, storesLoaded]);
+
+// ✅ 최초 부팅 게이팅은 initialReady만 본다 (루프 방지)
+const isBooting = !initialReady;
 
   // =================================================================
   // ✅ [수정] Posts 및 Stores(가게) 상태 관리
@@ -713,7 +725,7 @@ export const AppProvider = ({ children }) => {
   };
 
   // ✅ [추가] GPS 좌표만 갱신 (동 표시 문자열은 절대 변경 금지)
-  const refreshMyCoords = async () => {
+    const refreshMyCoords = async () => {
     try {
       const perm = await Location.requestForegroundPermissionsAsync();
       if (perm?.status !== "granted") {
@@ -734,13 +746,17 @@ export const AppProvider = ({ children }) => {
       };
 
       setMyCoords(coords);
-      
+
+      // ✅ [추가] 성공 케이스도 체크 완료 처리 (부팅 조건 꼬임 방지)
+      setLocationChecked(true);
+
       return coords;
     } catch {
       setLocationChecked(true);
       return null;
     }
   };
+
 
   // ✅ [추가] 현재 GPS가 선택 동 폴리곤 안인지 검증(동 이름은 절대 변경 금지)
   const verifyHomeDongByGps = async ({ polygon, forceFresh = false, coordsOverride = null } = {}) => {
@@ -852,32 +868,35 @@ export const AppProvider = ({ children }) => {
       }
 
       if (!currentUser) {
-        setIsPremium(false);
-        setPremiumUntil(null);
-        setDailyPostCount(0);
-        setDailyPostCountDate(null);
-        setIsAdmin(false);
-        isAdminRef.current = false;
-        setBlockedUsers([]);
-        setPostLimit(20);
-        setStoreLimit(20);
+  setIsPremium(false);
+  setPremiumUntil(null);
+  setDailyPostCount(0);
+  setDailyPostCountDate(null);
+  setIsAdmin(false);
+  isAdminRef.current = false;
+  setBlockedUsers([]);
+  setPostLimit(20);
+  setStoreLimit(20);
 
-        setMembershipType("free");
-        setHotplaceMonthKey(null);
-        setHotplaceCount(0);
-        setHotplacePaidExtraMonthKey(null);
-        setHotplacePaidExtraCount(0);
+  setMembershipType("free");
+  setHotplaceMonthKey(null);
+  setHotplaceCount(0);
+  setHotplacePaidExtraMonthKey(null);
+  setHotplacePaidExtraCount(0);
 
-        await AsyncStorage.removeItem(STORAGE_KEY);
-        await clearHomeDong();
+  await AsyncStorage.removeItem(STORAGE_KEY);
+  await clearHomeDong();
 
-        // ✅ [추가] 로그아웃 상태면 인증도 초기화!
-        setIsVerified(false);
-        setLocationChecked(true); // 위치 체크는 끝난 걸로 처리
+  // ✅ [추가] 로그아웃 상태면 인증도 초기화!
+  setIsVerified(false);
+  setLocationChecked(true); // 위치 체크는 끝난 걸로 처리
 
-        rcLoggedInUidRef.current = null;
-        return;
-      }
+  // ✅ [추가] 다음 로그인에서 최초 부팅 로더가 다시 정상 동작하도록 리셋
+  setInitialReady(false);
+
+  rcLoggedInUidRef.current = null;
+  return;
+}
 
       // ✅ 핵심: 로그인된 uid 기준으로만 인증 복구 판단
       const metadata = currentUser.metadata;
@@ -1995,6 +2014,7 @@ const applyBoostToContent = async ({ contentType = "post", contentId, mode = "fr
         locationChecked,
         postsLoaded,
         storesLoaded,
+        initialReady,
         isBooting,
 
         isPremium,

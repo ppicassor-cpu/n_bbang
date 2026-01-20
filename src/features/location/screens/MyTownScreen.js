@@ -1275,45 +1275,58 @@ const MyTownScreen = ({ navigation }) => {
 
         {/* 지도 */}
         <View style={styles.mapWrap}>
-          <MapView
-            ref={mapRef}
-            style={styles.map}
-            provider={PROVIDER_GOOGLE}
-            customMapStyle={MAP_STYLE}
-            initialRegion={{ latitude: 37.5665, longitude: 126.978, latitudeDelta: 0.05, longitudeDelta: 0.05 }}
-            showsCompass={true}
-            scrollEnabled={!dropdownOpen}
-            zoomEnabled={!dropdownOpen}
-            rotateEnabled={!dropdownOpen}
-            pitchEnabled={!dropdownOpen}
-            
-            // ✅ [추가] 핀 선택 시 구글 버튼바(길찾기 등) 숨기기 (안드로이드 필수)
-            toolbarEnabled={false} 
-            // ✅ [추가] 기본 내장 GPS 버튼 숨기기 (커스텀 버튼을 사용하므로)
-            showsMyLocationButton={false} 
-          >
-            {selectedDong && (
-              <Polygon
-                coordinates={_renderPolygonCoords()}
-                fillColor="rgba(141, 251, 67, 0.2)"
-                strokeColor={PRIMARY_COLOR}
-                strokeWidth={2}
-              />
-            )}
-            {myCoords && <Marker coordinate={myCoords} title="내 위치" pinColor={PRIMARY_COLOR} />}
-            {searchCoords && activeTab === "search" && <Marker coordinate={searchCoords} title="검색 위치" />}
-          </MapView>
+          {/* ✅ 내 위치(myCoords)가 없으면 로딩 화면, 있으면 지도 표시 */}
+          {!myCoords ? (
+            <View style={styles.mapLoadingContainer}>
+              <ActivityIndicator size="large" color={PRIMARY_COLOR} />
+              <Text style={styles.mapLoadingText}>내 위치를 찾는 중...</Text>
+            </View>
+          ) : (
+            <MapView
+              ref={mapRef}
+              style={styles.map}
+              provider={PROVIDER_GOOGLE}
+              customMapStyle={MAP_STYLE}
+              // ✅ [핵심] 초기 위치를 고정값이 아니라 내 위치(myCoords)로 설정!
+              initialRegion={{
+                latitude: myCoords.latitude,
+                longitude: myCoords.longitude,
+                latitudeDelta: 0.005, // 줌 레벨 좀 더 당겨서(확대) 보여줌
+                longitudeDelta: 0.005,
+              }}
+              showsCompass={true}
+              scrollEnabled={!dropdownOpen}
+              zoomEnabled={!dropdownOpen}
+              rotateEnabled={!dropdownOpen}
+              pitchEnabled={!dropdownOpen}
+              toolbarEnabled={false}
+              showsMyLocationButton={false}
+            >
+              {selectedDong && (
+                <Polygon
+                  coordinates={_renderPolygonCoords()}
+                  fillColor="rgba(141, 251, 67, 0.2)"
+                  strokeColor={PRIMARY_COLOR}
+                  strokeWidth={2}
+                />
+              )}
+              {/* 내 위치 마커 */}
+              <Marker coordinate={myCoords} title="내 위치" pinColor={PRIMARY_COLOR} />
+              
+              {/* 검색 위치 마커 */}
+              {searchCoords && activeTab === "search" && <Marker coordinate={searchCoords} title="검색 위치" />}
+            </MapView>
+          )}
 
-          {/* ✅ [추가] 수동 GPS 갱신 버튼 (현재 위치 탭일 때만 표시) */}
-          {activeTab === "current" && (
+          {/* GPS 갱신 버튼 (지도 위에 떠 있어야 하므로 밖으로 뺌) */}
+          {activeTab === "current" && myCoords && (
             <TouchableOpacity
               style={styles.gpsBtn}
               onPress={() => {
-                _getCurrentLocation(); // GPS 갱신 및 내 위치로 이동 함수 재호출
+                _getCurrentLocation();
               }}
               activeOpacity={0.8}
             >
-              {/* 로딩 중이면 스피너, 아니면 아이콘 표시 */}
               {loading ? (
                 <ActivityIndicator size="small" color={PRIMARY_COLOR} />
               ) : (
@@ -1689,6 +1702,18 @@ const styles = StyleSheet.create({
   modalBtnText: { color: "black", fontWeight: "bold", fontSize: 16 },
 
   loader: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "center", alignItems: "center" },
+  mapLoadingContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#212121", // 지도 배경색과 비슷하게 맞춰서 위화감 줄임
+  },
+  mapLoadingText: {
+    marginTop: 12,
+    color: "#888",
+    fontSize: 14,
+    fontWeight: "600",
+  },
 });
 
 export default MyTownScreen;

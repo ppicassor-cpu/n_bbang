@@ -1000,17 +1000,6 @@ for (let i = 0; i < keyedCombined.length; i++) {
         confirmText="확인"
       />
 
-      {/* ✅ [수정] 위치/인증/데이터 완료 전 덮는 모달 */}
-      <CustomModal
-        visible={locationGateVisible}
-        title={gateTitle}
-        message=""
-        onConfirm={handleGateConfirm}
-        loading={!gateTimeoutPassed && !isPermissionIssue}
-      >
-        <Text style={{ textAlign: "center" }}>{gateMessage}</Text>
-      </CustomModal>
-
     </SafeAreaView>
   );
 }

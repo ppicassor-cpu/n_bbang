@@ -1,5 +1,4 @@
-﻿// FILE: src/app/navigation/RootNavigator.js
-
+﻿// [수정 후] (RootNavigator.js) - 전체코드
 import React, { useEffect, useState } from "react";
 import { View } from "react-native";
 import { NavigationContainer, DarkTheme } from "@react-navigation/native";

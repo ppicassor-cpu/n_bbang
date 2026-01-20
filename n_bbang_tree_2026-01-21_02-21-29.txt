@@ -1,0 +1,245 @@
+n_bbang/
+├── android/
+│   ├── app/
+│   │   ├── src/
+│   │   │   ├── debug/
+│   │   │   │   └── AndroidManifest.xml
+│   │   │   ├── debugOptimized/
+│   │   │   │   └── AndroidManifest.xml
+│   │   │   └── main/
+│   │   │       ├── java/
+│   │   │       │   └── com/
+│   │   │       │       └── sonsunghyun/
+│   │   │       │           └── nbbang/
+│   │   │       │               ├── MainActivity.kt
+│   │   │       │               └── MainApplication.kt
+│   │   │       ├── res/
+│   │   │       │   ├── drawable/
+│   │   │       │   │   ├── ic_launcher_background.xml
+│   │   │       │   │   └── rn_edit_text_material.xml
+│   │   │       │   ├── drawable-hdpi/
+│   │   │       │   │   └── splashscreen_logo.png
+│   │   │       │   ├── drawable-mdpi/
+│   │   │       │   │   └── splashscreen_logo.png
+│   │   │       │   ├── drawable-xhdpi/
+│   │   │       │   │   └── splashscreen_logo.png
+│   │   │       │   ├── drawable-xxhdpi/
+│   │   │       │   │   └── splashscreen_logo.png
+│   │   │       │   ├── drawable-xxxhdpi/
+│   │   │       │   │   └── splashscreen_logo.png
+│   │   │       │   ├── mipmap-anydpi-v26/
+│   │   │       │   │   ├── ic_launcher.xml
+│   │   │       │   │   └── ic_launcher_round.xml
+│   │   │       │   ├── mipmap-hdpi/
+│   │   │       │   │   ├── ic_launcher.webp
+│   │   │       │   │   ├── ic_launcher_foreground.webp
+│   │   │       │   │   └── ic_launcher_round.webp
+│   │   │       │   ├── mipmap-mdpi/
+│   │   │       │   │   ├── ic_launcher.webp
+│   │   │       │   │   ├── ic_launcher_foreground.webp
+│   │   │       │   │   └── ic_launcher_round.webp
+│   │   │       │   ├── mipmap-xhdpi/
+│   │   │       │   │   ├── ic_launcher.webp
+│   │   │       │   │   ├── ic_launcher_foreground.webp
+│   │   │       │   │   └── ic_launcher_round.webp
+│   │   │       │   ├── mipmap-xxhdpi/
+│   │   │       │   │   ├── ic_launcher.webp
+│   │   │       │   │   ├── ic_launcher_foreground.webp
+│   │   │       │   │   └── ic_launcher_round.webp
+│   │   │       │   ├── mipmap-xxxhdpi/
+│   │   │       │   │   ├── ic_launcher.webp
+│   │   │       │   │   ├── ic_launcher_foreground.webp
+│   │   │       │   │   └── ic_launcher_round.webp
+│   │   │       │   ├── values/
+│   │   │       │   │   ├── colors.xml
+│   │   │       │   │   ├── strings.xml
+│   │   │       │   │   └── styles.xml
+│   │   │       │   └── values-night/
+│   │   │       │       └── colors.xml
+│   │   │       └── AndroidManifest.xml
+│   │   ├── build.gradle
+│   │   ├── debug.keystore
+│   │   ├── google-services.json
+│   │   └── proguard-rules.pro
+│   ├── gradle/
+│   │   └── wrapper/
+│   │       ├── gradle-wrapper.jar
+│   │       └── gradle-wrapper.properties
+│   ├── .gitignore
+│   ├── build.gradle
+│   ├── gradle.properties
+│   ├── gradlew
+│   ├── gradlew.bat
+│   └── settings.gradle
+├── android_backup_before_delete/
+│   ├── app/
+│   │   ├── src/
+│   │   │   ├── debug/
+│   │   │   │   └── AndroidManifest.xml
+│   │   │   ├── debugOptimized/
+│   │   │   │   └── AndroidManifest.xml
+│   │   │   └── main/
+│   │   │       ├── java/
+│   │   │       │   └── com/
+│   │   │       │       └── sonsunghyun/
+│   │   │       │           └── nbbang/
+│   │   │       │               ├── MainActivity.kt
+│   │   │       │               └── MainApplication.kt
+│   │   │       ├── res/
+│   │   │       │   ├── drawable/
+│   │   │       │   │   ├── ic_launcher_background.xml
+│   │   │       │   │   └── rn_edit_text_material.xml
+│   │   │       │   ├── drawable-hdpi/
+│   │   │       │   │   └── splashscreen_logo.png
+│   │   │       │   ├── drawable-mdpi/
+│   │   │       │   │   └── splashscreen_logo.png
+│   │   │       │   ├── drawable-xhdpi/
+│   │   │       │   │   └── splashscreen_logo.png
+│   │   │       │   ├── drawable-xxhdpi/
+│   │   │       │   │   └── splashscreen_logo.png
+│   │   │       │   ├── drawable-xxxhdpi/
+│   │   │       │   │   └── splashscreen_logo.png
+│   │   │       │   ├── mipmap-anydpi-v26/
+│   │   │       │   │   ├── ic_launcher.xml
+│   │   │       │   │   └── ic_launcher_round.xml
+│   │   │       │   ├── mipmap-hdpi/
+│   │   │       │   │   ├── ic_launcher.webp
+│   │   │       │   │   ├── ic_launcher_foreground.webp
+│   │   │       │   │   └── ic_launcher_round.webp
+│   │   │       │   ├── mipmap-mdpi/
+│   │   │       │   │   ├── ic_launcher.webp
+│   │   │       │   │   ├── ic_launcher_foreground.webp
+│   │   │       │   │   └── ic_launcher_round.webp
+│   │   │       │   ├── mipmap-xhdpi/
+│   │   │       │   │   ├── ic_launcher.webp
+│   │   │       │   │   ├── ic_launcher_foreground.webp
+│   │   │       │   │   └── ic_launcher_round.webp
+│   │   │       │   ├── mipmap-xxhdpi/
+│   │   │       │   │   ├── ic_launcher.webp
+│   │   │       │   │   ├── ic_launcher_foreground.webp
+│   │   │       │   │   └── ic_launcher_round.webp
+│   │   │       │   ├── mipmap-xxxhdpi/
+│   │   │       │   │   ├── ic_launcher.webp
+│   │   │       │   │   ├── ic_launcher_foreground.webp
+│   │   │       │   │   └── ic_launcher_round.webp
+│   │   │       │   ├── values/
+│   │   │       │   │   ├── colors.xml
+│   │   │       │   │   ├── strings.xml
+│   │   │       │   │   └── styles.xml
+│   │   │       │   └── values-night/
+│   │   │       │       └── colors.xml
+│   │   │       └── AndroidManifest.xml
+│   │   ├── build.gradle
+│   │   ├── debug.keystore
+│   │   ├── google-services.json
+│   │   └── proguard-rules.pro
+│   ├── gradle/
+│   │   └── wrapper/
+│   │       ├── gradle-wrapper.jar
+│   │       └── gradle-wrapper.properties
+│   ├── .gitignore
+│   ├── build.gradle
+│   ├── gradle.properties
+│   ├── gradlew
+│   ├── gradlew.bat
+│   └── settings.gradle
+├── plugins/
+│   └── withKakaoAppKeyMetaData.js
+├── scripts/
+│   ├── build_dong_search_index.py
+│   └── convert_mapping.py
+├── src/
+│   ├── app/
+│   │   ├── navigation/
+│   │   │   ├── RootNavigator.js
+│   │   │   └── routes.js
+│   │   ├── providers/
+│   │   │   └── AppContext.js
+│   │   └── screens/
+│   │       ├── InitialLoader.js
+│   │       └── MainScreen.js
+│   ├── components/
+│   │   ├── CustomImagePickerModal.js
+│   │   ├── CustomModal.js
+│   │   └── ImageDetailModal.js
+│   ├── core/
+│   │   ├── config/
+│   │   │   └── env.js
+│   │   └── utils/
+│   │       └── index.js
+│   ├── features/
+│   │   ├── auth/
+│   │   │   └── screens/
+│   │   │       └── LoginScreen.js
+│   │   ├── chat/
+│   │   │   ├── screens/
+│   │   │   │   ├── ChatRoomScreen.js
+│   │   │   │   └── ChatRoomsScreen.js
+│   │   │   └── services/
+│   │   │       └── chatService.js
+│   │   ├── feed/
+│   │   │   └── screens/
+│   │   │       └── HomeScreen.js
+│   │   ├── location/
+│   │   │   └── screens/
+│   │   │       └── MyTownScreen.js
+│   │   ├── post/
+│   │   │   └── screens/
+│   │   │       ├── DetailScreen.js
+│   │   │       ├── FreeDetailScreen.js
+│   │   │       ├── StoreWriteScreen.js
+│   │   │       ├── WriteFreeScreen.js
+│   │   │       └── WriteScreen.js
+│   │   ├── profile/
+│   │   │   └── screens/
+│   │   │       ├── AdminReportScreen.js
+│   │   │       ├── CustomerCenterScreen.js
+│   │   │       ├── MyListingsScreen.js
+│   │   │       ├── NotificationScreen.js
+│   │   │       ├── OperationPolicyScreen.js
+│   │   │       ├── PremiumScreen.js
+│   │   │       ├── PrivacyPolicyScreen.js
+│   │   │       ├── ProfileScreen.js
+│   │   │       └── TermsOfServiceScreen.js
+│   │   ├── store/
+│   │   │   └── screens/
+│   │   │       ├── StoreDetailScreen.js
+│   │   │       └── StoreListScreen.js
+│   │   └── README.md
+│   ├── services/
+│   │   └── firebase/
+│   │       └── index.js
+│   ├── shared/
+│   │   ├── components/
+│   │   │   └── index.js
+│   │   ├── hooks/
+│   │   │   └── index.js
+│   │   └── theme/
+│   │       └── index.js
+│   ├── utils/
+│   │   ├── autoSampleGenerator.js
+│   │   ├── badWordFilter.js
+│   │   └── badWordsList.js
+│   ├── firebaseConfig.js
+│   └── theme.js
+├── $null
+├── .env
+├── .gitignore
+├── all_project_code_20260118_152645.txt
+├── all_project_code_20260119_120204.txt
+├── all_project_code_20260121_003420.txt
+├── all_project_code_20260121_022126.txt
+├── App.js
+├── app.json
+├── eas.json
+├── export_code.py
+├── google-services.json
+├── index.js
+├── make_full_tree.py
+├── n_bbang_tree.txt
+├── n_bbang_tree_2026-01-18_15-29-03.txt
+├── n_bbang_tree_2026-01-19_12-02-07.txt
+├── n_bbang_tree_2026-01-21_00-34-23.txt
+├── package-lock.json
+├── package.json
+└── randomch-firebase-admin.json
