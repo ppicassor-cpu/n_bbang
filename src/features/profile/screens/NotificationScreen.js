@@ -5,7 +5,7 @@ import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator }
 import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { collection, query, orderBy, onSnapshot, doc, updateDoc, deleteDoc, writeBatch } from "firebase/firestore";
+import { collection, query, orderBy, onSnapshot, doc, updateDoc, deleteDoc, writeBatch, where, getDocs } from "firebase/firestore";
 
 import { db } from "../../../firebaseConfig";
 import { theme } from "../../../theme";
@@ -59,11 +59,12 @@ export default function NotificationScreen() {
     }
 
     const colRef = collection(db, "users", user.uid, "notifications");
+    // 최신순 정렬
     const q = query(colRef, orderBy("createdAt", "desc"));
 
     let unsubscribe = () => {};
 
-    // ✅ [추가] 중복 제거 로직 함수 (같은 채팅방은 최신 1개만)
+    // ✅ 화면 표시용 중복 제거 (보여줄 때만 최신 1개 남김)
     const processUniqueNotifications = (rawList) => {
       const uniqueList = [];
       const visitedRoomIds = new Set();
@@ -73,11 +74,9 @@ export default function NotificationScreen() {
         if (item.type === "chat" && item.roomId) {
           if (!visitedRoomIds.has(item.roomId)) {
             visitedRoomIds.add(item.roomId);
-            uniqueList.push(item); // 해당 방의 첫 번째(최신) 알림만 추가
+            uniqueList.push(item); 
           }
-          // 이미 본 방이면(더 예전 알림이면) 패스
         } else {
-          // 채팅이 아니거나 roomId가 없으면 무조건 추가
           uniqueList.push(item);
         }
       });
@@ -93,55 +92,27 @@ export default function NotificationScreen() {
             ...d.data(),
           }));
           
-          // ✅ 가져온 데이터를 필터링 후 저장
           const filtered = processUniqueNotifications(loaded);
           setNotifications(filtered);
           setLoading(false);
         },
         (error) => {
           console.error("알림 구독 에러:", error);
-
+          // 폴백 로직
           try {
-            unsubscribe = onSnapshot(
-              colRef,
-              (snapshot2) => {
+            unsubscribe = onSnapshot(colRef, (snapshot2) => {
                 const loaded2 = snapshot2.docs
-                  .map((d) => ({
-                    id: d.id,
-                    ...d.data(),
-                  }))
+                  .map((d) => ({ id: d.id, ...d.data() }))
                   .sort((a, b) => {
-                    const ad =
-                      typeof a?.createdAt?.toDate === "function"
-                        ? a.createdAt.toDate()
-                        : typeof a?.createdAt === "string"
-                          ? new Date(a.createdAt)
-                          : a?.createdAt instanceof Date
-                            ? a.createdAt
-                            : null;
-
-                    const bd =
-                      typeof b?.createdAt?.toDate === "function"
-                        ? b.createdAt.toDate()
-                        : typeof b?.createdAt === "string"
-                          ? new Date(b.createdAt)
-                          : b?.createdAt instanceof Date
-                            ? b.createdAt
-                            : null;
-
-                    const at = ad && !Number.isNaN(ad.getTime()) ? ad.getTime() : -Infinity;
-                    const bt = bd && !Number.isNaN(bd.getTime()) ? bd.getTime() : -Infinity;
-
-                    return bt - at;
+                    const ad = a.createdAt?.toDate ? a.createdAt.toDate() : new Date(a.createdAt || 0);
+                    const bd = b.createdAt?.toDate ? b.createdAt.toDate() : new Date(b.createdAt || 0);
+                    return bd - ad;
                   });
-
-                // ✅ 폴백에서도 필터링 적용
                 const filtered2 = processUniqueNotifications(loaded2);
                 setNotifications(filtered2);
                 setLoading(false);
               },
               (error2) => {
-                console.error("알림 폴백 구독 에러:", error2);
                 setNotifications([]);
                 setLoading(false);
               }
@@ -158,26 +129,69 @@ export default function NotificationScreen() {
     return () => unsubscribe();
   }, [user]);
 
-  // 모달 열기 헬퍼 함수
   const openModal = (title, message, type = "alert", onConfirm = () => {}) => {
     setModalConfig({ title, message, type, onConfirm });
     setModalVisible(true);
   };
 
+  // ✅ [수정] 읽음 처리 로직 업그레이드
+  // 채팅 알림 클릭 시 -> 해당 방의 '모든' 안 읽은 알림을 읽음 처리
   const handleRead = async (noti) => {
     if (!user) return;
-    if (noti.isRead) return;
+
     try {
-      const notiRef = doc(db, "users", user.uid, "notifications", noti.id);
-      await updateDoc(notiRef, { isRead: true });
-    } catch (e) {}
+      // 1. 채팅 알림인 경우: 같은 방의 모든 '안 읽은' 알림 찾아서 읽음 처리
+      if (noti.type === "chat" && noti.roomId) {
+        const batch = writeBatch(db);
+        const colRef = collection(db, "users", user.uid, "notifications");
+        
+        // 해당 방의 isRead: false인 것들만 쿼리
+        const q = query(
+          colRef, 
+          where("roomId", "==", noti.roomId),
+          where("isRead", "==", false)
+        );
+        const snapshot = await getDocs(q);
+
+        if (!snapshot.empty) {
+          snapshot.forEach((docSnap) => {
+            batch.update(docSnap.ref, { isRead: true });
+          });
+          await batch.commit();
+        }
+      
+      } else {
+        // 2. 일반 알림인 경우: 해당 알림 1개만 읽음 처리
+        if (!noti.isRead) {
+          const notiRef = doc(db, "users", user.uid, "notifications", noti.id);
+          await updateDoc(notiRef, { isRead: true });
+        }
+      }
+    } catch (e) {
+      console.error("읽음 처리 실패:", e);
+    }
   };
 
-  const handleDelete = async (id) => {
+  // 삭제 로직 (이전과 동일하게 그룹 삭제 유지)
+  const handleDelete = async (item) => {
     if (!user) return;
+
     try {
-      await deleteDoc(doc(db, "users", user.uid, "notifications", id));
+      if (item.type === "chat" && item.roomId) {
+        const batch = writeBatch(db);
+        const colRef = collection(db, "users", user.uid, "notifications");
+        const q = query(colRef, where("roomId", "==", item.roomId));
+        const snapshot = await getDocs(q);
+
+        snapshot.forEach((docSnap) => {
+          batch.delete(docSnap.ref);
+        });
+        await batch.commit();
+      } else {
+        await deleteDoc(doc(db, "users", user.uid, "notifications", item.id));
+      }
     } catch (e) {
+      console.error("삭제 실패:", e);
       openModal("오류", "삭제에 실패했습니다.", "alert", () => setModalVisible(false));
     }
   };
@@ -189,7 +203,8 @@ export default function NotificationScreen() {
       const batch = writeBatch(db);
       let updateCount = 0;
 
-      // 화면에 보이는 것만 읽음 처리
+      // 화면에 보이는 것들 + 실제 DB 상의 모든 안 읽은 알림을 처리하는 게 좋지만
+      // 현재는 화면 목록 기준으로 처리 (간단 구현)
       notifications.forEach((noti) => {
         if (!noti.isRead) {
           const ref = doc(db, "users", user.uid, "notifications", noti.id);
@@ -218,7 +233,6 @@ export default function NotificationScreen() {
         setModalVisible(false);
         try {
           const batch = writeBatch(db);
-          // 화면에 보이는 목록 기준 삭제
           notifications.forEach((noti) => {
             const ref = doc(db, "users", user.uid, "notifications", noti.id);
             batch.delete(ref);
@@ -235,7 +249,9 @@ export default function NotificationScreen() {
   };
 
   const onPressNoti = async (item) => {
+    // ✅ 클릭 시 그룹 읽음 처리 실행
     await handleRead(item);
+    
     if (item?.type === "chat" && item?.roomId) {
       navigation.navigate(ROUTES.CHAT_ROOM, {
         roomId: item.roomId,
@@ -289,7 +305,7 @@ export default function NotificationScreen() {
 
         <TouchableOpacity
           style={styles.deleteBtn}
-          onPress={() => handleDelete(item.id)}
+          onPress={() => handleDelete(item)}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
         >
           <Ionicons name="close" size={20} color="#666" />
@@ -301,16 +317,20 @@ export default function NotificationScreen() {
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={{ padding: 10 }}>
-          <MaterialIcons name="arrow-back-ios-new" size={24} color="white" />
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.headerBtn}>
+          <MaterialIcons name="arrow-back-ios-new" size={22} color="white" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>알림 센터</Text>
+
+        <View style={styles.headerTitleContainer} pointerEvents="none">
+          <Text style={styles.headerTitle}>알림 센터</Text>
+        </View>
+
         <View style={{ flexDirection: "row" }}>
-          <TouchableOpacity onPress={handleReadAll} style={{ padding: 10 }}>
-            <MaterialIcons name="done-all" size={24} color="white" />
+          <TouchableOpacity onPress={handleReadAll} style={styles.headerBtn}>
+            <Ionicons name="checkmark-done-circle-outline" size={26} color="white" />
           </TouchableOpacity>
-          <TouchableOpacity onPress={handleDeleteAll} style={{ padding: 10 }}>
-            <MaterialIcons name="delete-sweep" size={24} color="white" />
+          <TouchableOpacity onPress={handleDeleteAll} style={styles.headerBtn}>
+            <Ionicons name="trash-outline" size={24} color="white" />
           </TouchableOpacity>
         </View>
       </View>
@@ -334,7 +354,6 @@ export default function NotificationScreen() {
         />
       )}
 
-      {/* 커스텀 모달 렌더링 */}
       <CustomModal
         visible={modalVisible}
         title={modalConfig.title}
@@ -349,16 +368,37 @@ export default function NotificationScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.background },
+  
   header: {
     flexDirection: "row",
-    justifyContent: "space-between",
     alignItems: "center",
-    paddingHorizontal: 10,
-    paddingBottom: 10,
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    height: 56,
     borderBottomWidth: 1,
     borderBottomColor: "#333",
+    position: 'relative',
   },
-  headerTitle: { color: "white", fontSize: 18, fontWeight: "bold" },
+  headerBtn: {
+    padding: 5,
+    zIndex: 10,
+  },
+  headerTitleContainer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 1,
+  },
+  headerTitle: { 
+    color: "white", 
+    fontSize: 18, 
+    fontWeight: "bold" 
+  },
+
   center: { flex: 1, justifyContent: "center", alignItems: "center", marginTop: 50 },
 
   card: { flexDirection: "row", backgroundColor: "#252525", borderRadius: 12, marginBottom: 12, overflow: "hidden" },

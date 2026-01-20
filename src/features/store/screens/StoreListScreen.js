@@ -163,7 +163,38 @@ export default function StoreListScreen({ navigation }) {
     }, []);
 
     // 거리순 정렬 (가까운 순)
-    return processed.sort((a, b) => a.distVal - b.distVal);
+    const _parseMs = (v) => {
+  if (!v) return 0;
+  if (typeof v === "number") return v;
+  if (typeof v?.toDate === "function") return v.toDate().getTime();
+  const t = new Date(v).getTime();
+  return Number.isFinite(t) ? t : 0;
+};
+
+const nowMs = Date.now();
+const withBoostMeta = processed.map((it) => {
+  const untilMs = _parseMs(it?.boostUntil);
+  const isBoosted = untilMs > nowMs;
+  const createdAtMs = _parseMs(it?.createdAt) || _parseMs(it?.createdAtMs) || 0;
+  return { ...it, _boostUntilMs: untilMs, _isBoosted: isBoosted, _createdAtMs: createdAtMs };
+});
+
+const hasAnyBoost = withBoostMeta.some((x) => x._isBoosted);
+
+// ✅ 정책:
+// - 부스트가 없으면: 최신순(createdAt desc)
+// - 부스트가 있으면: 부스트가 먼저(부스트 종료시간 desc → 최신 desc), 그 다음 일반 최신순
+return withBoostMeta.sort((a, b) => {
+  if (hasAnyBoost) {
+    if (a._isBoosted !== b._isBoosted) return a._isBoosted ? -1 : 1;
+    if (a._isBoosted && b._isBoosted) {
+      if (b._boostUntilMs !== a._boostUntilMs) return b._boostUntilMs - a._boostUntilMs;
+      return b._createdAtMs - a._createdAtMs;
+    }
+    return b._createdAtMs - a._createdAtMs;
+  }
+  return b._createdAtMs - a._createdAtMs;
+});
 
   }, [stores, posts, myCoords, isAdmin]); // isAdmin이 바뀌면 목록도 바뀜
 
@@ -234,6 +265,15 @@ export default function StoreListScreen({ navigation }) {
       setHotplaceModalLoading(false);
     }
   };
+  const _stableStoreKey = (item) => {
+    return String(
+      item?.id ??
+      item?.storeId ??
+      item?.docId ??
+      item?.postId ??
+      `${item?.type ?? "store"}_${item?.ownerId ?? item?.userId ?? item?.uid ?? ""}_${(item?.createdAt?.toDate?.() ? item.createdAt.toDate().getTime() : new Date(item?.createdAt || 0).getTime()) || 0}`
+    );
+  };
 
   // =================================================================
   // 3. UI 렌더링
@@ -275,7 +315,7 @@ export default function StoreListScreen({ navigation }) {
       <FlatList
         data={formattedStores}
         renderItem={renderItem}
-        keyExtractor={(item) => item.id || Math.random().toString()}
+        keyExtractor={(item) => _stableStoreKey(item)}
         contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
         ItemSeparatorComponent={() => <View style={{ height: 12 }} />} // 카드 간격
         ListEmptyComponent={

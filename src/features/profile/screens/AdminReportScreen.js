@@ -24,7 +24,8 @@ export default function AdminReportScreen() {
   // ✅ [수정] 신고 내역 + 닉네임 + 제목 불러오기 (안전장치 강화)
   const fetchReports = async () => {
     try {
-      const q = query(collection(db, "reports"), orderBy("createdAt", "desc"));
+      // 1. orderBy 제거 (단순 조회로 변경하여 에러 회피)
+      const q = query(collection(db, "reports")); 
       const querySnapshot = await getDocs(q);
       
       const loadedData = await Promise.all(
@@ -32,42 +33,27 @@ export default function AdminReportScreen() {
           const data = reportDoc.data();
           const reportId = reportDoc.id;
 
-          // ✅ 1. 기본값 설정 (ID라도 보이게 수정)
-          // DB에 reporterEmail 필드가 있다면 그걸 쓰고, 없다면 ID를 괄호에 넣어 표시
           let reporterNickname = data.reporterEmail || `(ID: ${data.reporterId?.slice(0,5)}...)`;
           let targetNickname = `(ID: ${data.targetUserId?.slice(0,5)}...)`;
           let contentTitle = `(ID: ${data.contentId?.slice(0,5)}...)`;
 
-          // ✅ 2. 신고자 닉네임 조회 시도
+          // 신고자 닉네임 조회
           if (data.reporterId) {
             try {
               const uRef = doc(db, "users", data.reporterId);
               const uSnap = await getDoc(uRef);
-              if (uSnap.exists()) {
-                const uData = uSnap.data();
-                // 닉네임 > 이메일 앞자리 > 기존ID 순으로 적용
-                reporterNickname = uData.displayName || uData.email?.split("@")[0] || reporterNickname;
-              } else {
-                console.log(`❌ 신고자 문서 없음: ${data.reporterId}`);
-              }
-            } catch (e) {
-              console.warn(`⚠️ 신고자 조회 권한/에러: ${e.message}`);
-            }
+              if (uSnap.exists()) reporterNickname = uSnap.data().displayName || reporterNickname;
+            } catch (e) {}
           }
-
-          // ✅ 3. 대상자(신고당한 사람) 닉네임 조회 시도
+          // 대상자 닉네임 조회
           if (data.targetUserId) {
             try {
               const tRef = doc(db, "users", data.targetUserId);
               const tSnap = await getDoc(tRef);
-              if (tSnap.exists()) {
-                const tData = tSnap.data();
-                targetNickname = tData.displayName || tData.email?.split("@")[0] || targetNickname;
-              }
+              if (tSnap.exists()) targetNickname = tSnap.data().displayName || targetNickname;
             } catch (e) {}
           }
-
-          // ✅ 4. 콘텐츠 제목 조회 (게시글 or 채팅방)
+          // 콘텐츠 제목 조회
           if (data.contentId && data.type) {
             try {
               const collectionName = data.type === 'chat' ? 'chatRooms' : 'posts';
@@ -91,10 +77,17 @@ export default function AdminReportScreen() {
         })
       );
 
+      // 2. 데이터 가져온 후 여기서 최신순 정렬 (timestamp 객체 처리)
+      loadedData.sort((a, b) => {
+        const timeA = a.createdAt?.seconds || 0;
+        const timeB = b.createdAt?.seconds || 0;
+        return timeB - timeA; // 내림차순
+      });
+
       setReports(loadedData);
     } catch (e) {
       console.error("신고 내역 로드 실패:", e);
-      Alert.alert("오류", "데이터를 불러오지 못했습니다.");
+      Alert.alert("오류", "데이터를 불러오지 못했습니다.\n" + e.message);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -128,24 +121,39 @@ export default function AdminReportScreen() {
   };
 
   // ✅ 콘텐츠 바로가기
-  const handleGoToContent = (report) => {
+  const handleGoToContent = async (report) => {
     if (!report.contentId) {
       Alert.alert("오류", "콘텐츠 ID가 존재하지 않습니다.");
       return;
     }
 
-    if (report.type === 'post') {
-      navigation.navigate(ROUTES.DETAIL, { 
-        post: { id: report.contentId, ownerId: report.targetUserId } 
-      });
-    } else if (report.type === 'chat') {
-      navigation.navigate(ROUTES.CHAT_ROOM, {
-        roomId: report.contentId,
-        roomName: report.contentTitle || "신고된 채팅방",
-        isGhost: true 
-      });
-    } else {
-      Alert.alert("알림", "이동할 수 없는 콘텐츠 유형입니다.");
+    setLoading(true); // 로딩 표시 시작
+
+    try {
+      if (report.type === 'post') {
+        // 1. Firestore에서 실제 게시글 전체 데이터를 가져옴
+        const postSnap = await getDoc(doc(db, "posts", report.contentId));
+        
+        if (postSnap.exists()) {
+          const postData = { id: postSnap.id, ...postSnap.data() };
+          
+          // 2. 완벽한 post 객체를 넘겨줌 (category 등이 포함되어 크래쉬 방지)
+          navigation.navigate(ROUTES.DETAIL, { post: postData });
+        } else {
+          Alert.alert("알림", "이미 삭제된 게시글입니다.");
+        }
+      } else if (report.type === 'chat') {
+        navigation.navigate(ROUTES.CHAT_ROOM, {
+          roomId: report.contentId,
+          roomName: report.contentTitle || "신고된 채팅방",
+          isGhost: true 
+        });
+      }
+    } catch (e) {
+      console.error("이동 실패:", e);
+      Alert.alert("오류", "콘텐츠 정보를 불러오지 못했습니다.");
+    } finally {
+      setLoading(false); // 로딩 종료
     }
   };
 
@@ -262,12 +270,13 @@ export default function AdminReportScreen() {
     
     let dateStr = "";
     if (item.createdAt) {
-      if (typeof item.createdAt === 'string') {
-        dateStr = item.createdAt.slice(0, 10);
-      } else if (item.createdAt.toDate) {
-        dateStr = item.createdAt.toDate().toISOString().slice(0, 10);
-      } else if (item.createdAt.seconds) {
-        dateStr = new Date(item.createdAt.seconds * 1000).toISOString().slice(0, 10);
+      const d = item.createdAt.toDate ? item.createdAt.toDate() : 
+                (item.createdAt.seconds ? new Date(item.createdAt.seconds * 1000) : new Date(item.createdAt));
+      
+      if (!isNaN(d.getTime())) {
+        const ymd = d.toISOString().slice(0, 10); // 2026-01-15
+        const time = d.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false }); // 03:13
+        dateStr = `${ymd} ${time}`;
       }
     }
     

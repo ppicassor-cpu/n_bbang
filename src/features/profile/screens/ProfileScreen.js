@@ -30,8 +30,8 @@ import {
 } from "firebase/firestore";
 import { deleteUser } from "firebase/auth"; 
 import Purchases from "react-native-purchases";
-
-import { db, auth } from "../../../firebaseConfig"; 
+import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { db, auth, storage } from "../../../firebaseConfig"; 
 import { theme } from '../../../theme';
 import { ROUTES } from '../../../app/navigation/routes';
 import { useAppContext } from '../../../app/providers/AppContext';
@@ -316,26 +316,35 @@ export default function ProfileScreen() {
 
   // ✅ [추가] 갤러리에서 사진 선택 완료 시 호출
   const handleGallerySelect = async (selectedUris) => {
-    // 모달 닫기
-    setGalleryVisible(false);
+  // 모달 닫기
+  setGalleryVisible(false);
 
-    if (!selectedUris || selectedUris.length === 0) return;
+  if (!selectedUris || selectedUris.length === 0) return;
 
-    try {
-      // 첫 번째 사진만 사용
-      const uri = selectedUris[0];
+  try {
+    // 첫 번째 사진만 사용
+    const uri = selectedUris[0];
 
-      // ✅ [추가] 압축(400px, quality 0.5) + 30일 캐시
-      const compressedUri = await getCompressedProfileImageUri(uri);
+    // ✅ [추가] 압축(400px, quality 0.5) + 30일 캐시
+    const compressedUri = await getCompressedProfileImageUri(uri);
 
-      // ✅ 즉시 저장 (photoURL 필드)
-      await updateDoc(doc(db, "users", user.uid), { photoURL: compressedUri });
+    // ✅ [수정] file:// 를 DB에 저장하지 말고, Storage에 업로드 후 https URL 저장
+    const response = await fetch(compressedUri);
+    const blob = await response.blob();
 
-    } catch (e) {
-      console.error(e);
-      openModal("오류", "프로필 사진을 변경하지 못했습니다.", "alert", () => setModalVisible(false));
-    }
-  };
+    const filename = `users/${user.uid}/profile_${Date.now()}.jpg`;
+    const storageRef = ref(storage, filename);
+
+    await uploadBytes(storageRef, blob);
+    const downloadUrl = await getDownloadURL(storageRef);
+
+    await updateDoc(doc(db, "users", user.uid), { photoURL: downloadUrl });
+
+  } catch (e) {
+    console.error(e);
+    openModal("오류", "프로필 사진을 변경하지 못했습니다.", "alert", () => setModalVisible(false));
+  }
+};
 
   // ✅ 표시용 닉네임/프로필 사진
   const displayName = userProfile?.displayName || user?.displayName || user?.email?.split('@')[0] || "닉네임을 설정해주세요";

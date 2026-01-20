@@ -1139,7 +1139,7 @@ const MyTownScreen = ({ navigation }) => {
 
   const _getDongLabel = () => {
     const fullName = selectedDong?.properties?.adm_nm || "";
-    if (!fullName) return "지역을 선택해주세요";
+    if (!fullName) return "주소를 검색해주세요";
     return fullName.split(" ").pop();
   };
 
@@ -1279,6 +1279,11 @@ const MyTownScreen = ({ navigation }) => {
             zoomEnabled={!dropdownOpen}
             rotateEnabled={!dropdownOpen}
             pitchEnabled={!dropdownOpen}
+            
+            // ✅ [추가] 핀 선택 시 구글 버튼바(길찾기 등) 숨기기 (안드로이드 필수)
+            toolbarEnabled={false} 
+            // ✅ [추가] 기본 내장 GPS 버튼 숨기기 (커스텀 버튼을 사용하므로)
+            showsMyLocationButton={false} 
           >
             {selectedDong && (
               <Polygon
@@ -1291,6 +1296,24 @@ const MyTownScreen = ({ navigation }) => {
             {myCoords && <Marker coordinate={myCoords} title="내 위치" pinColor={PRIMARY_COLOR} />}
             {searchCoords && activeTab === "search" && <Marker coordinate={searchCoords} title="검색 위치" />}
           </MapView>
+
+          {/* ✅ [추가] 수동 GPS 갱신 버튼 (현재 위치 탭일 때만 표시) */}
+          {activeTab === "current" && (
+            <TouchableOpacity
+              style={styles.gpsBtn}
+              onPress={() => {
+                _getCurrentLocation(); // GPS 갱신 및 내 위치로 이동 함수 재호출
+              }}
+              activeOpacity={0.8}
+            >
+              {/* 로딩 중이면 스피너, 아니면 아이콘 표시 */}
+              {loading ? (
+                <ActivityIndicator size="small" color={PRIMARY_COLOR} />
+              ) : (
+                <MaterialIcons name="my-location" size={24} color={PRIMARY_COLOR} />
+              )}
+            </TouchableOpacity>
+          )}
         </View>
 
         {/* 하단 패널 */}
@@ -1328,7 +1351,7 @@ const MyTownScreen = ({ navigation }) => {
                   ? "현재 위치가 해당 동네 안에 있습니다."
                   : selectedDong
                   ? "현재 위치가 선택한 동네를 벗어났습니다."
-                  : "지도를 움직이거나 검색하여 동네를 선택해주세요."}
+                  : "주소를 검색하여 동네를 선택해주세요."}
               </Text>
             </View>
 
@@ -1553,8 +1576,30 @@ const styles = StyleSheet.create({
     width: 260,
   },
 
-  mapWrap: { flex: 1 },
+  mapWrap: { flex: 1, position: "relative" }, // ✅ position: relative 명시 (안전장치)
   map: { flex: 1 },
+
+  // ✅ [추가] GPS 갱신 버튼 스타일
+  gpsBtn: {
+    position: "absolute",
+    bottom: 20, // 하단 패널 위로 적당히 띄움
+    right: 20,  // 우측 여백
+    width: 48,
+    height: 48,
+    borderRadius: 24, // 원형
+    backgroundColor: "#222", // 다크 그레이 배경
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#333",
+    // 그림자 (입체감)
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 6, // 안드로이드 그림자
+    zIndex: 20,
+  },
 
   // 하단 패널 (디자인 개선)
   bottomPanel: {

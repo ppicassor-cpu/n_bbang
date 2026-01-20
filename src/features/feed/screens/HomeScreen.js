@@ -27,9 +27,9 @@ const CATEGORIES = ["전체", "마트/식품", "생활용품", "핫플레이스"
 
 // ✅ [최적화 핵심] 리스트 아이템을 별도 컴포넌트로 분리하고 React.memo로 감쌈
 const PostItem = React.memo(({ item, onPress }) => {
-  const isStore = item.type === 'store'; // ✅ 가게 여부 확인
-  const isFree = item.category === "무료나눔";
-  
+  const isStore = item.type === "store"; // ✅ 가게 여부 확인
+  const isFree = item.category === "무료나눔" || item.isFree === true;
+
   const isNbbangClosed = !isFree && !isStore && item.status === "마감";
   // ✅ 가게(isStore)는 인원수 마감 로직 제외
   const isFull = !isFree && !isStore && (item.currentParticipants >= item.maxParticipants || isNbbangClosed);
@@ -91,11 +91,11 @@ const PostItem = React.memo(({ item, onPress }) => {
         <Text
           style={[styles.status, { color: (isFull || isClosed) ? theme.danger : theme.primary }]}
         >
-          {isStore 
-            ? "운영중" // ✅ 가게일 때 표시 문구
-            : (isFree 
+          {isStore
+            ? "운영중"
+            : (isFree
                 ? (item.status || "나눔중")
-                : (isNbbangClosed ? "참여마감" : `${item.currentParticipants}/${item.maxParticipants}명 참여중`)
+                : (isNbbangClosed ? "참여마감" : "참여중")
               )
           }
         </Text>
@@ -441,6 +441,38 @@ export default function HomeScreen({ navigation }) {
   }, [myCoords]);
 
   // ✅ 스크롤 최적화를 위한 데이터 가공 (useMemo)
+   const _toMs = (v) => {
+    if (!v) return 0;
+    if (typeof v === "number") return v;
+    if (typeof v?.toDate === "function") return v.toDate().getTime();
+    const t = new Date(v).getTime();
+    return Number.isFinite(t) ? t : 0;
+  };
+
+  const _ownerKey = (item) => {
+    return String(
+      item?.userId ??
+      item?.ownerId ??
+      item?.uid ??
+      item?.authorId ??
+      item?.writerId ??
+      ""
+    );
+  };
+
+  const _createdAtMs = (item) => _toMs(item?.createdAt);
+
+  const _stableItemKey = (item) => {
+    return String(
+      item?.id ??
+      item?.postId ??
+      item?.storeId ??
+      item?.docId ??
+      `${item?.type ?? "item"}_${_ownerKey(item)}_${_createdAtMs(item)}`
+    );
+  };
+
+  // ✅ 스크롤 최적화를 위한 데이터 가공 (useMemo)
   const formattedPosts = useMemo(() => {
     // 1. stores 데이터를 posts 형식에 맞게 변환 (⚠️ 중요 수정)
     const normalizedStores = (stores || []).map(s => ({
@@ -489,18 +521,8 @@ export default function HomeScreen({ navigation }) {
         // 4. 부스트 후보/일반 후보 분리 + 정렬 (updatedAt 끌올 악용 방지: updatedAt 사용 안 함)
     const now = Date.now();
 
-    const _toMs = (v) => {
-      if (!v) return 0;
-      if (typeof v === "number") return v;
-      // Firestore Timestamp 형태 대응
-      if (typeof v?.toDate === "function") return v.toDate().getTime();
-      const t = new Date(v).getTime();
-      return Number.isFinite(t) ? t : 0;
-    };
-
     const _boostUntilMs = (item) => _toMs(item?.boostUntil);
     const _boostAppliedAtMs = (item) => _toMs(item?.boostAppliedAt);
-    const _createdAtMs = (item) => _toMs(item?.createdAt);
 
     const _isBoosted = (item) => _boostUntilMs(item) > now;
 
@@ -525,113 +547,86 @@ export default function HomeScreen({ navigation }) {
 
     // 5. 상단 3슬롯 구성: 부스트 우선 + 부족하면 일반으로 채움
     const SLOT_TOTAL = 3;
-    const isHotplaceTab = selectedCategory === "핫플레이스";
+const isHotplaceTab = selectedCategory === "핫플레이스";
+const capPerUser = 1;
 
-    // ✅ 전체 탭: 핫스토어 최대 1개 + 게시글 최소 2개
-    // ✅ 핫플레이스 탭: 전부 스토어이므로 예외(스토어 3개 허용, 게시글 최소 조건 해제)
-    const capStore = isHotplaceTab ? SLOT_TOTAL : 1;
+const _isStoreItem = (item) => item?.type === "store";
 
-    // ✅ [핵심] 부스트가 1개라도 있으면 '게시글 최소 2개 선점' 규칙을 끈다
-    // - 부스트가 있으면 그게 1등이 되도록(부스트 우선)
-    // - 부스트끼리 우선순위: 일반 게시글 부스트 > 핫스토어(스토어) 부스트
-    const hasBoost = boostedCandidates.length > 0;
-    const minPost = isHotplaceTab ? 0 : (hasBoost ? 0 : 2);
+// ✅ boostedCandidates에서 "일반부스트(post) 우선 → 핫스토어부스트(store) 후순위"
+const boostedPost = boostedCandidates.filter((x) => !_isStoreItem(x)).sort(_sortBoosted);
+const boostedStore = boostedCandidates.filter((x) => _isStoreItem(x)).sort(_sortBoosted);
 
-    const capPerUser = 1;
+// ✅ 부스트 존재 여부
+const hasAnyBoost = (boostedPost.length + boostedStore.length) > 0;
 
-    const _isStoreItem = (item) => item?.type === "store";
+// ✅ 핵심: 부스트가 없으면 "기본 슬롯 정책" 자체를 OFF
+// - 스토어 제한 없음
+// - 게시글 최소 보장 없음
+// - 즉, 최신순/기본정렬대로 1,2,3이 그냥 채워질 수 있음
+const capStore = hasAnyBoost ? SLOT_TOTAL : SLOT_TOTAL; // 제한 OFF (사실상 의미 없음)
+const minPost  = hasAnyBoost ? 0 : 0;
 
-    const _ownerKey = (item) => {
-      return String(
-        item?.userId ??
-        item?.ownerId ??
-        item?.uid ??
-        item?.authorId ??
-        item?.writerId ??
-        ""
-      );
-    };
+const combinedForSlots = [
+  ...(hasAnyBoost ? [...boostedPost, ...boostedStore] : []),
+  ...normalCandidates,
+];
 
-    // ✅ [중요] idx 기반 fallback 제거: 같은 아이템은 항상 같은 key가 나오도록 고정
-    const _itemKey = (item) => {
-      return String(
-        item?.id ??
-        item?.postId ??
-        item?.storeId ??
-        item?.docId ??
-        // 마지막 fallback도 "데이터 기반"으로 (idx 금지)
-        `${item?.type ?? "item"}_${_ownerKey(item)}_${_createdAtMs(item)}`
-      );
-    };
+// ✅ combined 내에서 key를 1번만 확정해서, pick/remove 모두 동일 key 사용
+const keyedCombined = combinedForSlots.map((item) => ({
+  key: _stableItemKey(item),
+  owner: _ownerKey(item),
+  item,
+  isStore: _isStoreItem(item),
+}));
 
-    // ✅ [핵심] 부스트 우선순위 적용:
-    // 1) 부스트된 일반 게시글(스토어 아님)
-    // 2) 부스트된 핫스토어(스토어)
-    // 3) 일반 목록
-    const boostedPosts = boostedCandidates.filter((it) => it?.type !== "store");
-    const boostedStores = boostedCandidates.filter((it) => it?.type === "store");
+const picked = [];
+const usedKeys = new Set();
+const usedOwners = new Set();
+let storeCount = 0;
+let postCount = 0;
 
-    const combinedForSlots = hasBoost
-      ? [...boostedPosts, ...boostedStores, ...normalCandidates]
-      : [...normalCandidates];
+const _canPick = (row) => {
+  if (!row?.key) return false;
+  if (usedKeys.has(row.key)) return false;
 
-    // ✅ combined 내에서 key를 1번만 확정해서, pick/remove 모두 동일 key 사용
-    const keyedCombined = combinedForSlots.map((item) => ({
-      key: _itemKey(item),
-      owner: _ownerKey(item),
-      item,
-      isStore: _isStoreItem(item),
-    }));
+  if (capPerUser === 1 && row.owner && usedOwners.has(row.owner)) return false;
+  if (row.isStore && storeCount >= capStore) return false;
 
-    const picked = [];
-    const usedKeys = new Set();
-    const usedOwners = new Set();
-    let storeCount = 0;
-    let postCount = 0;
+  return true;
+};
 
-    const _canPick = (row) => {
-      if (!row?.key) return false;
-      if (usedKeys.has(row.key)) return false;
+const _pick = (row) => {
+  usedKeys.add(row.key);
+  if (row.owner) usedOwners.add(row.owner);
 
-      if (capPerUser === 1 && row.owner && usedOwners.has(row.owner)) return false;
-      if (row.isStore && storeCount >= capStore) return false;
+  if (row.isStore) storeCount += 1;
+  else postCount += 1;
 
-      return true;
-    };
+  picked.push(row);
+};
 
-    const _pick = (row) => {
-      usedKeys.add(row.key);
-      if (row.owner) usedOwners.add(row.owner);
+// ✅ (1) 부스트가 없을 땐 minPost 로직 자체가 0이라 아무 제한 없음
+if (minPost > 0) {
+  for (let i = 0; i < keyedCombined.length; i++) {
+    const row = keyedCombined[i];
+    if (row.isStore) continue;
+    if (!_canPick(row)) continue;
 
-      if (row.isStore) storeCount += 1;
-      else postCount += 1;
+    _pick(row);
+    if (postCount >= minPost) break;
+    if (picked.length >= SLOT_TOTAL) break;
+  }
+}
 
-      picked.push(row);
-    };
+// ✅ (2) 상단 슬롯 채우기: 부스트 있으면 부스트가 먼저(이미 combinedForSlots에 반영됨)
+for (let i = 0; i < keyedCombined.length; i++) {
+  if (picked.length >= SLOT_TOTAL) break;
 
-    // (1) 게시글 최소 2개(전체 탭만) 먼저 확보
-    // ✅ 단, 부스트가 있으면(minPost=0) 이 단계는 건너뜀 → 부스트가 1등 가능
-    if (minPost > 0) {
-      for (let i = 0; i < keyedCombined.length; i++) {
-        const row = keyedCombined[i];
-        if (row.isStore) continue;
-        if (!_canPick(row)) continue;
+  const row = keyedCombined[i];
+  if (!_canPick(row)) continue;
 
-        _pick(row);
-        if (postCount >= minPost) break;
-        if (picked.length >= SLOT_TOTAL) break;
-      }
-    }
-
-    // (2) 나머지 슬롯 채우기
-    for (let i = 0; i < keyedCombined.length; i++) {
-      if (picked.length >= SLOT_TOTAL) break;
-
-      const row = keyedCombined[i];
-      if (!_canPick(row)) continue;
-
-      _pick(row);
-    }
+  _pick(row);
+}
 
     // (3) 상단 슬롯에 뽑힌 아이템은 목록에서 제거하고, 나머지를 이어붙임 (동일 key로 정확히 제거)
     const pickedKeySet = new Set(picked.map((r) => r.key));
@@ -643,21 +638,23 @@ export default function HomeScreen({ navigation }) {
 
   // ✅ 렌더링 함수
   const renderItem = useCallback(({ item }) => {
-    return (
-      <PostItem 
-        item={item} 
-        onPress={() => {
-          if (item.type === 'store') {
-             navigation.navigate(ROUTES.STORE_DETAIL || "StoreDetail", { store: item });
-          } else if (item.category === "무료나눔") {
-            navigation.navigate(ROUTES.FREE_DETAIL, { post: item });
-          } else {
-            navigation.navigate(ROUTES.DETAIL, { post: item });
-          }
-        }} 
-      />
-    );
-  }, [navigation]);
+  return (
+    <PostItem
+      item={item}
+      onPress={() => {
+        const isFreeItem = item?.category === "무료나눔" || item?.isFree === true;
+
+        if (item?.type === "store") {
+          navigation.navigate(ROUTES.STORE_DETAIL || "StoreDetail", { store: item });
+        } else if (isFreeItem) {
+          navigation.navigate(ROUTES.FREE_DETAIL, { post: item });
+        } else {
+          navigation.navigate(ROUTES.DETAIL, { post: item });
+        }
+      }}
+    />
+  );
+}, [navigation]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -738,7 +735,7 @@ export default function HomeScreen({ navigation }) {
       <FlatList
         data={formattedPosts}
         renderItem={renderItem}
-        keyExtractor={(item, index) => String(item.id ?? `${item.type ?? "post"}_${index}`)} 
+        keyExtractor={(item) => _stableItemKey(item)}
         contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
         ItemSeparatorComponent={() => (
           <View style={{ height: 1, backgroundColor: "#333", marginVertical: 12 }} />
@@ -855,7 +852,7 @@ export default function HomeScreen({ navigation }) {
       <CustomModal
         visible={townGuardModalVisible}
         title="동네 설정 필요"
-        message="글쓰기는 동네 인증 후 · 이용할 수 있습니다. · 내 동네를 먼저 설정해주세요. · 동네 설정 화면으로 이동합니다."
+        message={"글쓰기는 동네 인증 후\n이용할 수 있습니다.\n내 동네를 먼저 설정해주세요.\n\n동네 설정 화면으로 이동합니다."}
         onConfirm={handleTownGuardConfirm}
         confirmText="내 동네 설정"
       />

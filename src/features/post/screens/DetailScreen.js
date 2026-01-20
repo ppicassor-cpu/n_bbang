@@ -434,7 +434,7 @@ export default function DetailScreen({ route, navigation }) {
         <View style={styles.heroContainer}>
           {post.images && post.images.length > 0 ? (
             <>
-              <ScrollView horizontal pagingEnabled showsHorizontalScrollIndicator={false} onScroll={handleScroll} scrollEventThrottle={16}>
+              <ScrollView horizontal pagingEnabled onScroll={(e) => setImgPage(Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH) + 1)}>
                 {post.images.map((img, idx) => (
                   <TouchableOpacity 
                     key={idx} 
@@ -445,8 +445,8 @@ export default function DetailScreen({ route, navigation }) {
                     }}
                   >
                     <Image 
-                      source={{ uri: (typeof img === "string" ? img : img.uri) }} 
-                      style={styles.heroImage}
+                      source={{ uri: img }} 
+                      style={styles.heroImage} 
                       contentFit="cover"
                       transition={200}
                       cachePolicy="disk"
@@ -460,7 +460,7 @@ export default function DetailScreen({ route, navigation }) {
             </>
           ) : (
             <View style={[styles.heroImage, { justifyContent: "center", alignItems: "center", backgroundColor: "#222" }]}>
-              <Text style={{ color: "grey" }}>이미지 없음</Text>
+              <Text style={{ color: "grey", fontSize: 16 }}>이미지 없음</Text>
             </View>
           )}
         </View>
@@ -711,7 +711,9 @@ export default function DetailScreen({ route, navigation }) {
 
       {/* ✅ [추가] 이미지 전체화면 확대 모달 */}
       <ImageView
-        images={post.images.map(img => ({ uri: (typeof img === "string" ? img : img.uri) }))}
+        images={(post.images || []).map(img => ({ 
+          uri: (typeof img === "string" ? img : img?.uri) 
+        }))}
         imageIndex={currentImageIndex}
         visible={isImageViewVisible}
         onRequestClose={() => setIsImageViewVisible(false)}

@@ -157,15 +157,21 @@ export default function FreeDetailScreen({ route, navigation }) {
   };
 
   const onPressChat = () => {
-    if (post.ownerId === "SAMPLE_DATA") {
-      setSampleModalVisible(true);
-      return;
-    }
-    if (isClosed) return;
-    const roomId = `post_${post.id}`;
-    ensureRoom(roomId, post.title, "free", post.ownerId);
-    navigation.navigate(ROUTES.CHAT_ROOM, { roomId, roomName: post.title });
-  };
+  if (post.ownerId === "SAMPLE_DATA") {
+    setSampleModalVisible(true);
+    return;
+  }
+  if (isClosed) return;
+  if (!user?.uid) return;
+
+  // ✅ 무료나눔은 1:1 방이 여러 개 열리는 구조이므로 "post_단일방" 금지
+  // ✅ (postId + 두 uid 조합)으로 1:1 고유 방 생성
+  const pairKey = [user.uid, post.ownerId].sort().join("_");
+  const roomId = `free_${post.id}_${pairKey}`;
+
+  ensureRoom(roomId, post.title, "free", post.ownerId);
+  navigation.navigate(ROUTES.CHAT_ROOM, { roomId, roomName: post.title });
+};
 
   const mapRegion = useMemo(() => ({
     latitude: post?.coords?.latitude || 37.5665,
@@ -179,27 +185,37 @@ export default function FreeDetailScreen({ route, navigation }) {
       <ScrollView contentContainerStyle={{ paddingBottom: 100 }}>
         {/* 이미지 섹션 */}
         <View style={styles.heroContainer}>
-          <ScrollView horizontal pagingEnabled onScroll={(e) => setImgPage(Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH) + 1)}>
-            {post.images?.map((img, idx) => (
-              <TouchableOpacity 
-                key={idx} 
-                activeOpacity={0.9} 
-                onPress={() => {
-                  setCurrentImageIndex(idx);
-                  setIsImageViewVisible(true);
-                }}
-              >
-                <Image 
-                  source={{ uri: img }} 
-                  style={styles.heroImage} 
-                  contentFit="cover"
-                  transition={200}
-                  cachePolicy="disk"
-                />
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-          <View style={styles.pageIndicator}><Text style={styles.pageText}>{imgPage} / {post.images?.length || 0}</Text></View>
+          {post.images && post.images.length > 0 ? (
+            <>
+              <ScrollView horizontal pagingEnabled onScroll={(e) => setImgPage(Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH) + 1)}>
+                {post.images.map((img, idx) => (
+                  <TouchableOpacity 
+                    key={idx} 
+                    activeOpacity={0.9} 
+                    onPress={() => {
+                      setCurrentImageIndex(idx);
+                      setIsImageViewVisible(true);
+                    }}
+                  >
+                    <Image 
+                      source={{ uri: img }} 
+                      style={styles.heroImage} 
+                      contentFit="cover"
+                      transition={200}
+                      cachePolicy="disk"
+                    />
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+              <View style={styles.pageIndicator}>
+                <Text style={styles.pageText}>{imgPage} / {post.images.length}</Text>
+              </View>
+            </>
+          ) : (
+            <View style={[styles.heroImage, { justifyContent: "center", alignItems: "center", backgroundColor: "#222" }]}>
+              <Text style={{ color: "grey", fontSize: 16 }}>이미지 없음</Text>
+            </View>
+          )}
         </View>
 
         <View style={styles.body}>

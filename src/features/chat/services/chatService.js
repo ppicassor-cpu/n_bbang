@@ -171,7 +171,7 @@ export const ensureRoom = async (roomId, roomName, type, ownerId) => {
 };
 
 // 2. 메시지 전송 (✅ 수정됨: imageUrl 파라미터 추가 및 image 필드 저장)
-export const sendMessage = async (roomId, text, imageUrl = null) => {
+export const sendMessage = async (roomId, text, imageUrl = null, replyTo = null) => {
   if (!auth.currentUser) return;
   if (!isValidRoomId(roomId)) return;
 
@@ -189,7 +189,18 @@ export const sendMessage = async (roomId, text, imageUrl = null) => {
   const fallbackNickname = user.displayName || (user.email ? user.email.split("@")[0] : "사용자");
   const safeText = hasText ? String(text) : "";
 
-  // ✅ image 필드 추가
+  // ✅ replyTo 정규화 (잘못된 값이면 null로)
+  const normalizedReplyTo =
+    replyTo && typeof replyTo === "object"
+      ? {
+          id: replyTo.id ?? replyTo.messageId ?? null,
+          messageId: replyTo.messageId ?? replyTo.id ?? null,
+          text: replyTo.text ?? "",
+          senderName: replyTo.senderName ?? "사용자",
+        }
+      : null;
+
+  // ✅ image + replyTo 필드 저장
   await addDoc(collection(db, "chatRooms", roomId, "messages"), {
     text: safeText,
     image: imageUrl || null,
@@ -198,6 +209,7 @@ export const sendMessage = async (roomId, text, imageUrl = null) => {
     senderNickname: fallbackNickname,
     createdAt: serverTimestamp(),
     readBy: [user.uid],
+    replyTo: normalizedReplyTo,
   });
 
   // ✅ 미리보기 메시지 처리 (이미지일 경우)
@@ -266,10 +278,15 @@ export const subscribeMessages = (roomId, callback) => {
       const allMessages = snapshot.docs
         .map((d) => {
           const data = d.data() || {};
+
+          const normalizedSenderId =
+            data.senderId || data.uid || data.userId || data.senderUid || data.fromUserId || data.ownerId || null;
+
           return {
-            id: d.id,
             ...data,
+            senderId: normalizedSenderId,
             createdAt: safeToDate(data.createdAt) || new Date(0),
+            id: d.id, // ✅ 문서ID는 마지막에 고정(데이터의 id 필드가 있어도 절대 덮어써지지 않게)
           };
         })
         .reverse();
