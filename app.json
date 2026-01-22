@@ -127,7 +127,7 @@
       "url": "https://u.expo.dev/756087f1-57e7-4990-8d45-ad609f199eb2",
       "enabled": true,
       "checkAutomatically": "ON_LOAD",
-      "fallbackToCacheTimeout": 0
+      "fallbackToCacheTimeout": 1000
     },
     "extra": {
       "eas": {

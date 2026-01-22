@@ -1949,14 +1949,14 @@ const checkBoostEligibility = async ({ contentType = "post", contentId, mode = "
 };
 
   // [수정 후]
-const applyBoostToContent = async ({ contentType = "post", contentId, mode = "free", durationHours = 6, purchaseInfo = null } = {}) => {
+const applyBoostToContent = async ({ contentType = "post", contentId, mode = "free", durationHours = 2, purchaseInfo = null } = {}) => {
 
   if (!user?.uid) return { status: "NO_USER", ok: false };
   if (!contentId) return { status: "NO_CONTENT_ID", ok: false };
 
   try {
     const nowMs = Date.now();
-    const untilMs = nowMs + Number(durationHours || 6) * 60 * 60 * 1000;
+    const untilMs = nowMs + Number(durationHours || 2) * 60 * 60 * 1000;
 
     const appliedAtIso = new Date(nowMs).toISOString();
     const untilIso = new Date(untilMs).toISOString();

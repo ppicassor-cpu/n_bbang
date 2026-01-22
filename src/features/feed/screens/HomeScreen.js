@@ -35,6 +35,47 @@ const PostItem = React.memo(({ item, onPress }) => {
   const isFull = !isFree && !isStore && (item.currentParticipants >= item.maxParticipants || isNbbangClosed);
   const isClosed = isFree && item.status === "나눔완료";
 
+  // 1. 시간 변환 함수 통합 (_toMsForBoost 삭제하고 이거 하나 씀)
+  const _toMs = (v) => {
+    if (!v) return 0;
+    if (typeof v === "number") return v;
+    if (typeof v?.toDate === "function") return v.toDate().getTime();
+    const t = new Date(v).getTime();
+    return Number.isFinite(t) ? t : 0;
+  };
+
+  const now = Date.now();
+  
+  // 2. 통합된 함수로 변수 계산
+  const boostUntilMs = _toMs(item?.boostUntil);
+  const boostAppliedAtMs = _toMs(item?.boostAppliedAt) || _toMs(item?.createdAt);
+  const createdAtMs = _toMs(item?.createdAt || 0);
+  const updatedAtMs = _toMs(item?.updatedAt || 0);
+
+  const isBoosted = boostUntilMs > now;
+  const hasUpdated = Boolean(updatedAtMs) && (!createdAtMs || updatedAtMs > createdAtMs);
+
+  // 3. 시간 텍스트 함수 통합 (_boostAgoText 삭제하고 이거 하나 씀)
+  const _agoText = (baseMs, actionText) => {
+    if (!baseMs) return actionText;
+    const diff = Math.max(0, now - baseMs);
+    const minutes = Math.floor(diff / 60000);
+
+    if (minutes < 1) return `방금 전 ${actionText}`;
+    if (minutes < 60) return `${minutes}분 전 ${actionText}`;
+
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}시간 전 ${actionText}`;
+
+    const days = Math.floor(hours / 24);
+    return `${days}일 전 ${actionText}`;
+  };
+
+  // 4. 결과 텍스트 (로직 동일)
+  const statusSubText = isBoosted
+    ? _agoText(boostAppliedAtMs, "부스트됨") 
+    : (hasUpdated ? _agoText(updatedAtMs, "수정됨") : _agoText(createdAtMs, "작성됨"));
+
   const finalPerPerson = (!isFree && !isStore)
     ? Number(item.pricePerPerson || 0) + Number(item.tip || 0)
     : 0;
@@ -88,17 +129,28 @@ const PostItem = React.memo(({ item, onPress }) => {
           )}
         </View>
 
-        <Text
-          style={[styles.status, { color: (isFull || isClosed) ? theme.danger : theme.primary }]}
-        >
-          {isStore
-            ? "운영중"
-            : (isFree
-                ? (item.status || "나눔중")
-                : (isNbbangClosed ? "참여마감" : "참여중")
-              )
-          }
-        </Text>
+        <View style={styles.statusRow}>
+          <Text
+            style={[styles.status, { color: (isFull || isClosed) ? theme.danger : theme.primary }]}
+          >
+            {isStore
+              ? "운영중"
+              : (isFree
+                  ? (item.status || "나눔중")
+                  : (isNbbangClosed ? "참여마감" : "참여중")
+                )
+            }
+          </Text>
+
+          <View style={styles.boostRow}>
+            <Ionicons
+              name={isBoosted ? "rocket" : "time-outline"}
+              size={14}
+              color={isBoosted ? "rgb(127, 158, 2)": "grey"}
+            />
+            <Text style={styles.boostText}>{statusSubText}</Text>
+          </View>
+        </View>
       </View>
     </TouchableOpacity>
   );
@@ -212,10 +264,14 @@ export default function HomeScreen({ navigation }) {
       setGateTimeoutPassed(true);
     }, 9000);
 
-    return () => clearTimeout(t);
+    return () => {
+      clearTimeout(t);
+      // 추가된 예외 처리: 컴포넌트 언마운트 시에도 상태 업데이트 중복 방지
+      setGateTimeoutPassed(false);
+    };
   }, [locationGateVisible, isPermissionIssue]);
 
-  const handleGateConfirm = async () => {
+const handleGateConfirm = async () => {
     if (isPermissionIssue) {
       Linking.openSettings();
       return;
@@ -230,8 +286,12 @@ export default function HomeScreen({ navigation }) {
       } else if (typeof checkSavedVerification === "function") {
         await checkSavedVerification(user?.uid || null);
       }
-    } catch (e) {}
-  };
+    } catch (e) {
+      console.error("위치 재확인 실패:", e);
+      showCustomAlert("오류", "위치 재확인 중 문제가 발생했습니다.");
+    }
+};
+
 
   // ✅ [수정] (1) useFocusEffect에서 refreshPostsAndStores 호출 제거 (loaded 리셋 방지)
   // 상세 화면에서 참여 후 돌아왔을 때 숫자 업데이트는 AppContext의 실시간 스냅샷/상세화면 처리로 해결해야 함
@@ -304,7 +364,7 @@ export default function HomeScreen({ navigation }) {
 
 
   // ✅ [추가] 닉네임 저장 및 유효성 검사 로직 - Alert 대신 CustomModal 사용
-  const handleSaveNickname = async () => {
+const handleSaveNickname = async () => {
     const trimmed = newNickname.trim();
     if (!trimmed) {
       showCustomAlert("알림", "닉네임을 입력해주세요.");
@@ -335,6 +395,11 @@ export default function HomeScreen({ navigation }) {
       }
 
       // ✅ [수정] 저장: nickname -> displayName
+      if (!user?.uid) {
+        showCustomAlert("오류", "사용자 정보가 누락되었습니다.");
+        return;
+      }
+
       await updateDoc(doc(db, "users", user.uid), {
         displayName: trimmed
       });
@@ -347,7 +412,8 @@ export default function HomeScreen({ navigation }) {
       console.error("닉네임 저장 오류:", e);
       showCustomAlert("오류", "닉네임 저장 중 문제가 발생했습니다.");
     }
-  };
+};
+
 
   const openHotplaceModal = (type) => {
     setHotplaceModalType(type);
@@ -475,7 +541,7 @@ export default function HomeScreen({ navigation }) {
     );
   };
 
-  const _createdAtMs = (item) => _toMs(item?.createdAt);
+  const _createdAtMs = (item) => item?.createdAt ? _toMs(item.createdAt) : Date.now();
 
   const _stableItemKey = (item) => {
     return String(
@@ -560,88 +626,126 @@ export default function HomeScreen({ navigation }) {
     const boostedCandidates = filtered.filter(_isBoosted).sort(_sortBoosted);
     const normalCandidates = filtered.filter((item) => !_isBoosted(item)).sort(_sortNormal);
 
-    // 5. 상단 3슬롯 구성: 부스트 우선 + 부족하면 일반으로 채움
+    // 5. 상단 3슬롯 구성:
+    // - 1~2위: 최근 N빵 부스트 우선 보장
+    // - (N빵 부스트가 3개 이상일 경우) 3위: 최근 핫스토어 부스트 보장
+    // - 1~2위에 들어갈 N빵 부스트가 없으면 스토어 부스트가 1~2위도 가능
     const SLOT_TOTAL = 3;
-const isHotplaceTab = selectedCategory === "핫플레이스";
-const capPerUser = 1;
+    const isHotplaceTab = selectedCategory === "핫플레이스";
+    const capPerUser = 1;
 
-const _isStoreItem = (item) => item?.type === "store";
+    const _isStoreItem = (item) => item?.type === "store";
 
-// ✅ boostedCandidates에서 "일반부스트(post) 우선 → 핫스토어부스트(store) 후순위"
-const boostedPost = boostedCandidates.filter((x) => !_isStoreItem(x)).sort(_sortBoosted);
-const boostedStore = boostedCandidates.filter((x) => _isStoreItem(x)).sort(_sortBoosted);
+    // ✅ boostedCandidates에서 "일반부스트(post) 우선 → 핫스토어부스트(store) 후순위"
+    const boostedPost = boostedCandidates.filter((x) => !_isStoreItem(x)).sort(_sortBoosted);
+    const boostedStore = boostedCandidates.filter((x) => _isStoreItem(x)).sort(_sortBoosted);
 
-// ✅ 부스트 존재 여부
-const hasAnyBoost = (boostedPost.length + boostedStore.length) > 0;
+    const capStore = SLOT_TOTAL; // 기존 로직 유지(상단 3슬롯 내에서 최대 3개)
 
-// ✅ 핵심: 부스트가 없으면 "기본 슬롯 정책" 자체를 OFF
-// - 스토어 제한 없음
-// - 게시글 최소 보장 없음
-// - 즉, 최신순/기본정렬대로 1,2,3이 그냥 채워질 수 있음
-const capStore = hasAnyBoost ? SLOT_TOTAL : SLOT_TOTAL; // 제한 OFF (사실상 의미 없음)
-const minPost  = hasAnyBoost ? 0 : 0;
+    const _keyed = (list) => {
+      return (list || []).map((item) => ({
+        key: _stableItemKey(item),
+        owner: _ownerKey(item),
+        item,
+        isStore: _isStoreItem(item),
+      }));
+    };
 
-const combinedForSlots = [
-  ...(hasAnyBoost ? [...boostedPost, ...boostedStore] : []),
-  ...normalCandidates,
-];
+    const keyedBoostedPost = _keyed(boostedPost);
+    const keyedBoostedStore = _keyed(boostedStore);
+    const keyedNormal = _keyed(normalCandidates);
 
-// ✅ combined 내에서 key를 1번만 확정해서, pick/remove 모두 동일 key 사용
-const keyedCombined = combinedForSlots.map((item) => ({
-  key: _stableItemKey(item),
-  owner: _ownerKey(item),
-  item,
-  isStore: _isStoreItem(item),
-}));
+    const keyedCombined = [...keyedBoostedPost, ...keyedBoostedStore, ...keyedNormal];
 
-const picked = [];
-const usedKeys = new Set();
-const usedOwners = new Set();
-let storeCount = 0;
-let postCount = 0;
+    const picked = [];
+    const usedKeys = new Set();
+    // ✅ [수정 1] '가게 주인'만 따로 기억하는 명단 생성
+    const usedStoreOwners = new Set(); 
+    let storeCount = 0;
+    let postCount = 0;
 
-const _canPick = (row) => {
-  if (!row?.key) return false;
-  if (usedKeys.has(row.key)) return false;
+    const _canPick = (row) => {
+      if (!row?.key) return false;
+      if (usedKeys.has(row.key)) return false;
 
-  if (capPerUser === 1 && row.owner && usedOwners.has(row.owner)) return false;
-  if (row.isStore && storeCount >= capStore) return false;
+      // ✅ [수정 2] 가게(isStore)일 때만 주인 중복을 체크! (글은 체크 안 함)
+      if (row.isStore) {
+        if (capPerUser === 1 && row.owner && usedStoreOwners.has(row.owner)) {
+          return false; // 이미 이 주인의 가게가 올라갔으면 스킵
+        }
+        if (storeCount >= capStore) return false;
+      }
 
-  return true;
-};
+      return true;
+    };
 
-const _pick = (row) => {
-  usedKeys.add(row.key);
-  if (row.owner) usedOwners.add(row.owner);
+    const _pick = (row) => {
+      usedKeys.add(row.key);
+      
+      if (row.isStore) {
+        storeCount += 1;
+        // ✅ [수정 3] 가게일 때만 '가게 주인 명단'에 추가
+        if (row.owner) usedStoreOwners.add(row.owner); 
+      } else {
+        postCount += 1;
+      }
 
-  if (row.isStore) storeCount += 1;
-  else postCount += 1;
+      picked.push(row);
+    };
 
-  picked.push(row);
-};
+    const _pickFrom = (rows, need) => {
+      let cnt = 0;
+      for (let i = 0; i < rows.length; i++) {
+        if (picked.length >= SLOT_TOTAL) break;
+        if (cnt >= need) break;
 
-// ✅ (1) 부스트가 없을 땐 minPost 로직 자체가 0이라 아무 제한 없음
-if (minPost > 0) {
-  for (let i = 0; i < keyedCombined.length; i++) {
-    const row = keyedCombined[i];
-    if (row.isStore) continue;
-    if (!_canPick(row)) continue;
+        const row = rows[i];
+        if (!_canPick(row)) continue;
 
-    _pick(row);
-    if (postCount >= minPost) break;
-    if (picked.length >= SLOT_TOTAL) break;
-  }
-}
+        _pick(row);
+        cnt += 1;
+      }
+    };
 
-// ✅ (2) 상단 슬롯 채우기: 부스트 있으면 부스트가 먼저(이미 combinedForSlots에 반영됨)
-for (let i = 0; i < keyedCombined.length; i++) {
-  if (picked.length >= SLOT_TOTAL) break;
+    // ✅ (1) 1~2위: 최근 N빵 부스트 우선 보장, 부족하면 스토어 부스트도 가능, 그래도 부족하면 일반으로 채움
+    _pickFrom(keyedBoostedPost, 2);
 
-  const row = keyedCombined[i];
-  if (!_canPick(row)) continue;
+    if (picked.length < 2) {
+      _pickFrom(keyedBoostedStore, 2 - picked.length);
+    }
 
-  _pick(row);
-}
+    if (picked.length < 2) {
+      _pickFrom(keyedNormal, 2 - picked.length);
+    }
+
+    // ✅ (2) 3위:
+    // - 엔빵 부스트가 3개 이상일 때, 스토어 부스트가 있으면 3위 보장
+    // - 그 외에는: 엔빵 부스트 → 스토어 부스트 → 일반 순으로 채움
+    if (picked.length < SLOT_TOTAL) {
+      const shouldGuaranteeStoreAt3 = (boostedPost.length >= 3 && boostedStore.length > 0);
+
+      if (shouldGuaranteeStoreAt3) {
+        _pickFrom(keyedBoostedStore, 1);
+
+        if (picked.length < SLOT_TOTAL) {
+          _pickFrom(keyedBoostedPost, 1);
+        }
+
+        if (picked.length < SLOT_TOTAL) {
+          _pickFrom(keyedNormal, 1);
+        }
+      } else {
+        _pickFrom(keyedBoostedPost, 1);
+
+        if (picked.length < SLOT_TOTAL) {
+          _pickFrom(keyedBoostedStore, 1);
+        }
+
+        if (picked.length < SLOT_TOTAL) {
+          _pickFrom(keyedNormal, 1);
+        }
+      }
+    }
 
     // (3) 상단 슬롯에 뽑힌 아이템은 목록에서 제거하고, 나머지를 이어붙임 (동일 key로 정확히 제거)
     const pickedKeySet = new Set(picked.map((r) => r.key));
@@ -1075,6 +1179,10 @@ const styles = StyleSheet.create({
   price: { color: "white", fontSize: 18, fontWeight: "bold" },
   badge: { backgroundColor: "rgba(204,255,0,0.15)", paddingHorizontal: 6, borderRadius: 4 },
   badgeText: { color: theme.primary, fontSize: 11 },
+  statusRow: { flexDirection: "row", alignItems: "center" },
+  boostRow: { flexDirection: "row", alignItems: "center", marginLeft: 8, gap: 4 },
+  boostText: { color: "grey", fontSize: 11, fontWeight: "700" },
+
   status: { fontSize: 12, fontWeight: "bold" },
   fab: { position: "absolute", right: 20, backgroundColor: theme.primary, width: 60, height: 60, borderRadius: 30, alignItems: "center", justifyContent: "center" },
     selectBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", paddingVertical: 14, borderRadius: 8, gap: 8 },

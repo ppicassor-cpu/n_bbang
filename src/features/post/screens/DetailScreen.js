@@ -436,7 +436,7 @@ export default function DetailScreen({ route, navigation }) {
         contentType: "post",
         contentId: post.id,
         mode,
-        durationHours: 6,
+        durationHours: 2,
       });
 
       if (res?.ok) {
@@ -453,7 +453,7 @@ export default function DetailScreen({ route, navigation }) {
             }
         }
 
-        const fallbackUntil = Date.now() + 6 * 60 * 60 * 1000;
+        const fallbackUntil = Date.now() + 2 * 60 * 60 * 1000;
         const nextBoostUntil = res?.boostUntil ?? res?.data?.boostUntil ?? fallbackUntil;
         const nextBoostAppliedAt = res?.boostAppliedAt ?? res?.data?.boostAppliedAt ?? Date.now();
 
@@ -464,7 +464,7 @@ export default function DetailScreen({ route, navigation }) {
         }));
 
         setBoostModalVisible(false);
-        setAlertMsg("부스트가 적용되었습니다. (6시간)");
+        setAlertMsg("부스트가 적용되었습니다. (2시간)");
         setSuccessModalVisible(true);
         return;
       }
@@ -699,7 +699,7 @@ export default function DetailScreen({ route, navigation }) {
             onPress={() => runBoost("free")}
             disabled={boostLoading}
           >
-            <Text style={styles.boostOptionText}>무료 부스트 (일 1회 / 6시간)</Text>
+            <Text style={styles.boostOptionText}>무료 부스트 (일 1회 / 2시간)</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -708,7 +708,7 @@ export default function DetailScreen({ route, navigation }) {
             disabled={boostLoading || !isPremium}
           >
             <Text style={[styles.boostOptionText, !isPremium && { color: "grey" }]}>
-              멤버십 부스트 (추가 1회 / 6시간)
+              멤버십 부스트 (추가 1회 / 2시간)
             </Text>
           </TouchableOpacity>
 

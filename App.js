@@ -58,28 +58,39 @@ function AppInner() {
   const [isSplashFinished, setSplashFinished] = useState(false); 
   const [updateModalVisible, setUpdateModalVisible] = useState(false);
   const updatePromptShownRef = useRef(false);
+  
+  // ✅ [추가] 업데이트 타입 상태 ("LAUNCH" or "RESUME")
+  const [updateType, setUpdateType] = useState("LAUNCH");
 
-  // ❌ [삭제] 기존의 가짜 10초 타이머 삭제됨 (이제 진짜 데이터 신호를 기다림)
+  // ✅ [수정] 타입을 인자로 받아 상태를 설정하는 통합 함수
+  const fetchUpdateIfAvailable = async (type) => {
+    if (__DEV__) return;
+    try {
+      if (updatePromptShownRef.current) return;
 
+      const update = await Updates.checkForUpdateAsync();
+      if (update.isAvailable) {
+        await Updates.fetchUpdateAsync();
+        
+        updatePromptShownRef.current = true;
+        setUpdateType(type); // 타입 저장
+        setUpdateModalVisible(true);
+      }
+    } catch (e) {
+      console.log(`Update process failed (${type}):`, e);
+    }
+  };  
+
+  // ✅ [수정] 앱 초기 실행 시 (LAUNCH 타입)
+  useEffect(() => {
+    fetchUpdateIfAvailable("LAUNCH");
+  }, []);
+
+  // ✅ [수정] 앱 재진입 시 (RESUME 타입)
   useEffect(() => {
     const handleAppStateChange = async (nextAppState) => {
       if (appState.current.match(/inactive|background/) && nextAppState === "active") {
-        if (!__DEV__) {
-          try {
-            if (updatePromptShownRef.current) {
-              appState.current = nextAppState;
-              return;
-            }
-            const update = await Updates.checkForUpdateAsync();
-            if (update.isAvailable) {
-              await Updates.fetchUpdateAsync();
-              updatePromptShownRef.current = true;
-              setUpdateModalVisible(true);
-            }
-          } catch (e) {
-            console.log("Update check failed:", e);
-          }
-        }
+        fetchUpdateIfAvailable("RESUME");
       }
       appState.current = nextAppState;
     };
@@ -109,7 +120,9 @@ function AppInner() {
               <View style={styles.modalCard}>
                 <Text style={styles.modalTitle}>업데이트 알림 🚀</Text>
                 <Text style={styles.modalMessage}>
-                  새로운 기능이 추가되었습니다.{"\n"}앱을 재실행하여 적용하시겠습니까?
+                  {updateType === "LAUNCH"
+                    ? "최신 업데이트 다운로드가 완료되었습니다.\n지금 바로 적용하여 새로운 기능을 만나보시겠습니까?"
+                    : "사용하시는 동안 새로운 기능이 추가되었습니다.\n지금 재실행하여 적용하시겠습니까?"}
                 </Text>
                 <View style={styles.modalButtons}>
                   <TouchableOpacity

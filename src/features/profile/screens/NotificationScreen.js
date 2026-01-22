@@ -5,7 +5,7 @@ import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator }
 import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { collection, query, orderBy, onSnapshot, doc, updateDoc, deleteDoc, writeBatch, where, getDocs } from "firebase/firestore";
+import { collection, query, orderBy, onSnapshot, doc, updateDoc, deleteDoc, writeBatch, where, getDocs, getDoc } from "firebase/firestore";
 
 import { db } from "../../../firebaseConfig";
 import { theme } from "../../../theme";
@@ -248,15 +248,57 @@ export default function NotificationScreen() {
     );
   };
 
-  const onPressNoti = async (item) => {
+const onPressNoti = async (item) => {
     // ✅ 클릭 시 그룹 읽음 처리 실행
     await handleRead(item);
-    
+
+    // 채팅(또는 게시글 연동 채팅) 알림일 경우
     if (item?.type === "chat" && item?.roomId) {
-      navigation.navigate(ROUTES.CHAT_ROOM, {
-        roomId: item.roomId,
-        roomName: item.roomName || item.title || "채팅방",
-      });
+      try {
+        // ✅ 이동하기 전에 실제 데이터(채팅방/게시글)가 존재하는지 확인
+        const roomRef = doc(db, "chat_rooms", item.roomId);
+        const roomSnap = await getDoc(roomRef);
+
+        if (roomSnap.exists()) {
+          // 존재하면 정상 이동
+          navigation.navigate(ROUTES.CHAT_ROOM, {
+            roomId: item.roomId,
+            roomName: item.roomName || item.title || "채팅방",
+          });
+        } else {
+          // ❌ 존재하지 않음 (Snapshot은 가져왔으나 데이터가 없는 경우)
+          const handleConfirm = () => setModalVisible(false);
+          openModal(
+            "알림",
+            "해당 게시글(또는 채팅방)이 삭제되어\n내용을 확인할 수 없습니다.",
+            "alert",
+            handleConfirm
+          );
+        }
+      } catch (e) {
+        console.error("데이터 확인 오류:", e.code);
+
+        const handleConfirm = () => setModalVisible(false);
+
+        // ✅ [핵심 수정] 권한 없음(permission-denied)도 삭제된 것으로 간주
+        // (보안 규칙상 삭제된 문서는 접근 권한 체크 실패로 이어지는 경우가 많음)
+        if (e.code === 'permission-denied' || e.code === 'not-found') {
+          openModal(
+            "알림",
+            "해당 게시글(또는 채팅방)이 삭제되어\n내용을 확인할 수 없습니다.",
+            "alert",
+            handleConfirm
+          );
+        } else {
+          // 그 외의 진짜 오류 (네트워크 문제 등)
+          openModal(
+            "오류", 
+            "내용을 불러오는 중 문제가 발생했습니다.", 
+            "alert", 
+            handleConfirm
+          );
+        }
+      }
     }
   };
 
