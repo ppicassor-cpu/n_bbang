@@ -18,7 +18,7 @@ import {
   Animated,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import { checkNotifications, requestNotifications } from 'react-native-permissions';
@@ -176,6 +176,42 @@ export default function ProfileScreen() {
   const PROFILE_IMAGE_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30일
   const PROFILE_IMAGE_TARGET_WIDTH = 400;
   const PROFILE_IMAGE_QUALITY = 0.5;
+
+  // ✅ [추가] 내 동네 인증 상태(AsyncStorage) 로컬 반영용
+  const HOME_DONG_NAME = "HOME_DONG_NAME";
+  const HOME_DONG_VERIFIED = "HOME_DONG_VERIFIED";
+
+  const [homeDongNameLocal, setHomeDongNameLocal] = useState(null);
+  const [homeVerifiedLocal, setHomeVerifiedLocal] = useState(false);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      let alive = true;
+
+      const loadHomeDong = async () => {
+        try {
+          const name = await AsyncStorage.getItem(HOME_DONG_NAME);
+          const verifiedRaw = await AsyncStorage.getItem(HOME_DONG_VERIFIED);
+
+          if (!alive) return;
+
+          setHomeDongNameLocal(name || null);
+          setHomeVerifiedLocal(verifiedRaw === "true" || verifiedRaw === "1");
+        } catch {
+          if (!alive) return;
+          setHomeDongNameLocal(null);
+          setHomeVerifiedLocal(false);
+        }
+      };
+
+      loadHomeDong();
+
+      return () => {
+        alive = false;
+      };
+    }, [])
+  );
+
 
   useEffect(() => {
     const onShow = (e) => {
@@ -595,6 +631,13 @@ export default function ProfileScreen() {
 
   const appVersion = Constants.expoConfig?.version || '1.0.0';
 
+  // ✅ [추가] Profile 화면 표시용(컨텍스트 갱신 지연 대비)
+  const effectiveIsVerified = Boolean(isVerified || homeVerifiedLocal);
+  const effectiveLocation =
+    (currentLocation && currentLocation !== "위치 미지정")
+      ? currentLocation
+      : (homeDongNameLocal || currentLocation);
+
   // ✅ [수정] 닉네임 수정 팝업이 키보드에 가리지 않도록(팝업 전체가 위로 올라가게)
   const nicknameKeyboardOffset = Platform.OS === "ios"
     ? (insets?.top || 0) + 160
@@ -674,7 +717,7 @@ export default function ProfileScreen() {
                 </TouchableOpacity>
               </View>
               <Text style={styles.locationText}>
-                {isVerified ? `${currentLocation} 인증됨` : "위치 미인증"}
+                {effectiveIsVerified ? `${effectiveLocation} 인증됨` : "위치 미인증"}
               </Text>
             </View>
           </View>

@@ -245,8 +245,12 @@ const MyTownScreen = ({ navigation }) => {
   const [isVerified, setIsVerified] = useState(false);
   const [searchText, setSearchText] = useState("");
 
-    const [modalVisible, setModalVisible] = useState(false);
+  const [modalVisible, setModalVisible] = useState(false);
   const [modalConfig, setModalConfig] = useState({ title: "", msg: "", onConfirm: null });
+
+  // ✅ [추가] 저장 중 모달 + 중복 클릭 방지
+  const [savingModalVisible, setSavingModalVisible] = useState(false);
+  const [isSavingHomeTown, setIsSavingHomeTown] = useState(false);
 
   // ✅ [추가] 줌/이동 중 '번쩍' 숨김용 블랙 오버레이(100~200ms)
   const [mapFlashCoverVisible, setMapFlashCoverVisible] = useState(false);
@@ -534,7 +538,7 @@ const MyTownScreen = ({ navigation }) => {
   }
 };
 
-  const _findDongByCoords = (coords, verifyCoordsOverride = null) => {
+  const _findDongByCoords = (coords, verifyCoordsOverride = null, verifyWithMyCoords = false) => {
     if (!coords?.latitude || !_ensureGeoWgs84()) return;
     if (!geoPrepared?.ok) {
       _showModal("데이터 오류", geoPrepared?.reason || "데이터를 읽을 수 없습니다.");
@@ -560,22 +564,23 @@ const MyTownScreen = ({ navigation }) => {
         setSelectedDong(found);
 
         // ✅ 판정 기준 좌표
+        // - 지도 탭(verifyWithMyCoords=true): "내 현재 위치(myCoords)" 기준으로 인증 판정
         // - search 탭: 내 GPS(myCoords) 기준 유지
-        // - current 탭: verifyCoordsOverride(있으면) → 없으면 coords
+        // - current 탭 GPS 갱신: verifyCoordsOverride(있으면) → 없으면 coords
         const verifyCoords = verifyCoordsOverride || coords;
 
-        const baseCoords =
-          activeTab === "search" && myCoords
-            ? { latitude: myCoords.latitude, longitude: myCoords.longitude }
-            : verifyCoords;
+        const baseCoords = verifyWithMyCoords
+          ? (myCoords ? { latitude: myCoords.latitude, longitude: myCoords.longitude } : null)
+          : activeTab === "search" && myCoords
+          ? { latitude: myCoords.latitude, longitude: myCoords.longitude }
+          : verifyCoords;
 
-                _checkVerification(baseCoords, found);
+        _checkVerification(baseCoords, found);
       } else {
         setSelectedDong(null);
         setIsVerified(false);
         _showModal("알림", "해당 위치의 정보를 찾을 수 없습니다.");
       }
-
     } catch (e) {
       console.warn("Find Dong Error", e);
       setSelectedDong(null);
@@ -583,6 +588,7 @@ const MyTownScreen = ({ navigation }) => {
       _showModal("오류", "탐색 중 오류가 발생했습니다.");
     }
   };
+
 
   const _checkVerification = (currentCoords, targetDong) => {
     if (!currentCoords || !targetDong) {
@@ -1127,24 +1133,33 @@ const MyTownScreen = ({ navigation }) => {
 
   // ✅ [수정] 저장 요구사항: 4개 키를 AsyncStorage에 각각 저장
   const _onSave = async () => {
-  if (!isVerified || !selectedDong) return;
+    if (!isVerified || !selectedDong) return;
+    if (isSavingHomeTown) return;
 
-  try {
-    const fullName = selectedDong?.properties?.adm_nm || "";
-    const dongName = fullName ? fullName.split(" ").pop() : "";
-    const dongCode = selectedDong?.properties?.adm_cd ? String(selectedDong.properties.adm_cd) : "";
+    setIsSavingHomeTown(true);
+    setSavingModalVisible(true);
 
-    // ✅ 1) 확정할 때 "미인증으로 리셋" 금지 (AppContext에서 리셋 제거됨)
-    await saveHomeDong({ dongName, dongCode, featureId: null });
+    try {
+      const fullName = selectedDong?.properties?.adm_nm || "";
+      const dongName = fullName ? fullName.split(" ").pop() : "";
+      const dongCode = selectedDong?.properties?.adm_cd ? String(selectedDong.properties.adm_cd) : "";
 
-    // ✅ 2) 확정 직후 인증은 "최신 GPS"로 강제 갱신해서 같은 기준으로 즉시 저장/반영
-    await verifyHomeDongByGps({ polygon: selectedDong?.geometry, forceFresh: true });
+      // ✅ 1) 확정할 때 "미인증으로 리셋" 금지 (AppContext에서 리셋 제거됨)
+      await saveHomeDong({ dongName, dongCode, featureId: null });
 
-    _showModal("완료", "동네 설정이 저장되었습니다.", () => navigation.goBack());
-  } catch {
-    _showModal("오류", "저장에 실패했습니다.");
-  }
-};
+      // ✅ 2) 확정 직후 인증은 "최신 GPS"로 강제 갱신해서 같은 기준으로 즉시 저장/반영
+      await verifyHomeDongByGps({ polygon: selectedDong?.geometry, forceFresh: true });
+
+      // ✅ 저장 완료 → 모달 자동 닫기 + 자동 뒤로가기
+      setSavingModalVisible(false);
+      setIsSavingHomeTown(false);
+      navigation.goBack();
+    } catch {
+      setSavingModalVisible(false);
+      setIsSavingHomeTown(false);
+      _showModal("오류", "저장에 실패했습니다.");
+    }
+  };
 
   const _showModal = (title, msg, onConfirm = null) => {
     setModalConfig({ title, msg, onConfirm });
@@ -1179,6 +1194,7 @@ const MyTownScreen = ({ navigation }) => {
     return Math.max(base, base + extra);
   }, [insets]);
 
+  const isBlocked = Boolean(selectedDong && !isVerified);
   const canConfirm = Boolean(isVerified && selectedDong);
 
   return (
@@ -1311,6 +1327,16 @@ const MyTownScreen = ({ navigation }) => {
                 loadingEnabled={true}
                 loadingBackgroundColor="black"
                 onRegionChange={_flashMapCover}
+                onPress={(e) => {
+                  const c = e?.nativeEvent?.coordinate;
+                  if (!c) return;
+
+                  _findDongByCoords(
+                    { latitude: c.latitude, longitude: c.longitude },
+                    null,
+                    true // ✅ 지도 탭 선택: 내 현재 위치(myCoords) 기준으로 인증 판정
+                  );
+                }}
                 // ✅ [핵심] 초기 위치를 고정값이 아니라 내 위치(myCoords)로 설정!
                 initialRegion={{
                   latitude: myCoords.latitude,
@@ -1326,6 +1352,7 @@ const MyTownScreen = ({ navigation }) => {
                 toolbarEnabled={false}
                 showsMyLocationButton={false}
               >
+
                 {selectedDong && (
                   <Polygon
                     coordinates={_renderPolygonCoords()}
@@ -1400,7 +1427,7 @@ const MyTownScreen = ({ navigation }) => {
                       style={{ marginRight: 4 }}
                     />
                     <Text style={[styles.statusText, { color: isVerified ? PRIMARY_COLOR : "#F44336" }]}>
-                      {isVerified ? "인증가능" : "위치 불일치"}
+                      {isVerified ? "인증가능" : "인증불가"}
                     </Text>
                   </View>
                 )}
@@ -1415,15 +1442,42 @@ const MyTownScreen = ({ navigation }) => {
             </View>
 
             <TouchableOpacity
-              style={[styles.confirmBtn, !canConfirm && styles.confirmBtnDisabled]}
+              style={[
+                styles.confirmBtn,
+                (!canConfirm || isSavingHomeTown) && styles.confirmBtnDisabled,
+                isBlocked && styles.confirmBtnBlocked,
+              ]}
               onPress={_onSave}
-              disabled={!canConfirm}
+              disabled={!canConfirm || isSavingHomeTown}
               activeOpacity={0.8}
             >
-              <Text style={[styles.confirmBtnText, !canConfirm && { color: "#666" }]}>이 동네로 확정하기</Text>
+              <Text
+                style={[
+                  styles.confirmBtnText,
+                  (!canConfirm || isSavingHomeTown) && styles.confirmBtnTextDisabled,
+                  isBlocked && styles.confirmBtnTextBlocked,
+                ]}
+              >
+                이 동네로 확정하기
+              </Text>
             </TouchableOpacity>
           </View>
         </View>
+
+        {/* 저장중 모달 */}
+        <Modal
+          visible={savingModalVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => {}}
+        >
+          <View style={styles.saveModalOverlay}>
+            <View style={styles.saveModalContent}>
+              <ActivityIndicator size="small" color={PRIMARY_COLOR} />
+              <Text style={styles.saveModalMsg}>내동네로저장중입니다</Text>
+            </View>
+          </View>
+        </Modal>
 
         {/* 모달 */}
         <Modal visible={modalVisible} transparent animationType="fade">
@@ -1724,11 +1778,27 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#333",
   },
+  confirmBtnBlocked: {
+    backgroundColor: "#222",
+    borderWidth: 1,
+    borderColor: "#F44336",
+  },
   confirmBtnText: {
     color: "black",
     fontSize: 17,
     fontWeight: "bold",
   },
+  confirmBtnTextDisabled: {
+    color: "#666",
+  },
+  confirmBtnTextBlocked: {
+    color: "#F44336",
+  },
+
+  // 저장중 모달
+  saveModalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "center", alignItems: "center" },
+  saveModalContent: { width: "72%", maxWidth: 320, backgroundColor: "#222", borderRadius: 14, paddingVertical: 18, paddingHorizontal: 18, alignItems: "center", borderWidth: 1, borderColor: "#333" },
+  saveModalMsg: { marginTop: 12, color: "#CCC", textAlign: "center", lineHeight: 20, fontWeight: "700" },
 
   // 모달
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.8)", justifyContent: "center", alignItems: "center" },
@@ -1737,6 +1807,7 @@ const styles = StyleSheet.create({
   modalMsg: { color: "#CCC", textAlign: "center", marginBottom: 24, lineHeight: 22 },
   modalBtn: { backgroundColor: PRIMARY_COLOR, width: "100%", paddingVertical: 14, borderRadius: 10, alignItems: "center" },
   modalBtnText: { color: "black", fontWeight: "bold", fontSize: 16 },
+
 
   loader: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "center", alignItems: "center" },
   mapLoadingContainer: {
