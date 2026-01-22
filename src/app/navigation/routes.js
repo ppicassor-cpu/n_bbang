@@ -9,6 +9,7 @@ export const ROUTES = {
   WRITE_FREE: "WriteFree",
   DETAIL: "Detail",
   FREE_DETAIL: "FreeDetail",
+  SEARCH: "SearchScreen",
 
   // ✅ [추가] 스토어(핫플레이스) 관련 라우트
   STORE_WRITE: "StoreWrite",   // 가게 등록 작성

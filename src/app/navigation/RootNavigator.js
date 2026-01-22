@@ -26,7 +26,7 @@ import CustomerCenterScreen from "../../features/profile/screens/CustomerCenterS
 import TermsOfServiceScreen from "../../features/profile/screens/TermsOfServiceScreen";
 import PrivacyPolicyScreen from "../../features/profile/screens/PrivacyPolicyScreen";
 import OperationPolicyScreen from "../../features/profile/screens/OperationPolicyScreen";
-
+import SearchScreen from "../../features/search/screens/SearchScreen";
 // ✅ [추가] 내 동네 설정 화면 import
 import MyTownScreen from "../../features/location/screens/MyTownScreen";
 
@@ -103,6 +103,7 @@ export default function RootNavigator() {
         ) : (
           <>
             <Stack.Screen name={ROUTES.HOME} component={HomeScreen} options={{ headerShown: false }} />
+            <Stack.Screen name={ROUTES.SEARCH} component={SearchScreen} options={{ animation: "fade_from_bottom" }} />
             <Stack.Screen name={ROUTES.WRITE} component={WriteScreen} options={{ title: "N빵 모집하기" }} />
             <Stack.Screen name={ROUTES.WRITE_FREE} component={WriteFreeScreen} options={{ title: "무료나눔 하기" }} />
             <Stack.Screen name={ROUTES.DETAIL} component={DetailScreen} options={{ title: "상세 정보" }} />

@@ -1,16 +1,26 @@
 // FILE: src/features/admin/screens/AdminReportScreen.js
 
 import React, { useState, useEffect } from "react";
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from "react-native";
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator } from "react-native";
 import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { collection, query, orderBy, getDocs, doc, getDoc, updateDoc, deleteDoc, addDoc } from "firebase/firestore";
+import { collection, query, getDocs, doc, getDoc, updateDoc, deleteDoc, addDoc } from "firebase/firestore";
 
 import { db } from "../../../firebaseConfig";
 import { theme } from "../../../theme";
 import { ROUTES } from "../../../app/navigation/routes";
 import { useAppContext } from "../../../app/providers/AppContext";
+import CustomModal from "../../../components/CustomModal"; 
+
+// ✅ 정지 사유 목록 정의
+const BAN_REASONS = [
+  "욕설 및 비하 발언",
+  "스팸 / 도배 / 홍보",
+  "사기 및 거래 불이행",
+  "음란물 / 부적절한 콘텐츠",
+  "기타 운영 정책 위반"
+];
 
 export default function AdminReportScreen() {
   const navigation = useNavigation();
@@ -21,10 +31,83 @@ export default function AdminReportScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  // ✅ [수정] 신고 내역 + 닉네임 + 제목 불러오기 (안전장치 강화)
+  // ✅ [기존] 정지 사유 선택 모달용 상태
+  const [banModalVisible, setBanModalVisible] = useState(false);
+  const [selectedReport, setSelectedReport] = useState(null);
+
+  // ✅ [추가] 일반 Alert/Confirm 대체용 범용 모달 상태
+  const [alertModal, setAlertModal] = useState({
+    visible: false,
+    title: "",
+    message: "",
+    type: "alert", // 'alert' (확인만) or 'confirm' (취소/확인)
+    confirmText: "확인",
+    onConfirm: null, // 확인 버튼 눌렀을 때 실행할 함수
+  });
+
+  // ✅ [추가] 탭 및 유저별 상세보기 모달 상태
+  const [activeTab, setActiveTab] = useState("list"); // 'list' | 'users'
+  const [userDetailModalVisible, setUserDetailModalVisible] = useState(false);
+  const [selectedUserForDetail, setSelectedUserForDetail] = useState(null);
+
+  // 🔹 모달 닫기 헬퍼
+  const closeAlertModal = () => {
+    setAlertModal(prev => ({ ...prev, visible: false }));
+  };
+
+  // 🔹 알림창 띄우기 헬퍼 (단순 메시지)
+  const showAlert = (title, message, onConfirm = null) => {
+    setAlertModal({
+      visible: true,
+      title,
+      message,
+      type: "alert",
+      confirmText: "확인",
+      onConfirm: onConfirm || closeAlertModal
+    });
+  };
+
+  // 🔹 확인창 띄우기 헬퍼 (실행 여부 묻기)
+  const showConfirm = (title, message, onConfirm, confirmText = "확인") => {
+    setAlertModal({
+      visible: true,
+      title,
+      message,
+      type: "confirm",
+      confirmText,
+      onConfirm: async () => {
+        closeAlertModal();
+        if (onConfirm) await onConfirm();
+      }
+    });
+  };
+
+  // ✅ [추가] 신고 내역을 '대상자별'로 그룹화하는 함수
+  const getAggregatedUsers = () => {
+    const userMap = {};
+    reports.forEach((r) => {
+      const uid = r.targetUserId;
+      if (!uid) return;
+
+      if (!userMap[uid]) {
+        userMap[uid] = {
+          userId: uid,
+          nickname: r.targetNickname,
+          count: 0,
+          reportHistory: [] // 해당 유저가 받은 신고들
+        };
+      }
+      userMap[uid].count += 1;
+      userMap[uid].reportHistory.push(r);
+    });
+
+    // 신고 횟수가 많은 순서로 정렬
+    return Object.values(userMap).sort((a, b) => b.count - a.count);
+  };
+
+  // ✅ 신고 내역 불러오기
   const fetchReports = async () => {
     try {
-      // 1. orderBy 제거 (단순 조회로 변경하여 에러 회피)
       const q = query(collection(db, "reports")); 
       const querySnapshot = await getDocs(q);
       
@@ -77,17 +160,16 @@ export default function AdminReportScreen() {
         })
       );
 
-      // 2. 데이터 가져온 후 여기서 최신순 정렬 (timestamp 객체 처리)
       loadedData.sort((a, b) => {
         const timeA = a.createdAt?.seconds || 0;
         const timeB = b.createdAt?.seconds || 0;
-        return timeB - timeA; // 내림차순
+        return timeB - timeA; 
       });
 
       setReports(loadedData);
     } catch (e) {
       console.error("신고 내역 로드 실패:", e);
-      Alert.alert("오류", "데이터를 불러오지 못했습니다.\n" + e.message);
+      showAlert("오류", "데이터를 불러오지 못했습니다.\n" + e.message);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -96,14 +178,13 @@ export default function AdminReportScreen() {
 
   useEffect(() => {
     if (!isAdmin) {
-      Alert.alert("접근 거부", "관리자만 접근할 수 있습니다.");
-      navigation.goBack();
+      // ✅ Alert -> CustomModal (onConfirm에 뒤로가기 연결)
+      showAlert("접근 거부", "관리자만 접근할 수 있습니다.", () => navigation.goBack());
       return;
     }
     fetchReports();
   }, [isAdmin]);
 
-  // ✅ 신고자 알림 발송
   const sendNotificationToReporter = async (reporterId, title, body) => {
     if (!reporterId) return;
     try {
@@ -114,33 +195,25 @@ export default function AdminReportScreen() {
         isRead: false,
         createdAt: new Date().toISOString()
       });
-      console.log(`알림 발송 성공: ${reporterId}`);
     } catch (e) {
       console.error("알림 발송 실패:", e);
     }
   };
 
-  // ✅ 콘텐츠 바로가기
   const handleGoToContent = async (report) => {
     if (!report.contentId) {
-      Alert.alert("오류", "콘텐츠 ID가 존재하지 않습니다.");
+      showAlert("오류", "콘텐츠 ID가 존재하지 않습니다.");
       return;
     }
-
-    setLoading(true); // 로딩 표시 시작
-
+    setLoading(true); 
     try {
       if (report.type === 'post') {
-        // 1. Firestore에서 실제 게시글 전체 데이터를 가져옴
         const postSnap = await getDoc(doc(db, "posts", report.contentId));
-        
         if (postSnap.exists()) {
           const postData = { id: postSnap.id, ...postSnap.data() };
-          
-          // 2. 완벽한 post 객체를 넘겨줌 (category 등이 포함되어 크래쉬 방지)
           navigation.navigate(ROUTES.DETAIL, { post: postData });
         } else {
-          Alert.alert("알림", "이미 삭제된 게시글입니다.");
+          showAlert("알림", "이미 삭제된 게시글입니다.");
         }
       } else if (report.type === 'chat') {
         navigation.navigate(ROUTES.CHAT_ROOM, {
@@ -151,13 +224,12 @@ export default function AdminReportScreen() {
       }
     } catch (e) {
       console.error("이동 실패:", e);
-      Alert.alert("오류", "콘텐츠 정보를 불러오지 못했습니다.");
+      showAlert("오류", "콘텐츠 정보를 불러오지 못했습니다.");
     } finally {
-      setLoading(false); // 로딩 종료
+      setLoading(false); 
     }
   };
 
-  // ✅ 상태 변경 (처리 완료)
   const markAsResolved = async (reportId) => {
     try {
       await updateDoc(doc(db, "reports", reportId), {
@@ -172,97 +244,156 @@ export default function AdminReportScreen() {
     }
   };
 
+  // ✅ [수정] 단순 처리 완료 핸들러
   const handleResolve = (report) => {
     if (report.status === "resolved") return;
 
-    Alert.alert("처리 완료", "추가 조치 없이 '처리 완료' 상태로 변경하시겠습니까?", [
-      { text: "취소", style: "cancel" },
-      { 
-        text: "확인", 
-        onPress: async () => {
-          await markAsResolved(report.id);
-          await sendNotificationToReporter(
-            report.reporterId,
-            "신고 처리 안내",
-            "접수하신 신고가 확인되었으나, 위반 사항이 발견되지 않아 종결 처리되었습니다."
-          );
-        } 
+    showConfirm(
+      "처리 완료",
+      "추가 조치 없이 '처리 완료' 상태로 변경하시겠습니까?",
+      async () => {
+        await markAsResolved(report.id);
+        await sendNotificationToReporter(
+          report.reporterId,
+          "신고 처리 안내",
+          "접수하신 신고가 확인되었으나, 위반 사항이 발견되지 않아 종결 처리되었습니다."
+        );
       }
-    ]);
+    );
+  };
+  const handleConfirmDeleted = (report) => {
+    if (report.status === "resolved") return;
+
+    showConfirm(
+      "신고 종결",
+      "이미 삭제된 콘텐츠입니다. 신고를 종결 처리하시겠습니까?",
+      async () => {
+        await markAsResolved(report.id);
+        await sendNotificationToReporter(
+          report.reporterId,
+          "신고 처리 완료",
+          "신고하신 콘텐츠는 이미 삭제된 것으로 확인되어 종결 처리되었습니다." // ⚪️ 삭제됨 알림
+        );
+      }
+    );
   };
 
+  // ✅ [수정] 콘텐츠 삭제 핸들러
   const handleDeleteContent = (report) => {
     if (report.status === "resolved") return;
 
     const targetCollection = report.type === "chat" ? "chatRooms" : "posts";
     const targetName = report.type === "chat" ? "채팅방" : "게시글";
 
-    Alert.alert(
-      "콘텐츠 강제 삭제", 
-      `정말 이 ${targetName}을(를) 삭제하시겠습니까?\n삭제 후 복구할 수 없습니다.`, 
-      [
-        { text: "취소", style: "cancel" },
-        { 
-          text: "삭제 및 처리완료", 
-          style: "destructive",
-          onPress: async () => {
-            try {
-              if (!report.contentId) throw new Error("Content ID Missing");
-              
-              await deleteDoc(doc(db, targetCollection, report.contentId));
-              Alert.alert("삭제 완료", "해당 콘텐츠가 삭제되었습니다.");
-              
-              await markAsResolved(report.id);
-              
-              await sendNotificationToReporter(
-                report.reporterId,
-                "신고 처리 완료",
-                `신고하신 ${targetName}이(가) 운영 정책 위반으로 삭제 조치되었습니다. 깨끗한 커뮤니티를 위해 힘써주셔서 감사합니다.`
-              );
+    showConfirm(
+      "콘텐츠 강제 삭제",
+      `정말 이 ${targetName}을(를) 삭제하시겠습니까?\n삭제 후 복구할 수 없습니다.`,
+      async () => {
+        try {
+          if (!report.contentId) throw new Error("Content ID Missing");
+          await deleteDoc(doc(db, targetCollection, report.contentId));
+          
+          // 성공 알림 (여기선 연달아 모달을 띄우기 위해 약간 딜레이를 주거나 바로 띄움)
+          // CustomModal 구조상 하나 닫히고 띄우는게 자연스러움 -> showConfirm 내부에서 closeAlertModal 호출됨.
+          
+          // 약간의 딜레이 후 성공 메시지 출력
+          setTimeout(async () => {
+             showAlert("삭제 완료", "해당 콘텐츠가 삭제되었습니다.");
+             await markAsResolved(report.id);
+             await sendNotificationToReporter(
+               report.reporterId,
+               "신고 처리 완료",
+               `신고하신 ${targetName}이(가) 운영 정책 위반으로 삭제 조치되었습니다. 깨끗한 커뮤니티를 위해 힘써주셔서 감사합니다.`
+             );
+          }, 300);
 
-            } catch (e) {
-              Alert.alert("오류", "이미 삭제되었거나 존재하지 않는 문서입니다.");
-            }
-          }
+        } catch (e) {
+          setTimeout(() => showAlert("오류", "이미 삭제되었거나 존재하지 않는 문서입니다."), 300);
         }
-      ]
+      },
+      "삭제 및 처리완료"
     );
   };
 
-  const handleBanUser = (report) => {
+  const handleBanButtonPress = (report) => {
     if (report.status === "resolved") return;
+    setSelectedReport(report);
+    setBanModalVisible(true);
+  };
 
-    Alert.alert(
-      "회원 영구 정지", 
-      `대상 사용자(${report.targetNickname})를 정지하시겠습니까?\n해당 유저는 더 이상 앱을 사용할 수 없습니다.`,
-      [
-        { text: "취소", style: "cancel" },
-        { 
-          text: "정지 및 처리완료", 
-          style: "destructive",
-          onPress: async () => {
-            try {
-              await updateDoc(doc(db, "users", report.targetUserId), {
-                isBanned: true,
-                bannedAt: new Date().toISOString()
-              });
-              Alert.alert("정지 완료", "해당 사용자가 정지 처리되었습니다.");
-              
-              await markAsResolved(report.id);
+  const executeBanUser = async (selectedReason) => {
+    setBanModalVisible(false);
+    const report = selectedReport;
+    if (!report) return;
 
-              await sendNotificationToReporter(
-                report.reporterId,
-                "신고 처리 완료",
-                "신고하신 사용자는 운영 정책 위반으로 이용 정지 조치되었습니다. 감사합니다."
-              );
+    try {
+      const userRef = doc(db, "users", report.targetUserId);
+      const userSnap = await getDoc(userRef);
+      
+      if (!userSnap.exists()) {
+        showAlert("오류", "사용자가 존재하지 않습니다.");
+        return;
+      }
 
-            } catch (e) {
-              Alert.alert("오류", "사용자 정보를 찾을 수 없습니다.");
-            }
-          }
-        }
-      ]
-    );
+      const userData = userSnap.data();
+      const banCount = userData.banCount || 0;
+      
+      let updateData = {};
+      let alertMessage = "";
+      let notificationBody = "";
+      
+      const reasonText = selectedReason;
+
+      if (banCount > 0) {
+        updateData = {
+          isBanned: true,
+          bannedAt: new Date().toISOString(),
+          banCount: banCount + 1,
+          suspendedUntil: null,
+          banReason: reasonText 
+        };
+        alertMessage = `[${reasonText}] 사유로 누적 정지되어 '영구 정지' 처리되었습니다.`;
+        notificationBody = `[영구 정지 안내] 누적 신고 접수로 인해 영구 정지 처리되었습니다.\n사유: ${reasonText}`;
+      } else {
+        const today = new Date();
+        today.setDate(today.getDate() + 7);
+        
+        updateData = {
+          suspendedUntil: today.toISOString(),
+          banCount: 1,
+          banReason: reasonText
+        };
+        alertMessage = `[${reasonText}] 사유로 '7일간 이용 정지' 처리되었습니다.`;
+        notificationBody = `[이용 제재 안내] 운영 정책 위반으로 7일간 서비스 이용이 정지됩니다.\n해제일: ${today.toLocaleDateString()}\n사유: ${reasonText}`;
+      }
+
+      await updateDoc(userRef, updateData);
+
+      await addDoc(collection(db, "users", report.targetUserId, "notifications"), {
+        title: "서비스 이용 제재 안내",
+        body: notificationBody,
+        type: "admin_notice",
+        isRead: false,
+        createdAt: new Date().toISOString()
+      });
+
+      // 결과 알림
+      showAlert("처리 완료", alertMessage);
+      
+      await markAsResolved(report.id);
+
+      await sendNotificationToReporter(
+        report.reporterId,
+        "신고 처리 완료",
+        "신고하신 사용자는 운영 정책 위반으로 이용 제재 조치되었습니다. 감사합니다."
+      );
+
+    } catch (e) {
+      console.error(e);
+      showAlert("오류", "처리 중 문제가 발생했습니다.");
+    } finally {
+      setSelectedReport(null);
+    }
   };
 
   const renderItem = ({ item }) => {
@@ -274,8 +405,8 @@ export default function AdminReportScreen() {
                 (item.createdAt.seconds ? new Date(item.createdAt.seconds * 1000) : new Date(item.createdAt));
       
       if (!isNaN(d.getTime())) {
-        const ymd = d.toISOString().slice(0, 10); // 2026-01-15
-        const time = d.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false }); // 03:13
+        const ymd = d.toISOString().slice(0, 10);
+        const time = d.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false });
         dateStr = `${ymd} ${time}`;
       }
     }
@@ -300,7 +431,6 @@ export default function AdminReportScreen() {
         <Text style={styles.reasonText}>{item.reason}</Text>
 
         <View style={styles.infoBox}>
-          {/* 닉네임 표시 (없으면 ID 일부라도 표시) */}
           <Text style={styles.infoText}>신고자: <Text style={{fontWeight:'bold', color:'white'}}>{item.reporterNickname}</Text></Text>
           <Text style={styles.infoText}>대상자: <Text style={{fontWeight:'bold', color:'white'}}>{item.targetNickname}</Text></Text>
           <Text style={styles.infoText} numberOfLines={1}>콘텐츠: {item.contentTitle}</Text>
@@ -321,17 +451,26 @@ export default function AdminReportScreen() {
         {!isResolved ? (
           <View style={styles.actionRow}>
             {(item.type === "post" || item.type === "chat") && (
-              <TouchableOpacity 
-                style={[styles.actionBtn, { backgroundColor: "#FF4444" }]} 
-                onPress={() => handleDeleteContent(item)}
-              >
-                <Text style={styles.actionBtnText}>삭제</Text>
-              </TouchableOpacity>
+              item.contentTitle === "(삭제된 콘텐츠)" ? (
+                <TouchableOpacity 
+                  style={[styles.actionBtn, { backgroundColor: "#666" }]} 
+                  onPress={() => handleConfirmDeleted(item)} 
+                >
+                  <Text style={styles.actionBtnText}>확인</Text>
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity 
+                  style={[styles.actionBtn, { backgroundColor: "#FF4444" }]} 
+                  onPress={() => handleDeleteContent(item)}
+                >
+                  <Text style={styles.actionBtnText}>삭제</Text>
+                </TouchableOpacity>
+              )
             )}
 
             <TouchableOpacity 
               style={[styles.actionBtn, { backgroundColor: "#CC0000" }]} 
-              onPress={() => handleBanUser(item)}
+              onPress={() => handleBanButtonPress(item)}
             >
               <Text style={styles.actionBtnText}>회원정지</Text>
             </TouchableOpacity>
@@ -353,6 +492,32 @@ export default function AdminReportScreen() {
     );
   };
 
+  // ✅ [추가] 오른쪽 탭(신고 대상자 리스트) 렌더링 함수
+  const renderUserItem = ({ item }) => {
+    return (
+      <TouchableOpacity 
+        style={styles.card} 
+        onPress={() => {
+          setSelectedUserForDetail(item);
+          setUserDetailModalVisible(true);
+        }}
+      >
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+          <View>
+            <Text style={styles.targetNameText}>{item.nickname}</Text>
+            <Text style={{ color: '#888', fontSize: 12 }}>ID: {item.userId.slice(0, 8)}...</Text>
+          </View>
+          <View style={styles.countBadge}>
+            <Text style={styles.countText}>{item.count}회 신고됨</Text>
+          </View>
+        </View>
+        <Text style={{ color: '#AAA', fontSize: 12, marginTop: 8 }}>
+          최근 사유: {item.reportHistory[0]?.reason}
+        </Text>
+      </TouchableOpacity>
+    );
+  };
+
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.header}>
@@ -363,24 +528,121 @@ export default function AdminReportScreen() {
         <View style={{ width: 44 }} />
       </View>
 
+      {/* ✅ [추가] 상단 탭 (신고 내역 / 대상자 명단) */}
+      <View style={styles.tabContainer}>
+        <TouchableOpacity 
+          style={[styles.tabButton, activeTab === 'list' && styles.activeTabButton]} 
+          onPress={() => setActiveTab('list')}
+        >
+          <Text style={[styles.tabText, activeTab === 'list' && styles.activeTabText]}>신고 내역</Text>
+        </TouchableOpacity>
+        <TouchableOpacity 
+          style={[styles.tabButton, activeTab === 'users' && styles.activeTabButton]} 
+          onPress={() => setActiveTab('users')}
+        >
+          <Text style={[styles.tabText, activeTab === 'users' && styles.activeTabText]}>신고 대상자 TOP</Text>
+        </TouchableOpacity>
+      </View>
+
       {loading ? (
         <View style={styles.center}><ActivityIndicator size="large" color={theme.primary} /></View>
       ) : (
+        // ✅ [수정] 탭에 따라 다른 리스트 보여주기
         <FlatList
-          data={reports}
-          renderItem={renderItem}
-          keyExtractor={item => item.id || Math.random().toString()} 
+          data={activeTab === 'list' ? reports : getAggregatedUsers()}
+          renderItem={activeTab === 'list' ? renderItem : renderUserItem}
+          keyExtractor={item => activeTab === 'list' ? (item.id || Math.random().toString()) : item.userId} 
           contentContainerStyle={{ padding: 16 }}
           refreshing={refreshing}
           onRefresh={() => { setRefreshing(true); fetchReports(); }}
           ListEmptyComponent={
             <View style={styles.center}>
               <MaterialIcons name="check-circle-outline" size={60} color="#444" />
-              <Text style={{ color: "#888", marginTop: 10 }}>접수된 신고가 없습니다.</Text>
+              <Text style={{ color: "#888", marginTop: 10 }}>데이터가 없습니다.</Text>
             </View>
           }
         />
       )}
+      
+
+      {/* ✅ [기존] 정지 사유 선택용 모달 */}
+      <CustomModal
+        visible={banModalVisible}
+        title="회원 제재 사유 선택"
+        message={`대상: ${selectedReport?.targetNickname}\n\n제재 사유를 선택하면 즉시 7일(첫회) 또는 영구(재범) 정지 처리됩니다.`}
+        onCancel={() => {
+            setBanModalVisible(false);
+            setSelectedReport(null);
+        }}
+      >
+        <View style={{ width: '100%', marginTop: 10, gap: 8 }}>
+            {BAN_REASONS.map((reason, index) => (
+                <TouchableOpacity 
+                    key={index}
+                    style={styles.reasonSelectBtn}
+                    onPress={() => executeBanUser(reason)}
+                >
+                    <Text style={styles.reasonSelectText}>{reason}</Text>
+                </TouchableOpacity>
+            ))}
+             <TouchableOpacity 
+                    style={[styles.reasonSelectBtn, { backgroundColor: '#333', marginTop: 8 }]}
+                    onPress={() => {
+                        setBanModalVisible(false);
+                        setSelectedReport(null);
+                    }}
+                >
+                    <Text style={{color:'#BBB', fontWeight:'bold'}}>취소</Text>
+                </TouchableOpacity>
+        </View>
+      </CustomModal>
+      
+
+      {/* ✅ [추가] 범용 알림/컨펌 모달 (Alert.alert 대체) */}
+      <CustomModal
+        visible={alertModal.visible}
+        title={alertModal.title}
+        message={alertModal.message}
+        type={alertModal.type === 'confirm' ? 'confirm' : undefined} // 'alert'타입은 default로 처리됨
+        onConfirm={alertModal.onConfirm}
+        onCancel={alertModal.type === 'confirm' ? closeAlertModal : undefined} // confirm일때만 취소 버튼 활성
+        confirmText={alertModal.confirmText}
+      />
+
+      {/* ✅ [추가] 유저별 신고 상세 내역 모달 */}
+      <CustomModal
+        visible={userDetailModalVisible}
+        title={`${selectedUserForDetail?.nickname}님 신고 이력`}
+        message="" // 리스트로 커스텀 렌더링
+        onConfirm={() => setUserDetailModalVisible(false)}
+        confirmText="닫기"
+      >
+        <View style={{ width: '100%', maxHeight: 400 }}>
+          <FlatList
+            data={selectedUserForDetail?.reportHistory || []}
+            keyExtractor={(r) => r.id}
+            renderItem={({ item }) => (
+              <View style={styles.historyItem}>
+                <Text style={styles.historyReason}>🛑 {item.reason}</Text>
+                <Text style={styles.historyContent}>대상: {item.contentTitle}</Text>
+                <Text style={styles.historyDate}>
+                  {item.createdAt?.toDate ? item.createdAt.toDate().toLocaleDateString() : '날짜 없음'}
+                </Text>
+                {/* 바로가기 기능 재사용 */}
+                {(item.type === 'post' || item.type === 'chat') && (
+                  <TouchableOpacity onPress={() => {
+                      setUserDetailModalVisible(false); // 모달 닫고 이동
+                      handleGoToContent(item);
+                  }}>
+                    <Text style={{ color: theme.primary, fontSize: 12, marginTop: 4 }}>👉 콘텐츠 확인하기</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
+          />
+        </View>
+      </CustomModal>
+
     </View>
   );
 }
@@ -422,5 +684,88 @@ const styles = StyleSheet.create({
   actionBtnText: { color: "white", fontSize: 12, fontWeight: "bold" },
 
   resolvedBadge: { flexDirection: "row", alignItems: "center", alignSelf: "flex-end", backgroundColor: "#333", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6 },
-  resolvedText: { color: "#AAA", fontSize: 12, fontWeight: "bold", marginLeft: 4 }
+  resolvedText: { color: "#AAA", fontSize: 12, fontWeight: "bold", marginLeft: 4 },
+
+  reasonSelectBtn: {
+    backgroundColor: '#2A2A2A',
+    paddingVertical: 14,
+    borderRadius: 8,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#444'
+  },
+  reasonSelectText: {
+    color: 'white',
+    fontSize: 14
+  },
+
+  // ✅ [추가] 탭 및 상세 모달 스타일
+  tabContainer: {
+    flexDirection: 'row',
+    borderBottomWidth: 1,
+    borderBottomColor: '#333',
+  },
+  tabButton: {
+    flex: 1,
+    paddingVertical: 14,
+    alignItems: 'center',
+    borderBottomWidth: 2,
+    borderBottomColor: 'transparent',
+  },
+  activeTabButton: {
+    borderBottomColor: theme.primary,
+  },
+  tabText: {
+    color: '#888',
+    fontSize: 15,
+    fontWeight: 'bold',
+  },
+  activeTabText: {
+    color: 'white',
+  },
+  
+  // 유저 리스트 스타일
+  targetNameText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 2
+  },
+  countBadge: {
+    backgroundColor: '#FF4444',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  countText: {
+    color: 'white',
+    fontWeight: 'bold',
+    fontSize: 12
+  },
+
+  // 상세 내역 스타일
+  historyItem: {
+    backgroundColor: '#222',
+    padding: 10,
+    borderRadius: 8,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#333'
+  },
+  historyReason: {
+    color: 'white',
+    fontWeight: 'bold',
+    fontSize: 13,
+    marginBottom: 2
+  },
+  historyContent: {
+    color: '#CCC',
+    fontSize: 12,
+  },
+  historyDate: {
+    color: '#666',
+    fontSize: 11,
+    marginTop: 2,
+    alignSelf: 'flex-end'
+  }
 });

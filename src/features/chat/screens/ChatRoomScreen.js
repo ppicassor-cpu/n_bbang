@@ -10,7 +10,7 @@ import { useHeaderHeight } from "@react-navigation/elements";
 import { theme } from "../../../theme";
 import { MaterialIcons, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useAppContext } from "../../../app/providers/AppContext";
-import { subscribeMessages, sendMessage, markAsRead, leaveRoom, leaveRoomAsOwner } from "../services/chatService";
+import { subscribeMessages, sendMessage, markAsRead, leaveRoom, leaveRoomAsOwner, loadCachedMessages, saveCachedMessages } from "../services/chatService";
 import { db, storage } from "../../../firebaseConfig";
 import { doc, getDoc, onSnapshot, collection, addDoc, query, where, getDocs, updateDoc } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
@@ -363,15 +363,66 @@ export default function ChatRoomScreen({ route, navigation }) {
     };
   }, [insets.bottom, keyboardHeight]);
 
+  // ✅ [수정] 초기 로딩 및 구독 로직 (캐싱 적용)
   useEffect(() => {
     if (!roomId) return;
-    const unsubscribe = subscribeMessages(roomId, (newMessages) => {
-      setMessages(newMessages);
-      setLoading(false);
-      isLoadingMoreRef.current = false;
-    }, messageLimit);
-    return () => unsubscribe();
-  }, [roomId, messageLimit]);
+
+    let unsubscribe = () => {};
+
+    const initChat = async () => {
+      setLoading(true);
+
+      // 1. 💾 로컬 캐시 먼저 로드 (비용 절약)
+      const cached = await loadCachedMessages(roomId);
+      let lastMsgDate = null;
+
+      if (cached && cached.length > 0) {
+        setMessages(cached);
+        // 캐시된 가장 최신 메시지의 시간 찾기 (보통 0번 인덱스)
+        if (cached[0]?.createdAt instanceof Date) {
+          lastMsgDate = cached[0].createdAt;
+        }
+      }
+
+      // 2. 📡 파이어베이스 구독 (캐시된 마지막 시간 이후 데이터만 요청)
+      unsubscribe = subscribeMessages(roomId, (newItems) => {
+        if (!newItems || newItems.length === 0) {
+          setLoading(false);
+          return;
+        }
+
+        setMessages((prev) => {
+          // 기존 메시지(prev)와 새 메시지(newItems) 합치기
+          const combined = [...prev, ...newItems]; 
+          
+          // ID 기준 중복 제거
+          const uniqueMap = new Map();
+          combined.forEach((m) => uniqueMap.set(m.id, m));
+          
+          // 시간순 정렬 (최신이 위로 오게 내림차순 DESC)
+          const sorted = Array.from(uniqueMap.values()).sort((a, b) => {
+             const tA = a.createdAt ? a.createdAt.getTime() : 0;
+             const tB = b.createdAt ? b.createdAt.getTime() : 0;
+             return tB - tA; 
+          });
+
+          // 💾 합쳐진 최신 상태를 로컬에 저장 (500개 제한)
+          saveCachedMessages(roomId, sorted); 
+
+          return sorted;
+        });
+        
+        setLoading(false);
+        isLoadingMoreRef.current = false;
+      }, lastMsgDate); // 🔥 마지막 시간을 넘겨주어 쿼리 비용 최적화
+    };
+
+    initChat();
+
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  }, [roomId]); // messageLimit 의존성 제거
 
   useEffect(() => {
     if (!roomId) return;

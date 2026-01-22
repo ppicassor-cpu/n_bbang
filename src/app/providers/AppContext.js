@@ -286,6 +286,8 @@ const isBooting = !initialReady;
   useEffect(() => {
     isAdminRef.current = isAdmin;
   }, [isAdmin]);
+  const [banModalVisible, setBanModalVisible] = useState(false);
+  const [banModalMessage, setBanModalMessage] = useState("");
 
   // ✅ [추가] (stores) 작성자 admin 여부 캐시 (ownerIsAdmin 보강용)
   const ownerAdminCacheRef = useRef({}); // { [uid]: boolean }
@@ -897,6 +899,41 @@ const isBooting = !initialReady;
     return false;
   }
 };
+  const checkBanStatus = async (uid) => {
+    try {
+      const userRef = doc(db, "users", uid);
+      const userSnap = await getDoc(userRef);
+      if (!userSnap.exists()) return;
+
+      const data = userSnap.data();
+      const reason = data.banReason || "운영 정책 위반";
+      const nick = data.displayName || "회원";
+
+      // 1. 영구 정지 체크
+      if (data.isBanned) {
+        setBanModalMessage(`${nick}님의 계정은 [${reason}] 사유로 영구 정지되어 앱을 사용할 수 없습니다.`);
+        setBanModalVisible(true);
+        await signOut(auth); // 강제 로그아웃
+        throw new Error("BANNED");
+      }
+
+      // 2. 기간 정지 체크
+      if (data.suspendedUntil) {
+        const releaseDate = new Date(data.suspendedUntil);
+        const now = new Date();
+        
+        if (now < releaseDate) {
+          const dateStr = releaseDate.toLocaleDateString();
+          setBanModalMessage(`${nick}님의 계정은 [${reason}] 사유로 ${dateStr}까지 앱을 사용할 수 없습니다.`);
+          setBanModalVisible(true);
+          await signOut(auth); // 강제 로그아웃
+          throw new Error("SUSPENDED");
+        }
+      }
+    } catch (e) {
+      throw e; // 상위 로직 중단용 에러 전파
+    }
+  };
 
   // ✅ 동 표시 정책 반영: homeDong 변경 시 currentLocation 동기화
   useEffect(() => {
@@ -948,6 +985,16 @@ const isBooting = !initialReady;
 
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setAuthChecked(true);
+      if (currentUser) {
+        try {
+          await checkBanStatus(currentUser.uid);
+        } catch (e) {
+          // 정지된 유저라면 여기서 로직 중단 (User 세팅 안 함)
+          setUser(null);
+          rcLoggedInUidRef.current = null;
+          return;
+        }
+      }
       setUser(currentUser);
 
       if (customerInfoListener && Purchases.removeCustomerInfoUpdateListener) {
@@ -2336,6 +2383,13 @@ const applyBoostToContent = async ({ contentType = "post", contentId, mode = "fr
         type="alert"
         onConfirm={() => setModalVisible(false)}
         onCancel={() => setModalVisible(false)}
+      />
+      <CustomModal 
+        visible={banModalVisible}
+        title="서비스 이용 제한"
+        message={banModalMessage}
+        onConfirm={() => setBanModalVisible(false)}
+        confirmText="확인"
       />
     </AppContext.Provider>
   );

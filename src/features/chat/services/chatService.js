@@ -24,6 +24,8 @@ import {
   increment,
   deleteField,
 } from "firebase/firestore";
+// ✅ [추가] 로컬 저장소 임포트
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const safeToDate = (v) => {
   try {
@@ -37,6 +39,36 @@ const safeToDate = (v) => {
     return null;
   } catch {
     return null;
+  }
+};
+
+// ✅ [추가] 캐시 키 생성
+const getCacheKey = (roomId) => `CHAT_CACHE_V1_${roomId}`;
+
+// ✅ [추가] 로컬 메시지 불러오기
+export const loadCachedMessages = async (roomId) => {
+  try {
+    const json = await AsyncStorage.getItem(getCacheKey(roomId));
+    if (!json) return [];
+    const parsed = JSON.parse(json);
+    return parsed.map((msg) => ({
+      ...msg,
+      createdAt: safeToDate(msg.createdAt),
+    }));
+  } catch (e) {
+    return [];
+  }
+};
+
+// ✅ [추가] 로컬 메시지 저장하기
+export const saveCachedMessages = async (roomId, messages) => {
+  try {
+    // 용량 관리를 위해 최신 500개만 저장
+    const toSave = messages.slice(0, 500);
+    const json = JSON.stringify(toSave);
+    await AsyncStorage.setItem(getCacheKey(roomId), json);
+  } catch (e) {
+    console.error("캐시 저장 실패", e);
   }
 };
 
@@ -202,6 +234,21 @@ if (isPostRoom && !resolvedPostOwnerId && postId) {
       await updateDoc(roomRef, {
         participants: arrayUnion(...participantsToAdd),
       });
+
+      // ✅ [추가] 내가 참여자로 추가되는 경우(신규/재입장) 시스템 입장 메시지 전송
+      if (participantsToAdd.includes(userId)) {
+        const myName = await getMyDisplayName();
+        await addDoc(collection(db, "chatRooms", roomId, "messages"), {
+          text: `${myName}님이 입장했습니다.`,
+          senderId: "system",
+          senderNickname: "시스템",
+          actorId: userId,
+          displayName: myName,
+          type: "system",
+          createdAt: serverTimestamp(),
+          readBy: [userId],
+        });
+      }
     }
 
     // ✅ 이제부터 메타 업데이트 (내가 참여자인 상태에서만)
@@ -355,7 +402,7 @@ export const sendMessage = async (roomId, text, imageUrl = null, replyTo = null)
 
 
 // 3. 메시지 구독 (최신 100개 + 화면 시간순)
-export const subscribeMessages = (roomId, callback, take = 100) => {
+export const subscribeMessages = (roomId, callback, lastDate = null) => {
   if (!auth.currentUser) return () => {};
   if (!isValidRoomId(roomId)) return () => {};
   if (typeof callback !== "function") return () => {};
@@ -364,10 +411,15 @@ export const subscribeMessages = (roomId, callback, take = 100) => {
   const roomRef = doc(db, "chatRooms", roomId);
   const messagesRef = collection(db, "chatRooms", roomId, "messages");
 
-  const safeTakeRaw = Number(take);
-  const safeTake = Number.isFinite(safeTakeRaw) ? Math.max(1, Math.min(safeTakeRaw, 500)) : 100;
-
-  const q = query(messagesRef, orderBy("createdAt", "desc"), limit(safeTake));
+  // ✅ [수정] lastDate가 있으면 '이후' 데이터만 쿼리(비용 절감), 없으면 기존처럼 '최신' 쿼리
+  let q;
+  if (lastDate) {
+    // 캐시 이후 데이터는 시간순(ASC)으로 가져옴
+    q = query(messagesRef, orderBy("createdAt", "asc"), where("createdAt", ">", lastDate));
+  } else {
+    // 캐시 없을 땐 최신 50개(DESC)
+    q = query(messagesRef, orderBy("createdAt", "desc"), limit(50));
+  }
 
   let msgUnsubscribe = null;
 
@@ -383,27 +435,31 @@ export const subscribeMessages = (roomId, callback, take = 100) => {
 
     const effectiveDate =
       joinedDate && leftDate ? (leftDate > joinedDate ? leftDate : joinedDate)
-     : (joinedDate || leftDate);
+      : (joinedDate || leftDate);
 
     const filterTime = effectiveDate ? effectiveDate.getTime() - 1000 : 0;
     if (msgUnsubscribe) msgUnsubscribe();
 
     msgUnsubscribe = onSnapshot(q, (snapshot) => {
-      const allMessages = snapshot.docs
-        .map((d) => {
-          const data = d.data() || {};
+      let allMessages = snapshot.docs.map((d) => {
+        const data = d.data() || {};
 
-          const normalizedSenderId =
-            data.senderId || data.uid || data.userId || data.senderUid || data.fromUserId || data.ownerId || null;
+        const normalizedSenderId =
+          data.senderId || data.uid || data.userId || data.senderUid || data.fromUserId || data.ownerId || null;
 
-          return {
-            ...data,
-            senderId: normalizedSenderId,
-            createdAt: safeToDate(data.createdAt) || new Date(0),
-            id: d.id,
-          };
-        })
-        .reverse();
+        return {
+          ...data,
+          senderId: normalizedSenderId,
+          createdAt: safeToDate(data.createdAt) || new Date(0),
+          id: d.id,
+        };
+      });
+
+      // ✅ [수정] DESC 쿼리(캐시 없을 때)인 경우에만 뒤집어서 시간순(과거->미래) 정렬 맞춤
+      // ASC 쿼리(캐시 있을 때)는 이미 시간순이므로 reverse 불필요
+      if (!lastDate) {
+        allMessages = allMessages.reverse();
+      }
 
       const filtered = allMessages.filter((m) => {
         const t = m?.createdAt instanceof Date ? m.createdAt.getTime() : new Date(0).getTime();

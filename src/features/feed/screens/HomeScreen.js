@@ -801,7 +801,7 @@ const handleSaveNickname = async () => {
         >
           <View style={{ flexDirection: "row", alignItems: "center" }}>
             <Text style={styles.location}>{homeDong ? (currentLocation || "내 동네") : "내 동네 설정"}</Text>
-            {/* ✅ 동네 뱃지는 GPS(isVerified)가 아니라 '동네 확정 + 동네인증(homeDongVerified)' 기준 */}
+            {/* ✅ 동네 뱃지 (기존 코드 유지) */}
             <View style={[
               styles.miniBadge, 
               { backgroundColor: (homeDong && homeDongVerified) ? theme.primary : "rgba(255, 68, 68, 0.2)" },
@@ -818,10 +818,24 @@ const handleSaveNickname = async () => {
           </View>
         </TouchableOpacity>
 
-        <View style={{ flexDirection: "row", gap: 14, alignItems: "center" }}>
-                   <TouchableOpacity
+        {/* ✅ [수정] 우측 아이콘 그룹 (돋보기 / 채팅 / 프로필) */}
+        {/* gap을 14 -> 10으로 줄이고, marginRight를 4정도 줘서 벽에서 살짝 뗌 */}
+        <View style={{ flexDirection: "row", gap: 10, alignItems: "center", marginRight: 12 }}>
+          
+          {/* 🔍 [추가] 검색(돋보기) 아이콘 */}
+          <TouchableOpacity
+            onPress={() => navigation.navigate(ROUTES.SEARCH || "SearchScreen")}
+            activeOpacity={0.7}
+            style={{ padding: 4 }} // 터치 영역 확보
+          >
+            <Ionicons name="search" size={24} color="white" />
+          </TouchableOpacity>
+
+          {/* 💬 기존 채팅 아이콘 */}
+          <TouchableOpacity
             onPress={() => navigation.navigate(ROUTES.CHAT_ROOMS)}
             activeOpacity={0.7}
+            style={{ padding: 4 }}
           >
             <View style={{ position: "relative" }}>
               <Ionicons name="chatbubbles-outline" size={24} color="white" />
@@ -835,12 +849,13 @@ const handleSaveNickname = async () => {
             </View>
           </TouchableOpacity>
 
-
+          {/* 👤 기존 프로필 아이콘 */}
           <TouchableOpacity
             onPress={() => navigation.navigate(ROUTES?.PROFILE || "Profile")}
             activeOpacity={0.7}
+            style={{ padding: 4 }}
           >
-            <Ionicons name="person-circle-outline" size={26} color="white" />
+            <Ionicons name="person-circle-outline" size={28} color="white" />
           </TouchableOpacity>
         </View>
       </View>
