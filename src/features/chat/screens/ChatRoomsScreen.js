@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator } from "react-native";
 import { MaterialIcons, Ionicons } from "@expo/vector-icons"; // ✅ Ionicons 추가
-
+import { auth } from "../../../firebaseConfig"; // ✅ [추가] 내 uid로 unreadCounts 읽기
 import { theme } from "../../../theme";
 import { ROUTES } from "../../../app/navigation/routes";
 import { subscribeMyRooms } from "../../chat/services/chatService";
@@ -69,6 +69,21 @@ export default function ChatRoomsScreen({ navigation }) {
           </Text>
         </View>
         <View style={{ alignItems: "flex-end" }}>
+          {(() => {
+            const myUid = auth?.currentUser?.uid;
+            const raw = myUid ? item?.unreadCounts?.[myUid] : 0;
+            const n = Number(raw || 0);
+            const unread = Number.isFinite(n) ? Math.max(0, n) : 0;
+            if (unread <= 0) return null;
+
+            const badgeText = unread > 99 ? "99+" : String(unread);
+
+            return (
+              <View style={styles.unreadBadge}>
+                <Text style={styles.unreadBadgeText}>{badgeText}</Text>
+              </View>
+            );
+          })()}
           <Text style={styles.time}>{formatTime(item.updatedAt)}</Text>
         </View>
       </TouchableOpacity>
@@ -110,4 +125,17 @@ const styles = StyleSheet.create({
   title: { color: "white", fontSize: 16, fontWeight: "bold", marginBottom: 4 },
   lastMessage: { color: "#888", fontSize: 14 },
   time: { color: "#666", fontSize: 12, marginLeft: 8 },
+
+  // ✅ [추가] 카톡 스타일 unread 숫자 뱃지
+  unreadBadge: {
+    minWidth: 20,
+    height: 20,
+    paddingHorizontal: 6,
+    borderRadius: 10,
+    backgroundColor: "#FF3B30",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 6,
+  },
+  unreadBadgeText: { color: "white", fontSize: 12, fontWeight: "bold" },
 });

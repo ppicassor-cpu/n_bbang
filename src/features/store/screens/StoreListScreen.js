@@ -6,10 +6,12 @@ import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, 
 import { Image } from "expo-image";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { MaterialIcons, Ionicons, FontAwesome5 } from "@expo/vector-icons"; 
+import { useFocusEffect } from "@react-navigation/native";
 import { theme } from "../../../theme";
 import { ROUTES } from "../../../app/navigation/routes";
 import { useAppContext } from "../../../app/providers/AppContext";
 import CustomModal from "../../../components/CustomModal";
+
 
 // ✅ 리스트 아이템 컴포넌트 (최적화)
 const StoreItem = React.memo(({ item, onPress }) => {
@@ -85,8 +87,12 @@ export default function StoreListScreen({ navigation }) {
     loadMoreStores, // ✅ 가게 목록 더 불러오기 함수 (없으면 loadMorePosts 사용)
     checkHotplaceEligibility,
     purchaseHotplaceExtra,
-    isPremium
+    isPremium,
+
+    // ✅ [추가] 부스트 만료 자동 정리(포커스 1회 호출용)
+    clearExpiredActiveBoostIfNeeded
   } = useAppContext();
+
   
   const insets = useSafeAreaInsets();
   const [refreshing, setRefreshing] = useState(false);
@@ -100,7 +106,17 @@ export default function StoreListScreen({ navigation }) {
   // ✅ 라우트 상수
   const MEMBERSHIP_ROUTE = ROUTES?.MEMBERSHIP || ROUTES?.PREMIUM || ROUTES?.SUBSCRIPTION || ROUTES?.PROFILE;
   const HOTPLACE_WRITE_ROUTE = ROUTES?.STORE_WRITE || ROUTES?.HOTPLACE_WRITE || ROUTES?.STORE_WRITE_SCREEN;
-
+  useFocusEffect(
+    useCallback(() => {
+      (async () => {
+        try {
+          if (typeof clearExpiredActiveBoostIfNeeded === "function") {
+            await clearExpiredActiveBoostIfNeeded();
+          }
+        } catch (e) {}
+      })();
+    }, [clearExpiredActiveBoostIfNeeded])
+  );
   // =================================================================
   // 1. 데이터 가공 및 필터링 (관리자 권한 & 거리 계산 적용)
   // =================================================================

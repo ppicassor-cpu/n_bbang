@@ -1,7 +1,7 @@
 ﻿// FILE: src/features/post/screens/DetailScreen.js
 
 import React, { useState, useEffect, useMemo } from "react";
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Dimensions, ActivityIndicator, Alert } from "react-native";
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Dimensions, ActivityIndicator, Alert, Modal } from "react-native";
 import { Image } from "expo-image";
 import ImageView from "react-native-image-viewing"; 
 import MapView, { Marker } from "react-native-maps";
@@ -9,8 +9,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { MaterialIcons } from "@expo/vector-icons";
 
 // ✅ [추가] 닉네임 조회 및 숫자 증가를 위해 firebase 관련 모듈 추가
-// increment 추가됨
-import { doc, getDoc, updateDoc, increment, runTransaction, arrayUnion } from "firebase/firestore";
+import { doc, getDoc, updateDoc, increment, runTransaction, arrayUnion, serverTimestamp, collection } from "firebase/firestore";
 import { db } from "../../../firebaseConfig";
 
 import { theme } from "../../../theme";
@@ -35,12 +34,17 @@ export default function DetailScreen({ route, navigation }) {
     const { 
     user, deletePost, posts, updatePost, reportUser, blockUser,
     checkBoostEligibility, applyBoostToContent, clearExpiredActiveBoostIfNeeded,
-    isPremium, membershipType
+    isPremium, membershipType,
+    // ✅ [추가] 부스트 티켓 개수 가져오기
+    boostTickets,
+    addBoostTicket // 혹시 필요할까봐 가져옴 (여기선 안씀)
   } = useAppContext(); 
  
   const insets = useSafeAreaInsets();
   
   const [post, setPost] = useState(initialPost || null);
+  const statusBtnRef = React.useRef(null);
+  const [dropdownCoords, setDropdownCoords] = useState({ x: 0, y: 0, width: 0, height: 0 });
   const [imgPage, setImgPage] = useState(1);
 
   // ✅ [추가] 작성자 닉네임 상태
@@ -172,7 +176,7 @@ export default function DetailScreen({ route, navigation }) {
           const roomRef = doc(db, "chatRooms", roomId);
           const postRef = doc(db, "posts", post.id);
 
-          await runTransaction(db, async (tx) => {
+                    await runTransaction(db, async (tx) => {
             const roomSnap = await tx.get(roomRef);
             if (!roomSnap.exists()) {
               throw new Error("chatRooms 문서가 존재하지 않습니다.");
@@ -181,21 +185,45 @@ export default function DetailScreen({ route, navigation }) {
             const roomData = roomSnap.data() || {};
             const participants = Array.isArray(roomData.participants) ? roomData.participants : [];
 
-            // 이미 참여한 유저면 중복 증가 방지
+            const joinedKey = `joinedAt_${user.uid}`;
+            const hasJoinedAt = !!roomData?.[joinedKey];
+
+            // 이미 참여한 유저면 중복 증가 방지 + joinedAt 누락 보정
             if (participants.includes(user.uid)) {
+              if (!hasJoinedAt) {
+                tx.update(roomRef, {
+                  [joinedKey]: serverTimestamp(),
+                });
+              }
               return;
             }
 
-            // 참여 기록 + 카운트 증가
+            // 참여 기록 + 카운트 증가 (participants 추가와 joinedAt 기록을 같은 트랜잭션에서)
             tx.update(roomRef, {
               participants: arrayUnion(user.uid),
+              [joinedKey]: serverTimestamp(),
             });
             tx.update(postRef, {
               currentParticipants: increment(1),
             });
 
+            // ✅ 2. [추가됨] 입장 시스템 메시지 생성 (여기에 닉네임을 박아넣음)
+            // (user.displayName이 바로 "별명"입니다)
+            const newMsgRef = doc(collection(db, "chatRooms", roomId, "messages"));
+            tx.set(newMsgRef, {
+              text: "님이 입장했습니다.", // 렌더링 시 닉네임 조합됨
+              createdAt: serverTimestamp(),
+              senderId: "system",
+              type: "system",
+              actorId: user.uid,
+              // 👇 여기가 핵심! 내 최신 닉네임을 같이 저장
+              displayName: user.displayName || "알 수 없음", 
+              actorDisplayName: user.displayName || "알 수 없음" 
+            });
+
             didIncrement = true;
           });
+
 
           // 트랜잭션 성공 시에만 로컬 UI 반영
           if (didIncrement) {
@@ -220,6 +248,18 @@ export default function DetailScreen({ route, navigation }) {
     } finally {
       setLoading(false);
     }
+  };
+
+  const toggleDropdown = () => {
+    if (isDropdownOpen) {
+      setIsDropdownOpen(false);
+      return;
+    }
+    // 버튼의 화면상 위치 측정
+    statusBtnRef.current?.measure((fx, fy, width, height, px, py) => {
+      setDropdownCoords({ x: px, y: py, width, height });
+      setIsDropdownOpen(true);
+    });
   };
 
   const handleEdit = () => {
@@ -301,7 +341,7 @@ export default function DetailScreen({ route, navigation }) {
       Boost(부스트)
   ========================= */
 
-  // ✅ boostUntil 기반 안전 판정 (Firestore Timestamp / number / string 모두 대응)
+  // ✅ boostUntil 기반 안전 판정
   const _toMs = (v) => {
     if (!v) return 0;
     if (typeof v === "number") return v;
@@ -313,7 +353,6 @@ export default function DetailScreen({ route, navigation }) {
   const _isBoostActive = () => _toMs(post?.boostUntil) > Date.now();
 
   const openBoostModal = async () => {
-    // ✅ 이미 이 글이 boostUntil 유효면, 모달 자체를 막음 (중복 부스트 방지)
     if (_isBoostActive()) {
       setAlertMsg("이미 부스트가 진행 중인 글입니다.");
       setErrorModalVisible(true);
@@ -326,7 +365,6 @@ export default function DetailScreen({ route, navigation }) {
       }
     } catch {}
 
-    // ✅ clear 이후에도 여전히 유효하면 방지
     if (_isBoostActive()) {
       setAlertMsg("이미 부스트가 진행 중인 글입니다.");
       setErrorModalVisible(true);
@@ -346,10 +384,10 @@ export default function DetailScreen({ route, navigation }) {
     return "부스트 조건을 만족하지 않습니다.";
   };
 
+  // ✅ [수정] 티켓 사용 로직 추가된 runBoost
   const runBoost = async (mode) => {
     if (!post?.id) return;
 
-    // ✅ 실행 직전에도 boostUntil 재확인 (더블탭/레이스 방지)
     if (_isBoostActive()) {
       setBoostModalVisible(false);
       setAlertMsg("이미 부스트가 진행 중인 글입니다.");
@@ -357,7 +395,6 @@ export default function DetailScreen({ route, navigation }) {
       return;
     }
 
-    // ✅ 필수 함수 없으면 즉시 실패 처리
     if (typeof checkBoostEligibility !== "function" || typeof applyBoostToContent !== "function") {
       setBoostModalVisible(false);
       setAlertMsg("부스트 기능이 아직 준비되지 않았습니다.");
@@ -365,21 +402,36 @@ export default function DetailScreen({ route, navigation }) {
       return;
     }
 
+    // 1. 티켓 모드일 경우 선검증 및 차감
+    if (mode === "ticket") {
+        if (boostTickets < 1) {
+            setBoostModalVisible(false);
+            setAlertMsg("보유한 부스트 티켓이 없습니다.");
+            setErrorModalVisible(true);
+            return;
+        }
+    }
+
     setBoostLoading(true);
     try {
-      const elig = await checkBoostEligibility({
-        contentType: "post",
-        contentId: post.id,
-        mode,
-      });
+      // 2. 무료/멤버십은 자격 검증 (티켓은 위에서 개수만 확인하고 패스)
+      if (mode !== "ticket") {
+          const elig = await checkBoostEligibility({
+            contentType: "post",
+            contentId: post.id,
+            mode,
+          });
 
-      if (!elig?.ok) {
-        setBoostModalVisible(false);
-        setAlertMsg(_boostErrorMessage(elig));
-        setErrorModalVisible(true);
-        return;
+          if (!elig?.ok) {
+            setBoostModalVisible(false);
+            setAlertMsg(_boostErrorMessage(elig));
+            setErrorModalVisible(true);
+            setBoostLoading(false); 
+            return;
+          }
       }
 
+      // 3. 실제 부스트 적용 (DB 기록)
       const res = await applyBoostToContent({
         contentType: "post",
         contentId: post.id,
@@ -388,7 +440,19 @@ export default function DetailScreen({ route, navigation }) {
       });
 
       if (res?.ok) {
-        // ✅ 성공 즉시 로컬 상태 반영 (boostUntil 기준으로 HomeScreen 슬롯에 바로 반영되도록)
+        // 4. 티켓 모드였다면 DB에서 티켓 차감 (트랜잭션 후 처리)
+        if (mode === "ticket") {
+            try {
+                const userRef = doc(db, "users", user.uid);
+                await updateDoc(userRef, {
+                    boostTickets: increment(-1)
+                });
+            } catch (e) {
+                console.error("티켓 차감 실패:", e);
+                // (이미 부스트는 적용되었으므로 에러만 로그)
+            }
+        }
+
         const fallbackUntil = Date.now() + 6 * 60 * 60 * 1000;
         const nextBoostUntil = res?.boostUntil ?? res?.data?.boostUntil ?? fallbackUntil;
         const nextBoostAppliedAt = res?.boostAppliedAt ?? res?.data?.boostAppliedAt ?? Date.now();
@@ -472,51 +536,29 @@ export default function DetailScreen({ route, navigation }) {
             <View style={styles.dropdownContainer}>
               {isMyPost ? (
                 <TouchableOpacity 
-                  style={[styles.statusBtn, isFull && { borderColor: theme.danger }]}
-                  onPress={() => setIsDropdownOpen(!isDropdownOpen)}
-                >
-                  <Text style={[styles.statusBtnText, isFull && { color: theme.danger }]}>
+                  ref={statusBtnRef} 
+                  style={[
+                    styles.statusBtn, 
+                    isFull ? { borderColor: theme.danger } : { borderColor: theme.primary }]}                  
+                  onPress={toggleDropdown} 
+                >                  
+                  <Text style={[
+                    styles.statusBtnText, 
+                    isFull ? { color: theme.danger } : { color: theme.primary }]}>
                     {post.status || "모집중"}
-                  </Text>
+                  </Text>                 
                   <MaterialIcons name={isDropdownOpen ? "arrow-drop-up" : "arrow-drop-down"} size={20} color="white" />
                 </TouchableOpacity>
               ) : (
-                <TouchableOpacity style={{ padding: 5 }} onPress={() => setIsDropdownOpen(!isDropdownOpen)}>
+                <TouchableOpacity 
+                  ref={statusBtnRef} // ✅ Ref 연결 (남의 글일 때도)
+                  style={{ padding: 5 }} 
+                  onPress={toggleDropdown} // ✅ 함수 교체
+                >
                   <MaterialIcons name="more-vert" size={24} color="#888" />
                 </TouchableOpacity>
               )}
-
-              {/* 드롭다운 메뉴 */}
-              {isDropdownOpen && (
-                <View style={[styles.dropdownMenu, !isMyPost && { width: 160 }]}>
-                  {isMyPost ? (
-                    // 1. 내 글일 때: 상태 변경
-                    <>
-                      {["모집중", "마감"].map((s) => (
-                        <TouchableOpacity key={s} style={styles.menuItem} onPress={() => setTempStatus(s)}>
-                          <Text style={[styles.menuText, tempStatus === s && { color: theme.primary }]}>{s}</Text>
-                          {tempStatus === s && <MaterialIcons name="check" size={16} color={theme.primary} />}
-                        </TouchableOpacity>
-                      ))}
-                      {tempStatus !== post.status && (
-                        <TouchableOpacity style={styles.saveBtn} onPress={handleStatusUpdate} disabled={loading}>
-                          {loading ? <ActivityIndicator size="small" color="black" /> : <Text style={styles.saveBtnText}>변경 확인</Text>}
-                        </TouchableOpacity>
-                      )}
-                    </>
-                  ) : (
-                    // 2. 남의 글일 때: 신고/차단
-                    <>
-                      <TouchableOpacity style={styles.menuItem} onPress={handleReport}>
-                        <Text style={{ color: theme.danger, fontSize: 14 }}>🚨 신고하기</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity style={[styles.menuItem, { borderBottomWidth: 0 }]} onPress={handleBlock}>
-                        <Text style={{ color: "#AAA", fontSize: 14 }}>🚫 이 사용자 차단</Text>
-                      </TouchableOpacity>
-                    </>
-                  )}
-                </View>
-              )}
+              {/* ❌ 여기서 드롭다운 메뉴 코드 삭제됨 (맨 아래 모달로 이동) */}
             </View>
           </View>
 
@@ -583,12 +625,28 @@ export default function DetailScreen({ route, navigation }) {
               <Text style={{ color: "#FF6B6B" }}>삭제</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity style={[styles.actionBtn, { backgroundColor: theme.primary }]} onPress={handleEdit}>
-              <Text style={{ color: "black" }}>수정</Text>
+            {/* ✅ [수정] 배경 제거, 테두리만 연녹색 적용 */}
+            <TouchableOpacity 
+              style={[
+                styles.actionBtn, 
+                { 
+                  backgroundColor: "#333", // 배경은 어둡게
+                  borderWidth: 1, 
+                  borderColor: theme.primary // 테두리 연녹색
+                }
+              ]} 
+              onPress={handleEdit}
+            >
+              {/* 글자색도 연녹색으로 변경하여 통일감 부여 */}
+              <Text style={{ color: theme.primary, fontWeight: 'bold' }}>수정</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={styles.boostBtn}
+              // ✅ [수정] 부스트중(_isBoostActive)일 때 두꺼운 테두리(borderWidth: 2) 적용
+              style={[
+                styles.boostBtn,
+                _isBoostActive() && { borderWidth: 2, borderColor: theme.primary }
+              ]}
               onPress={openBoostModal}
               disabled={boostLoading || _isBoostActive()}
             >
@@ -627,7 +685,7 @@ export default function DetailScreen({ route, navigation }) {
       />
       <CustomModal visible={errorModalVisible} title="오류" message={alertMsg} onConfirm={() => setErrorModalVisible(false)} />
       <CustomModal visible={deleteModalVisible} title="삭제" message="정말로 삭제하시겠습니까?" type="confirm" onConfirm={handleDelete} onCancel={() => setDeleteModalVisible(false)} />
-        {/* ✅ [추가] 부스트 모달 */}
+        {/* ✅ [수정] 부스트 모달 (티켓 사용 버튼 추가) */}
       <CustomModal
         visible={boostModalVisible}
         title="🚀 부스트"
@@ -649,8 +707,19 @@ export default function DetailScreen({ route, navigation }) {
             onPress={() => runBoost("membership")}
             disabled={boostLoading || !isPremium}
           >
-            <Text style={styles.boostOptionText}>
-              멤버십 부스트 (월 {membershipType === "yearly" ? "4" : membershipType === "monthly" ? "2" : "0"}회 / 6시간)
+            <Text style={[styles.boostOptionText, !isPremium && { color: "grey" }]}>
+              멤버십 부스트 (추가 1회 / 6시간)
+            </Text>
+          </TouchableOpacity>
+
+          {/* ✅ [추가] 티켓 사용 버튼 */}
+          <TouchableOpacity
+            style={styles.boostOptionBtn}
+            onPress={() => runBoost("ticket")}
+            disabled={boostLoading || boostTickets < 1}
+          >
+            <Text style={[styles.boostOptionText, boostTickets < 1 && { color: "grey" }]}>
+              🎫 부스트 티켓 사용 (보유: {boostTickets}장)
             </Text>
           </TouchableOpacity>
 
@@ -708,6 +777,52 @@ export default function DetailScreen({ route, navigation }) {
         onConfirm={confirmBlock} 
         onCancel={() => setBlockModalVisible(false)} 
       />
+      <Modal visible={isDropdownOpen} transparent animationType="fade">
+        <TouchableOpacity 
+          style={styles.dropdownBackdrop} 
+          activeOpacity={1} 
+          onPress={() => setIsDropdownOpen(false)}
+        >
+          {/* 위치 계산: 버튼 바로 아래, 오른쪽 정렬 */}
+          <View 
+            style={[
+              styles.dropdownMenu, 
+              !isMyPost && { width: 160 },
+              { 
+                top: dropdownCoords.y + dropdownCoords.height + 5, 
+                right: SCREEN_WIDTH - (dropdownCoords.x + dropdownCoords.width) 
+              }
+            ]}
+          >
+            {isMyPost ? (
+              // 1. 내 글일 때: 상태 변경
+              <>
+                {["모집중", "마감"].map((s) => (
+                  <TouchableOpacity key={s} style={styles.menuItem} onPress={() => setTempStatus(s)}>
+                    <Text style={[styles.menuText, tempStatus === s && { color: theme.primary }]}>{s}</Text>
+                    {tempStatus === s && <MaterialIcons name="check" size={16} color={theme.primary} />}
+                  </TouchableOpacity>
+                ))}
+                {tempStatus !== post.status && (
+                  <TouchableOpacity style={styles.saveBtn} onPress={handleStatusUpdate} disabled={loading}>
+                    {loading ? <ActivityIndicator size="small" color="black" /> : <Text style={styles.saveBtnText}>변경 확인</Text>}
+                  </TouchableOpacity>
+                )}
+              </>
+            ) : (
+              // 2. 남의 글일 때: 신고/차단
+              <>
+                <TouchableOpacity style={styles.menuItem} onPress={handleReport}>
+                  <Text style={{ color: theme.danger, fontSize: 14 }}>🚨 신고하기</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.menuItem, { borderBottomWidth: 0 }]} onPress={handleBlock}>
+                  <Text style={{ color: "#AAA", fontSize: 14 }}>🚫 이 사용자 차단</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       {/* ✅ [추가] 이미지 전체화면 확대 모달 */}
       <ImageView
@@ -731,6 +846,10 @@ const styles = StyleSheet.create({
   pageIndicator: { position: "absolute", bottom: 15, right: 15, backgroundColor: "rgba(0,0,0,0.6)", paddingHorizontal: 12, paddingVertical: 4, borderRadius: 15 },
   pageText: { color: "white", fontWeight: "bold", fontSize: 12 },
   body: { padding: 24 },
+  dropdownBackdrop: { 
+    flex: 1, 
+    backgroundColor: 'transparent' 
+  },
   titleRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 },
   title: { flex: 1, color: "white", fontSize: 22, fontWeight: "bold", marginRight: 10 },
   dropdownContainer: { position: "relative", zIndex: 10, alignItems: "flex-end" },
@@ -799,4 +918,3 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
   }
 });
-

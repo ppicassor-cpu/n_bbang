@@ -27,7 +27,7 @@
       "distribution": "store",
       "channel": "production",
       "android": {
-        "buildType": "apk"
+        "buildType": "app-bundle"
       },
       "env": {
         "REVENUECAT_PUBLIC_SDK_KEY": "$(REVENUECAT_PUBLIC_SDK_KEY)",

@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
   View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet, Image,
-  Platform, ActivityIndicator, Keyboard, Animated, Alert, Vibration, Dimensions // ✅ Dimensions 추가
+  Platform, ActivityIndicator, Keyboard, Animated, Alert, Vibration, Dimensions
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useHeaderHeight } from "@react-navigation/elements";
@@ -14,7 +14,7 @@ import { subscribeMessages, sendMessage, markAsRead, leaveRoom, leaveRoomAsOwner
 import { db, storage } from "../../../firebaseConfig";
 import { doc, getDoc, onSnapshot, collection, addDoc, query, where, getDocs, updateDoc } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import * as ImagePicker from "expo-image-picker";
+
 import * as ImageManipulator from "expo-image-manipulator";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
@@ -42,34 +42,34 @@ export default function ChatRoomScreen({ route, navigation }) {
   const [senderMap, setSenderMap] = useState({});
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(true);
-  const [myJoinedAt, setMyJoinedAt] = useState(null);
+  const [myJoinedAt, setMyJoinedAt] = useState(new Date());
   const isLoadingMoreRef = useRef(false);
 
-const [messageLimit, setMessageLimit] = useState(50);
+  const didResetUnreadCountsRef = useRef(false);
 
-// ✅ [수정] 더 불러오기 핸들러 (스크롤이 끝에 닿으면 실행)
-const handleLoadMore = () => {
-  // ✅ 중복 트리거 방지
-  if (isLoadingMoreRef.current) return;
+  const [messageLimit, setMessageLimit] = useState(50);
 
-  // 로딩 중이 아니고, 메시지가 어느 정도 있을 때만 실행
-  if (!loading && messages.length >= messageLimit) {
-    isLoadingMoreRef.current = true; // ✅ 로드 시작 잠금
-    setMessageLimit((prev) => prev + 50); // 50개씩 더 불러옴
-  }
-};
+  // ✅ [수정] 더 불러오기 핸들러
+  const handleLoadMore = () => {
+    if (isLoadingMoreRef.current) return;
+    if (!loading && messages.length >= messageLimit) {
+      isLoadingMoreRef.current = true;
+      setMessageLimit((prev) => prev + 50);
+    }
+  };
 
-  // 최근 채팅 버튼 상태
+  useEffect(() => {
+    didResetUnreadCountsRef.current = false;
+  }, [roomId, user?.uid]);
+
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   
   const [totalParticipants, setTotalParticipants] = useState(0);
   const [roomOwnerId, setRoomOwnerId] = useState(null);
   const [isClosed, setIsClosed] = useState(false);
 
-  // ✅ [복구] 게시글 정보 상태 (무료나눔 포함)
   const [linkedPost, setLinkedPost] = useState(null);
 
-  // ✅ [추가] 공지, 답장, 숨김 메시지, 메뉴 상태
   const [roomNotice, setRoomNotice] = useState(null);
   const [isNoticeHidden, setIsNoticeHidden] = useState(false);
   const lastNoticeIdRef = useRef(null);
@@ -111,18 +111,14 @@ const handleLoadMore = () => {
   const keyboardHeightRef = useRef(0);
   const flatListRef = useRef(null);
 
-  // ✅ [추가] 헤더(확성기/점3개) 실제 위치 기반으로 메뉴를 “딱 붙여” 띄우기 위한 ref/pos
   const headerActionsRef = useRef(null);
   const [headerMenuPos, setHeaderMenuPos] = useState({ top: 0, right: 10 });
 
-  // ✅ [추가] 답장 원문 클릭 시 원본 메시지로 이동(없으면 더 불러온 뒤 이동)
   const pendingScrollToIdRef = useRef(null);
 
   const scrollToMessageById = (targetId) => {
     if (!targetId) return;
-
     const idx = filteredMessages.findIndex((m) => m.id === targetId);
-
     if (idx >= 0) {
       flatListRef.current?.scrollToIndex({
         index: idx,
@@ -131,8 +127,6 @@ const handleLoadMore = () => {
       });
       return;
     }
-
-    // 아직 로딩 안 된 경우: 더 불러오고, 로딩되면 이동 시도
     pendingScrollToIdRef.current = targetId;
     setMessageLimit((prev) => prev + 50);
   };
@@ -140,12 +134,9 @@ const handleLoadMore = () => {
   useEffect(() => {
     const targetId = pendingScrollToIdRef.current;
     if (!targetId) return;
-
     const idx = filteredMessages.findIndex((m) => m.id === targetId);
     if (idx < 0) return;
-
     pendingScrollToIdRef.current = null;
-
     setTimeout(() => {
       flatListRef.current?.scrollToIndex({
         index: idx,
@@ -156,10 +147,8 @@ const handleLoadMore = () => {
   }, [filteredMessages]);
 
   const isOwner = !!user?.uid && !!roomOwnerId && user.uid === roomOwnerId;
-
   const blockedList = Array.isArray(blockedUsers) ? blockedUsers : [];
   
-  // ✅ [수정] Inverted 모드 + 필터링 (차단/숨김)
   const filteredMessages = useMemo(() => {
     const list = messages.filter((msg) => {
       const isBlocked = msg.senderId !== "system" && blockedList.includes(msg.senderId);
@@ -169,7 +158,6 @@ const handleLoadMore = () => {
     return [...list].reverse();
   }, [messages, blockedList, hiddenMessageIds]);
 
-  // ✅ [추가] 숨김 메시지 로드 (AsyncStorage)
   useEffect(() => {
     const loadHidden = async () => {
       try {
@@ -180,37 +168,33 @@ const handleLoadMore = () => {
     loadHidden();
   }, [roomId]);
 
-  // ✅ [수정] 게시글 정보 불러오기 (무료나눔 ID 처리 강화)
   useEffect(() => {
     if (!roomId) return;
-
     const fetchLinkedPost = async () => {
       try {
         let targetPostId = null;
-
-        // 1. 먼저 채팅방 정보(chatRooms)를 조회해서 '진짜 postId'를 찾습니다.
         const roomRef = doc(db, "chatRooms", roomId);
         const roomSnap = await getDoc(roomRef);
-
         if (roomSnap.exists()) {
           const roomData = roomSnap.data();
-          // 채팅방 데이터 안에 postId 필드가 있다면 그걸 사용 (가장 정확함)
           if (roomData.postId) {
             targetPostId = roomData.postId;
           }
         }
-
-        // 2. 만약 DB에 postId가 없다면, 기존 방식대로 문자열에서 유추 (백업)
         if (!targetPostId) {
-           targetPostId = roomId.replace("post_", "").replace("free_", "");
+           if (roomId.startsWith("free_")) {
+             targetPostId = roomId.split("_")[1]; 
+           } else {
+             targetPostId = roomId.replace("post_", "");
+           }
         }
-
         if (!targetPostId) return;
-
-        // 3. 확보한 postId로 게시글 정보를 가져옵니다.
-        const postRef = doc(db, "posts", targetPostId);
-        const postSnap = await getDoc(postRef);
-        
+        let postRef = doc(db, "posts", targetPostId);
+        let postSnap = await getDoc(postRef);
+        if (!postSnap.exists()) {
+          postRef = doc(db, "free_posts", targetPostId);
+          postSnap = await getDoc(postRef);
+        }
         if (postSnap.exists()) {
           setLinkedPost({ id: postSnap.id, ...postSnap.data() });
         }
@@ -218,7 +202,6 @@ const handleLoadMore = () => {
         console.log("게시글 정보 로드 실패:", e);
       }
     };
-
     fetchLinkedPost();
   }, [roomId]);
 
@@ -231,7 +214,6 @@ const handleLoadMore = () => {
           collapsable={false}
           style={{ flexDirection: 'row', alignItems: 'center', marginRight: 5 }}
         >
-          {/* ✅ 공지가 있는데 숨겨진 경우 -> 노란 확성기 아이콘 표시 */}
           {roomNotice && isNoticeHidden && (
             <TouchableOpacity 
               onPress={() => setIsNoticeHidden(false)} 
@@ -241,29 +223,21 @@ const handleLoadMore = () => {
             </TouchableOpacity>
           )}
           
-          {/* ✅ [수정] 메뉴 버튼 클릭 시 headerRight 실제 좌표를 측정해서 “딱 붙여” 메뉴 띄움 */}
           <TouchableOpacity
             onPress={() => {
               if (isHeaderMenuOpen) {
                 setIsHeaderMenuOpen(false);
                 return;
               }
-
               requestAnimationFrame(() => {
                 if (!headerActionsRef.current) {
                   setIsHeaderMenuOpen(true);
                   return;
                 }
-
                 headerActionsRef.current.measureInWindow((x, y, w, h) => {
                   const { width: screenW } = Dimensions.get("window");
-
                   const right = Math.max(10, screenW - (x + w));
-
-                  // ✅ measureInWindow는 “전체 윈도우 기준”
-                  // ✅ 메뉴는 “스크린 컨텐츠 기준(헤더 아래가 0)”이므로 headerHeight만큼 보정
                   const top = Math.max(0, (y + h) - headerHeight) + 2;
-
                   setHeaderMenuPos({ top, right });
                   setIsHeaderMenuOpen(true);
                 });
@@ -276,7 +250,6 @@ const handleLoadMore = () => {
         </View>
       ),
     });
-    // ✅ 의존성 배열에 roomNotice, isNoticeHidden 추가 필수!
   }, [navigation, roomName, isGhost, roomNotice, isNoticeHidden]);
 
   useEffect(() => {
@@ -299,22 +272,26 @@ const handleLoadMore = () => {
     checkIfReported();
   }, [roomId, user, isGhost]);
 
-  // ✅ [수정] 방 정보 및 공지 실시간 구독 (공지 기능 추가)
   useEffect(() => {
     if (!roomId) return;
-
     const roomRef = doc(db, "chatRooms", roomId);
     const unsubRoom = onSnapshot(roomRef, (snap) => {
       if (!snap.exists()) return;
       const data = snap.data() || {};
       
-      setTotalParticipants(data.participants?.length || 0);
+      const __participants = Array.isArray(data.participants) ? data.participants : [];
+      const __participantIds = __participants
+        .map((p) => (p && typeof p === "object" ? p.uid : p))
+        .filter(Boolean);
+
+      const __uniqueIds = new Set(__participantIds);
+      if (data.ownerId) __uniqueIds.add(data.ownerId);
+
+      setTotalParticipants(__uniqueIds.size);
       setRoomOwnerId(data.ownerId || null);
       setIsClosed(!!data.isClosed);
       
-      // ✅ 공지 업데이트
       const nextNotice = data.notice || null;
-
       setRoomNotice(nextNotice);
 
       if (!nextNotice) {
@@ -322,39 +299,46 @@ const handleLoadMore = () => {
         setIsNoticeHidden(false);
       } else {
         const nextId = nextNotice?.id ?? null;
-
         if (nextId && nextId !== lastNoticeIdRef.current) {
           lastNoticeIdRef.current = nextId;
           setIsNoticeHidden(false);
         }
       }
 
-      // 내 입장 시간(joinedAt) 찾기
+      const myJoinedKey = `joinedAt_${user?.uid}`;
+      const myJoinedTs = data[myJoinedKey]; 
+
+      let isParticipant = false;
       if (data.participants && Array.isArray(data.participants)) {
-        const me = data.participants.find(p => (p.uid === user?.uid) || (p === user?.uid));
-        
-        if (me && me.joinedAt) {
-          const date = me.joinedAt.toDate ? me.joinedAt.toDate() : new Date(me.joinedAt);
-          setMyJoinedAt(date);
-        } else {
-          setMyJoinedAt(new Date(0)); 
-        }
+        isParticipant = data.participants.some(p => (p.uid === user?.uid) || (p === user?.uid));
+      }
+
+      if (isParticipant && myJoinedTs) {
+        const date = myJoinedTs.toDate ? myJoinedTs.toDate() : new Date(myJoinedTs);
+        setMyJoinedAt(date);
+      } else if (isParticipant) {
+        const roomCreatedAt =
+          typeof data?.createdAt?.toDate === "function"
+            ? data.createdAt.toDate()
+            : (data?.createdAt ? new Date(data.createdAt) : null);
+        setMyJoinedAt(
+          roomCreatedAt && !Number.isNaN(roomCreatedAt.getTime())
+            ? roomCreatedAt
+            : new Date(0)
+        );
       } else {
-        setMyJoinedAt(new Date(0)); 
+        setMyJoinedAt(new Date()); 
       }
     });
-
     return () => unsubRoom();
   }, [roomId, user]);
 
-  // 2. 키보드 리스너
   useEffect(() => {
     const showSubscription = Keyboard.addListener(
       Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow",
       (e) => {
         const nextH = e.endCoordinates.height - (Platform.OS === "ios" ? insets.bottom : 0);
         keyboardHeightRef.current = nextH;
-
         Animated.timing(keyboardHeight, {
           duration: Platform.OS === "ios" ? 250 : 100,
           toValue: nextH,
@@ -362,12 +346,10 @@ const handleLoadMore = () => {
         }).start();
       }
     );
-
     const hideSubscription = Keyboard.addListener(
       Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide",
       () => {
         keyboardHeightRef.current = 0;
-
         Animated.timing(keyboardHeight, {
           duration: Platform.OS === "ios" ? 250 : 100,
           toValue: 0,
@@ -375,45 +357,44 @@ const handleLoadMore = () => {
         }).start();
       }
     );
-
     return () => {
       showSubscription.remove();
       hideSubscription.remove();
     };
   }, [insets.bottom, keyboardHeight]);
 
-  // 3. 메시지 구독 및 필터링
   useEffect(() => {
-    if (!roomId || !myJoinedAt) return;
-
-    // ✅ [수정] messageLimit 인자 전달
+    if (!roomId) return;
     const unsubscribe = subscribeMessages(roomId, (newMessages) => {
-      const validMessages = newMessages.filter((msg) => {
-        if (msg.senderId === "system") {
-          const msgDate = msg.createdAt instanceof Date ? msg.createdAt : new Date(msg.createdAt);
-          return msgDate >= myJoinedAt;
-        }
-
-        const msgDate = msg.createdAt instanceof Date ? msg.createdAt : new Date(msg.createdAt);
-        return msgDate >= myJoinedAt;
-      });
-
-      setMessages(validMessages);
+      setMessages(newMessages);
       setLoading(false);
       isLoadingMoreRef.current = false;
-    }, messageLimit); // ✅ limit 전달
-
+    }, messageLimit);
     return () => unsubscribe();
-  }, [roomId, myJoinedAt, messageLimit]);
+  }, [roomId, messageLimit]);
+
+  useEffect(() => {
+    if (!roomId) return;
+    if (!user?.uid) return;
+    if (isGhost) return;
+    if (loading) return;
+    if (didResetUnreadCountsRef.current) return;
+    didResetUnreadCountsRef.current = true;
+    (async () => {
+      try {
+        await updateDoc(doc(db, "chatRooms", roomId), {
+          [`unreadCounts.${user.uid}`]: 0,
+        });
+      } catch (e) {}
+    })();
+  }, [roomId, user?.uid, isGhost, loading]);
 
   useEffect(() => {
     if (!user || messages.length === 0 || !roomId || isGhost) return;
-
     const unreadMsgIds = messages
       .filter((m) => m.senderId !== user.uid)
       .filter((m) => !m.readBy || !m.readBy.includes(user.uid))
       .map((m) => m.id);
-
     if (unreadMsgIds.length > 0) {
       markAsRead(roomId, unreadMsgIds);
     }
@@ -421,7 +402,6 @@ const handleLoadMore = () => {
 
   useEffect(() => {
     if (!messages || messages.length === 0) return;
-
     const normalSenderIds = messages.map((m) => m?.senderId).filter((id) => id && id !== "system");
     const systemActorIds = messages.filter((m) => m?.senderId === "system").map((m) => m?.actorId || m?.userId || m?.uid || m?.senderUid || m?.fromUserId || m?.targetUserId || null).filter((id) => id && id !== "system");
     const senderIds = Array.from(new Set([...normalSenderIds, ...systemActorIds]));
@@ -451,7 +431,7 @@ const handleLoadMore = () => {
     })();
   }, [messages]);
 
-  // ✅ [수정] 메시지 전송 (답장 포함)
+  // ✅ [수정] 메시지 전송 (답장 시 닉네임 처리 강화)
   const handleSend = async () => {
     if (isGhost) return;
     if (!roomId) return;
@@ -465,20 +445,19 @@ const handleLoadMore = () => {
 
     const msgData = {
       text: text.trim(),
-      // ✅ id / messageId 둘 다 저장 (서비스/DB 정규화 차이 대비)
       replyTo: replyTo ? {
         id: replyTo.id,
         messageId: replyTo.id,
         text: replyTo.text,
-        senderName: senderMap[replyTo.senderId]?.nickname || "사용자"
+        // ✅ [핵심] 여기서 senderName을 senderMap의 최신 닉네임으로 저장
+        senderName: senderMap[replyTo.senderId]?.nickname || senderMap[replyTo.senderId]?.displayName || "알 수 없음"
       } : null
     };
 
     setText("");
-    setReplyTo(null); // 답장 모드 해제
+    setReplyTo(null);
 
     try {
-      // ✅ 답장도 sendMessage로 통일 (replyTo 저장/정규화/lastMessage/updatedAt 일관성 보장)
       await sendMessage(roomId, msgData.text, null, msgData.replyTo);
     } catch (e) {
       console.error("전송 실패:", e);
@@ -489,27 +468,21 @@ const handleLoadMore = () => {
   const handleGallerySelect = async (selectedUris) => {
     if (isGhost || isClosed) return;
     if (!selectedUris || selectedUris.length === 0) return;
-
     setUploading(true);
-
     try {
       for (const uri of selectedUris) {
         if (!uri) continue;
-
         const manipResult = await ImageManipulator.manipulateAsync(
           uri,
           [{ resize: { width: 600 } }],
           { compress: 0.4, format: ImageManipulator.SaveFormat.WEBP }
         );
-
         const response = await fetch(manipResult.uri);
         const blob = await response.blob();
         const filename = `chat_images/${roomId}/${Date.now()}_${user.uid}_${Math.random().toString(36).substring(7)}.webp`;
         const storageRef = ref(storage, filename);
-
         await uploadBytes(storageRef, blob);
         const downloadUrl = await getDownloadURL(storageRef);
-
         await sendMessage(roomId, "", downloadUrl);
       }
     } catch (e) {
@@ -526,20 +499,14 @@ const handleLoadMore = () => {
   const handleLeave = async () => {
     if (!roomId) return;
     if (leaving) return;
-
     setLeaving(true);
-
     if (isGhost) {
       setLeaveModalVisible(false);
       setIsHeaderMenuOpen(false);
       setLeaving(false);
-      navigation.reset({
-        index: 0,
-        routes: [{ name: ROUTES.HOME }],
-      });
+      navigation.reset({ index: 0, routes: [{ name: ROUTES.HOME }] });
       return;
     }
-
     try {
       if (isOwner) {
         await leaveRoomAsOwner(roomId);
@@ -548,15 +515,11 @@ const handleLoadMore = () => {
       }
       setLeaveModalVisible(false);
       setIsHeaderMenuOpen(false);
-      navigation.reset({
-        index: 0,
-        routes: [{ name: ROUTES.HOME }],
-      });
+      navigation.reset({ index: 0, routes: [{ name: ROUTES.HOME }] });
     } catch (e) {
       setLeaveModalVisible(false);
       setIsHeaderMenuOpen(false);
       console.error("방 나가기 실패:", e);
-
       const msg = `${e?.code || "unknown"}\n${e?.message || ""}`.trim();
       setLeaveErrorMessage(msg || "나가기 처리 중 오류가 발생했습니다.");
       setLeaveErrorModalVisible(true);
@@ -573,7 +536,6 @@ const handleLoadMore = () => {
   const confirmReport = async (selectedReason) => {
     setReportModalVisible(false);
     if (!roomOwnerId) return;
-
     try {
       await addDoc(collection(db, "reports"), {
         targetUserId: roomOwnerId,
@@ -592,48 +554,37 @@ const handleLoadMore = () => {
 
   const handleReportSuccess = async () => {
     setReportSuccessModalVisible(false);
-
     if (isGhost) {
       navigation.navigate(ROUTES.HOME);
       return;
     }
-
     if (roomOwnerId && roomOwnerId !== user?.uid) {
       try { await blockUser(roomOwnerId); } catch (e) { }
     }
-
     try {
       if (isOwner) await leaveRoomAsOwner(roomId);
       else await leaveRoom(roomId);
     } catch (e) { }
-
     navigation.navigate(ROUTES.HOME);
   };
 
   const confirmBlockAndLeave = async () => {
     setBlockLeaveModalVisible(false);
     if (isGhost) return;
-
     if (!roomId) return;
     if (!roomOwnerId || roomOwnerId === user?.uid) return;
-
     if (typeof blockUser === "function") {
       await blockUser(roomOwnerId);
     }
     await leaveRoom(roomId);
-    navigation.reset({
-      index: 0,
-      routes: [{ name: ROUTES.HOME }],
-    });
+    navigation.reset({ index: 0, routes: [{ name: ROUTES.HOME }] });
   };
 
   const handleBlockAndLeave = () => {
     setIsHeaderMenuOpen(false);
     if (isGhost) return;
-
     if (!roomId) return;
     if (!roomOwnerId || roomOwnerId === user?.uid) return;
-
     setBlockLeaveModalVisible(true);
   };
 
@@ -645,7 +596,6 @@ const handleLoadMore = () => {
     });
   };
 
-  // ✅ [새 기능] 공지 등록 로직
   const executeNoticeUpdate = async (msg) => {
     try {
       await updateDoc(doc(db, "chatRooms", roomId), {
@@ -657,40 +607,28 @@ const handleLoadMore = () => {
         }
       });
     } catch (e) { 
-      // 실패 시 에러 모달 띄우기 (기존 imageErrorMessage 등 재활용하거나 새로 생성 가능)
-      // 여기서는 콘솔로 대체하거나 기존 에러 모달 사용
       console.log("공지 등록 실패", e);
     }
   };
 
-  // ✅ [수정] 공지 등록 버튼 클릭 핸들러
   const handleSetNotice = (msg) => {
     setMenuVisible(false);
-    
     if (roomNotice) {
-      // 이미 공지가 있으면 -> 커스텀 모달 띄우기
       setPendingNoticeMsg(msg);
       setNoticeModalVisible(true);
     } else {
-      // 공지가 없으면 -> 바로 등록
       executeNoticeUpdate(msg);
     }
   };
 
-  // ✅ [새 기능] 삭제 로직 (내 글 vs 남의 글)
-    const handleDeleteMsg = async (msg) => {
+  const handleDeleteMsg = async (msg) => {
     setMenuVisible(false);
-
-    // 1. 남의 글인 경우 -> 삭제 불가
     if (msg.senderId !== user.uid) {
       setCannotDeleteModalVisible(true);
       return;
     }
-
-    // 2. 내 글인 경우 -> isDeleted만 true로 찍기 (UI는 isDeleted로 "삭제된 메시지입니다." 표시)
     try {
       const msgRef = doc(db, "chatRooms", roomId, "messages", msg.id);
-
       await updateDoc(msgRef, {
         isDeleted: true,
       });
@@ -700,19 +638,29 @@ const handleLoadMore = () => {
     }
   };
 
-
   const renderItem = ({ item }) => {
     const isSystemLeave = item.senderId === "system";
+    
     if (isSystemLeave) {
-      // 시스템 메시지의 주체 uid / 닉네임 후보들
-      const actorId = item?.actorId || item?.userId || item?.uid || item?.senderUid || item?.fromUserId || item?.targetUserId || null;
-      const actorName = item?.actorNickname || item?.senderNickname || item?.senderName || item?.actorDisplayName || item?.displayName || (actorId ? (senderMap?.[actorId]?.displayName || senderMap?.[actorId]?.nickname) : null) || "사용자";
+      const actorId = item?.actorId || item?.userId || item?.uid || null;
+      
+      // ✅ 닉네임(displayName) 추출: 정보가 없으면 "사용자"로 고정
+      const actorName = item?.displayName || 
+                        (actorId ? (senderMap?.[actorId]?.nickname || senderMap?.[actorId]?.displayName) : null) || 
+                        "사용자";
+
       let displayText = item?.text || "";
-      if (displayText && !displayText.includes(actorName)) {
-        if (/(입장)/.test(displayText)) displayText = `${actorName}님이 입장했습니다.`;
-        else if (/(퇴장|나갔)/.test(displayText)) displayText = `${actorName}님이 퇴장했습니다.`;
+      
+      // ✅ 메시지 내용 가공: 텍스트에 ID가 포함되어 있더라도 닉네임으로 강제 치환
+      if (displayText.includes("님이 퇴장") || displayText.includes("님이 나갔") || displayText.includes("떠났습니다")) {
+        displayText = `${actorName}님이 퇴장하셨습니다.`;
+      } else if (displayText.includes("님이 입장")) {
+        displayText = `${actorName}님이 입장했습니다.`;
+      } else if (!displayText.includes(actorName)) {
+        // 그 외 기타 시스템 알림 (수정/삭제 등)
+        displayText = `${actorName}: ${displayText}`;
       }
-      if (!displayText) displayText = `${actorName}님`;
+      
       return (
         <View style={styles.systemMsgContainer}>
           <Text style={styles.systemMsgText}>{displayText}</Text>
@@ -726,8 +674,12 @@ const handleLoadMore = () => {
       : "";
 
     const safeTotal = Number.isFinite(totalParticipants) ? totalParticipants : 0;
-    const readCountRaw = Array.isArray(item.readBy) ? item.readBy.length : 0;
-    const readCount = Math.max(0, Math.min(readCountRaw, safeTotal));
+    const readByArr = Array.isArray(item.readBy) ? item.readBy : [];
+    const readBySet = new Set(readByArr.filter(Boolean));
+    if (item?.senderId && item.senderId !== "system") {
+      readBySet.add(item.senderId);
+    }
+    const readCount = Math.max(0, Math.min(readBySet.size, safeTotal));
     const unreadCount = Math.max(0, safeTotal - readCount);
 
     return (
@@ -736,27 +688,20 @@ const handleLoadMore = () => {
         onLongPress={(e) => {
           if (item.isDeleted) return; 
           Vibration.vibrate(20);
-
           const { pageY } = e.nativeEvent;
           const { height: screenHeight } = Dimensions.get('window');
-
           const menuHeight = 170;
           const kb = keyboardHeightRef.current || 0;
           const usableBottom = screenHeight - kb - (insets?.bottom || 0);
-          // ✅ 키보드/화면 하단에 메뉴가 걸리면 위로, 아니면 아래로
           const shouldOpenUp = pageY + menuHeight + 16 > usableBottom;
           let topPos = shouldOpenUp ? pageY - menuHeight : pageY + 10;
-
-          // ✅ 화면/세이프영역 내로 clamp
           const minTop = (insets?.top || 0) + 10;
           const maxTop = usableBottom - menuHeight - 10;
           topPos = Math.max(minTop, Math.min(topPos, maxTop));
-
           setMenuPosition({ 
             top: topPos, 
             align: isMy ? 'right' : 'left' 
           });
-
           setSelectedMsg(item);
           setMenuVisible(true);
         }}
@@ -764,7 +709,6 @@ const handleLoadMore = () => {
       >
         {!isMy && (
           <View style={styles.senderRow}>
-            {/* ... (프로필 이미지 부분은 그대로 유지) ... */}
             <Image source={{ uri: senderMap?.[item.senderId]?.photoURL }} style={styles.senderAvatar} />
             <Text style={styles.senderName}>{senderMap?.[item.senderId]?.nickname || "사용자"}</Text>
           </View>
@@ -775,10 +719,8 @@ const handleLoadMore = () => {
             isMy ? styles.myBubble : styles.otherBubble,
             item.image && { backgroundColor: "transparent", padding: 0 },
             item.isDeleted && styles.deletedBubble,
-            // ✅ replyTo가 있으면 말풍선 폭이 “내 답장 텍스트 길이”에 종속되지 않게 최소 폭 보장
             item.replyTo && !item.isDeleted && { minWidth: 200 }
           ]}>
-            {/* ✅ [수정] 답장 인용 표시 (글씨색: 내 글이면 검정, 남 글이면 흰색) */}
             {item.replyTo && !item.isDeleted && (
               <TouchableOpacity
                 activeOpacity={0.85}
@@ -789,7 +731,6 @@ const handleLoadMore = () => {
                     item.replyTo?.msgId ||
                     item.replyTo?.targetId ||
                     null;
-
                   scrollToMessageById(targetId);
                 }}
               >
@@ -799,11 +740,10 @@ const handleLoadMore = () => {
                 ]}>
                   <View style={[styles.replyBarLine, { backgroundColor: isMy ? 'black' : theme.primary }]} />
                   <View style={{ flex: 1 }}>
+                    {/* ✅ 답장 표시 이름 (senderName) 사용 유지 */}
                     <Text style={[styles.replyInName, { color: isMy ? '#333' : '#DDD' }]}>
                       {item.replyTo.senderName}에게 답장
                     </Text>
-
-                    {/* ✅ 한 줄 제한 제거 + “한 글자씩” 깨짐 방지 */}
                     <Text style={[styles.replyInText, { color: isMy ? 'black' : 'white' }]}>
                       {item.replyTo.text}
                     </Text>
@@ -812,7 +752,6 @@ const handleLoadMore = () => {
               </TouchableOpacity>
             )}
 
-            {/* 메시지 내용 */}
             {item.isDeleted ? (
               <Text style={[styles.msgText, isMy ? styles.myMsgText : styles.otherMsgText, styles.deletedText]}>
                 삭제된 메시지입니다.
@@ -825,8 +764,10 @@ const handleLoadMore = () => {
               <Text style={[styles.msgText, isMy ? styles.myMsgText : styles.otherMsgText]}>{item.text}</Text>
             )}
           </View>
-          {/* 시간 표시 */}
-          <View style={{ alignItems: isMy ? "flex-end" : "flex-start", marginHorizontal: 5 }}>
+           <View style={{ alignItems: isMy ? "flex-end" : "flex-start", marginHorizontal: 5 }}>
+            {isMy && !item.isDeleted && unreadCount > 0 && (
+              <Text style={styles.unreadCountText}>{unreadCount}</Text>
+            )}
             <Text style={styles.timeText}>{timeString}</Text>
           </View>
         </View>
@@ -837,7 +778,6 @@ const handleLoadMore = () => {
   return (
     <View style={{ flex: 1, backgroundColor: theme.background }}>
 
-      {/* ✅ [복구] 게시글 정보 바 (무료나눔/N빵 모두 표시) */}
       {linkedPost && (
         <TouchableOpacity style={styles.postLinkBar} onPress={handleGoToPost} activeOpacity={0.8}>
           {linkedPost.images && linkedPost.images.length > 0 ? (
@@ -868,7 +808,6 @@ const handleLoadMore = () => {
         </TouchableOpacity>
       )}
 
-      {/* ✅ [추가] 공지 바 */}
       {roomNotice && !isNoticeHidden && (
         <View style={styles.noticeBar}>
           <MaterialCommunityIcons
@@ -933,21 +872,17 @@ const handleLoadMore = () => {
         ) : (
           <FlatList
             ref={flatListRef}
-            data={filteredMessages} // Inverted 적용
+            data={filteredMessages}
             renderItem={renderItem}
             keyExtractor={(item) => item.id}
             keyboardShouldPersistTaps="handled"
-
             onScrollToIndexFailed={(info) => {
-              // ✅ scrollToIndex 실패(가상화) 대비: 근사 offset으로 이동 후 재시도
               const wait = 50;
-
               setTimeout(() => {
                 flatListRef.current?.scrollToOffset({
                   offset: info.averageItemLength * info.index,
                   animated: true,
                 });
-
                 setTimeout(() => {
                   flatListRef.current?.scrollToIndex({
                     index: info.index,
@@ -957,25 +892,18 @@ const handleLoadMore = () => {
                 }, wait);
               }, wait);
             }}
-
-            // ✅ Inverted 모드 활성화 (최신글이 맨 아래)
             inverted={true}
-
-            // ✅ [추가] 무한 스크롤 트리거
             onEndReached={handleLoadMore}
-            onEndReachedThreshold={0.3} // 스크롤이 30% 남았을 때 미리 로딩
-
+            onEndReachedThreshold={0.3}
             scrollEventThrottle={16}
             onScroll={(e) => {
               const { contentOffset } = e.nativeEvent;
-              // Inverted에서는 y > 200 이면 스크롤을 올린 것
               const scrollThreshold = 200;
               const isScrollUp = contentOffset.y > scrollThreshold;
               setShowScrollToBottom(isScrollUp);
             }}
             contentContainerStyle={{
               padding: 16,
-              // Inverted에서는 상하 여백이 반대로 작동하므로 조정
               paddingTop: isGhost ? 10 : 10,
               paddingBottom: 10,
             }}
@@ -993,7 +921,6 @@ const handleLoadMore = () => {
               <TouchableOpacity
                 activeOpacity={0.85}
                 onPress={() => {
-                  // Inverted에서 offset: 0 은 맨 아래(최신)
                   flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
                 }}
                 style={styles.scrollToBottomBtn}
@@ -1002,7 +929,6 @@ const handleLoadMore = () => {
               </TouchableOpacity>
             )}
 
-            {/* ✅ [추가] 답장 취소 바 */}
             {replyTo && (
               <View style={styles.replyPreviewBar}>
                 <View style={{ flex: 1 }}>
@@ -1031,7 +957,6 @@ const handleLoadMore = () => {
                 placeholder="메시지를 입력하세요"
                 placeholderTextColor="grey"
                 editable={!isClosed}
-                // ✅ 엔터키 줄바꿈 적용
                 multiline={true} 
                 textAlignVertical="center"
               />
@@ -1057,11 +982,9 @@ const handleLoadMore = () => {
             styles.bubbleMenuContainer, 
             { 
               top: menuPosition.top, 
-              // 내 글이면 오른쪽 여백, 남의 글이면 왼쪽 여백
               [menuPosition.align === 'right' ? 'right' : 'left']: 25
             }
           ]}>
-            {/* 1. 답장 */}
             <TouchableOpacity style={styles.bubbleMenuItem} onPress={() => { setReplyTo(selectedMsg); setMenuVisible(false); }}>
               <Ionicons name="arrow-undo-outline" size={20} color="white" />
               <Text style={styles.bubbleMenuText}>답장</Text>
@@ -1069,7 +992,6 @@ const handleLoadMore = () => {
             
             <View style={styles.bubbleMenuDivider} />
             
-            {/* 2. 공지 */}
             <TouchableOpacity style={styles.bubbleMenuItem} onPress={() => handleSetNotice(selectedMsg)}>
               <MaterialCommunityIcons name="bullhorn-outline" size={20} color="white" />
               <Text style={styles.bubbleMenuText}>공지 등록</Text>
@@ -1077,7 +999,6 @@ const handleLoadMore = () => {
             
             <View style={styles.bubbleMenuDivider} />
 
-            {/* 3. 삭제 */}
             <TouchableOpacity style={styles.bubbleMenuItem} onPress={() => handleDeleteMsg(selectedMsg)}>
               <Ionicons name="trash-outline" size={20} color={theme.danger} />
               <Text style={[styles.bubbleMenuText, { color: theme.danger }]}>삭제</Text>
@@ -1190,9 +1111,7 @@ const handleLoadMore = () => {
         visible={cannotDeleteModalVisible}
         title="삭제 불가"
         message="다른 사람의 글은 삭제할 수 없습니다."
-        // onCancel만 연결하면 배경 터치 시 닫힙니다 (CustomModal 구현에 따름)
         onCancel={() => setCannotDeleteModalVisible(false)}
-        // confirmText를 null로 주어 버튼 자체를 렌더링 안 하게 유도
         confirmText={null}
         onConfirm={() => setCannotDeleteModalVisible(false)}
       />
@@ -1249,22 +1168,16 @@ const styles = StyleSheet.create({
   senderAvatarPlaceholder: { width: 36, height: 36, borderRadius: 18, marginRight: 8, backgroundColor: "#444" },
   
   scrollToBottomBtn: {
-    // ✅ 공중에 띄움, 입력창 위에 배치
     position: "absolute", 
     bottom: 125, 
     alignSelf: "center", 
     zIndex: 999, 
-
     alignItems: "center",
     justifyContent: "center",
     width: 42,
     height: 42,
     borderRadius: 21,
-    
-    // ✅ 배경 70% 불투명 (그림자 분리 방지)
     backgroundColor: "rgba(30, 30, 30, 0.7)",
-    
-    // ✅ 그림자 효과
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
@@ -1307,7 +1220,6 @@ const styles = StyleSheet.create({
   backgroundColor: "rgba(0,0,0,0.2)"
 },
 
-  // ✅ 헤더 메뉴 컨테이너 (확성기/점3개 아래 우측에 고정)
   menuContainer: {
     position: "absolute",
     right: 10,
@@ -1315,7 +1227,6 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingVertical: 4,
     minWidth: 170,
-
     elevation: 12,
     zIndex: 9999,
     shadowColor: "#000",
@@ -1324,15 +1235,12 @@ const styles = StyleSheet.create({
     shadowRadius: 6,
   },
 
-// 2) 말풍선 메뉴: 오버레이보다 확실히 위
-bubbleMenuContainer: {
+  bubbleMenuContainer: {
     position: "absolute",
-    backgroundColor: "#2A2A2A", // 다크 그레이 배경
-    borderRadius: 12,           // 모서리 둥글게
-    paddingVertical: 4,         // 상하 여백
-    minWidth: 160,              // 메뉴 너비 확보
-
-    // 그림자 및 레이어 순위
+    backgroundColor: "#2A2A2A", 
+    borderRadius: 12, 
+    paddingVertical: 4, 
+    minWidth: 160,
     elevation: 10,
     zIndex: 9999,
     shadowColor: "#000",
@@ -1341,42 +1249,24 @@ bubbleMenuContainer: {
     shadowRadius: 6,
   },
 
-  // ✅ 메뉴 아이템 (아이콘 + 텍스트 가로 정렬)
   bubbleMenuItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 12,   // 터치 영역 확보 (상하)
-    paddingHorizontal: 16, // 좌우 여백
+    paddingVertical: 12, 
+    paddingHorizontal: 16, 
   },
 
-  // ✅ 메뉴 텍스트
   bubbleMenuText: {
     color: 'white',
     fontSize: 15,
     fontWeight: '500',
-    marginLeft: 12, // 아이콘과 텍스트 사이 간격
+    marginLeft: 12, 
   },
 
-  // ✅ 구분선 (가로선)
   bubbleMenuDivider: {
     height: 1,
     width: '100%',
-    backgroundColor: '#3E3E3E', // 배경보다 살짝 밝은 선
-  },
-  menuContainer: {
-    position: "absolute",
-    right: 10,
-    backgroundColor: "#1A1A1A",
-    borderRadius: 12,
-    paddingVertical: 4,
-    minWidth: 170,
-
-    elevation: 12,
-    zIndex: 9999,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 6,
+    backgroundColor: '#3E3E3E', 
   },
 
   menuItem: { flexDirection: "row", alignItems: "center", paddingVertical: 12, paddingHorizontal: 10, borderBottomWidth: 0.5, borderBottomColor: "#333" },
@@ -1395,28 +1285,23 @@ bubbleMenuContainer: {
     fontSize: 14
   },
 
-  // ✅ [새 스타일] 공지, 답장, 메뉴, 삭제 스타일 추가
   noticeBar: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1A1A1A', padding: 10, borderBottomWidth: 1, borderBottomColor: '#333' },
   noticeText: { color: '#EEE', fontSize: 13 },
   
-  // 답장 미리보기 바 (입력창 위)
   replyPreviewBar: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#222', padding: 10, borderTopWidth: 1, borderTopColor: '#333' },
   replyPreviewName: { color: theme.primary, fontSize: 12, fontWeight: 'bold' },
   replyPreviewText: { color: '#AAA', fontSize: 12 },
   
-  // ✅ [수정] 말풍선 내부 인용구 스타일 (구조 변경됨)
   replyInBubble: { 
     flexDirection: 'row',
     padding: 8, 
     borderRadius: 8, 
     marginBottom: 6,
   },
-  // 인용구 왼쪽 컬러바
   replyBarLine: {
     width: 3,
     borderRadius: 2,
     marginRight: 8,
-    // 색상은 JS에서 동적 처리
   },
   replyInName: { 
     fontSize: 11,
@@ -1427,12 +1312,11 @@ bubbleMenuContainer: {
   replyInText: { 
     fontSize: 12,
     opacity: 0.9,
-    flexShrink: 1,        // ✅ 줄바꿈 자연스럽게
+    flexShrink: 1,        
     flexWrap: "wrap",
     lineHeight: 18,
   },
   
-  // ✅ 삭제된 메시지 스타일
   deletedBubble: { backgroundColor: '#222', borderWidth: 1, borderColor: '#333' },
   deletedText: { color: '#666', fontStyle: 'italic' },
 });

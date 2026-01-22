@@ -4,10 +4,11 @@ import { View, StyleSheet, Image, Animated, Easing, Dimensions } from 'react-nat
 const { width, height } = Dimensions.get('window');
 
 // =================================================================
-// 🎨 [색상 설정] 여기서 색깔을 마음대로 바꾸세요!
+// 🎨 [색상 설정]
 // =================================================================
-const SILHOUETTE_COLOR = '#f5fae3';  // 로고 뒤에 퍼지는 빛 색상 (예: 'cyan', '#FF00FF', 'gold')
-const NEON_COLOR = '#CCFF00';      // 반딧불이 색상 (형광 연두)
+const SILHOUETTE_COLOR = '#f5fae3';  // 로고 뒤 실루엣
+const NEON_COLOR = '#CCFF00';      // 반딧불이 & 로딩바 색상
+const LOADING_BAR_WIDTH = 200;     // 로딩바 전체 길이
 const FIREFLY_COUNT = 18;          // 반딧불이 개수
 
 // =================================================================
@@ -70,7 +71,7 @@ const Firefly = ({ startPosition }) => {
 };
 
 // =================================================================
-// 2. 로고 뒤 실루엣 (은은하게 퍼지는 효과 구현)
+// 2. 로고 뒤 실루엣
 // =================================================================
 const LogoNeonSilhouette = ({ source, delay, duration, maxScale, maxOpacity }) => {
   const anim = useRef(new Animated.Value(0)).current;
@@ -78,27 +79,23 @@ const LogoNeonSilhouette = ({ source, delay, duration, maxScale, maxOpacity }) =
   useEffect(() => {
     Animated.loop(
       Animated.sequence([
-        Animated.delay(delay), // 레이어별 시차
+        Animated.delay(delay),
         Animated.timing(anim, {
           toValue: 1,
           duration: duration,
-          // ✨ 핵심: 시작은 빠르고 끝은 천천히 퍼지는 느낌
           easing: Easing.out(Easing.sin), 
           useNativeDriver: true,
         }),
-        // 뚝 끊기지 않게 아주 짧게 리셋
         Animated.timing(anim, { toValue: 0, duration: 0, useNativeDriver: true }),
       ])
     ).start();
   }, []);
 
-  // 커지는 크기
   const scale = anim.interpolate({
     inputRange: [0, 1],
     outputRange: [1.0, maxScale] 
   });
 
-  // 투명도: 서서히 나타났다가 끝에서 사라짐
   const opacity = anim.interpolate({
     inputRange: [0, 0.3, 1],
     outputRange: [0, maxOpacity, 0] 
@@ -116,11 +113,10 @@ const LogoNeonSilhouette = ({ source, delay, duration, maxScale, maxOpacity }) =
           transform: [{ scale }],
           opacity: opacity,
           zIndex: 1,
-          // ✨ 빛 번짐 효과 추가 (부드러움 강화)
           shadowColor: SILHOUETTE_COLOR,
           shadowOffset: { width: 0, height: 0 },
           shadowOpacity: 0.5,
-          shadowRadius: 10 * maxScale, // 커질수록 그림자도 퍼짐
+          shadowRadius: 10 * maxScale,
         }
       ]}
     />
@@ -128,14 +124,64 @@ const LogoNeonSilhouette = ({ source, delay, duration, maxScale, maxOpacity }) =
 };
 
 // =================================================================
-// 3. 메인 화면
+// 3. 메인 화면 (로딩바 로직 추가됨)
 // =================================================================
 export default function InitialLoader({ onLoaded, isLoading }) {
   const logoSource = require('../../../assets/splash-icon.png');
+  const progressAnim = useRef(new Animated.Value(0)).current;
+
+  // 💡 중복 실행 방지용 플래그 (타이머 vs 데이터 완료 중 먼저 끝나는 쪽 한 번만 실행)
+  const isFinished = useRef(false);
+
+  // 🚀 공통 로딩 완료 함수: 바를 100%로 채우고 홈 화면으로 전환
+  const finishLoading = () => {
+    if (isFinished.current) return;
+    isFinished.current = true;
+
+    Animated.timing(progressAnim, {
+      toValue: 1,
+      duration: 400,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: false,
+    }).start(({ finished }) => {
+      if (finished && onLoaded) {
+        setTimeout(onLoaded, 100);
+      }
+    });
+  };
 
   useEffect(() => {
-    if (!isLoading && onLoaded) onLoaded();
+    let timer = null;
+
+    if (isLoading) {
+      // 1️⃣ [애니메이션] 0% -> 90%까지 천천히 채움
+      Animated.timing(progressAnim, {
+        toValue: 0.9,
+        duration: 5000, 
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: false,
+      }).start();
+
+      // 2️⃣ [강제 타이머] 10초가 지나면 무조건 완료 함수 실행
+      timer = setTimeout(() => {
+        if (!isFinished.current) {
+          finishLoading();
+        }
+      }, 10000); 
+    } else {
+      // 3️⃣ [정상 종료] isLoading이 false가 되면 즉시 완료 함수 실행
+      finishLoading();
+    }
+
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
   }, [isLoading]);
+
+  const widthInterpolated = progressAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0%', '100%'],
+  });
 
   const renderFireflies = () => Array.from({ length: FIREFLY_COUNT }).map((_, i) => (
     <Firefly key={i} startPosition={{ x: Math.random() * width, y: Math.random() * height }} />
@@ -145,29 +191,70 @@ export default function InitialLoader({ onLoaded, isLoading }) {
     <View style={styles.container}>
       <View style={StyleSheet.absoluteFillObject}>{renderFireflies()}</View>
 
-      <View style={styles.logoWrapper}>
-        {/* ✨ 5겹의 레이어로 자연스러운 빛 물결 구현 */}
-        {/* 1. 가장 넓고 은은한 빛 */}
-        <LogoNeonSilhouette source={logoSource} delay={0}    duration={3000} maxScale={1.35} maxOpacity={0.2} />
-        {/* 2. 중간 빛 */}
-        <LogoNeonSilhouette source={logoSource} delay={500}  duration={2800} maxScale={1.28} maxOpacity={0.3} />
-        {/* 3. 메인 빛 흐름 */}
-        <LogoNeonSilhouette source={logoSource} delay={1000} duration={2600} maxScale={1.22} maxOpacity={0.4} />
-        {/* 4. 조금 더 진한 빛 */}
-        <LogoNeonSilhouette source={logoSource} delay={1500} duration={2400} maxScale={1.15} maxOpacity={0.5} />
-        {/* 5. 로고 바로 뒤의 가장 진하고 좁은 빛 */}
-        <LogoNeonSilhouette source={logoSource} delay={2000} duration={2200} maxScale={1.08} maxOpacity={0.6} />
-        
-        {/* 맨 앞의 진짜 로고 */}
-        <Image source={logoSource} style={[styles.logoBase, { zIndex: 10 }]} resizeMode="contain" />
+      <View style={styles.contentContainer}>
+        <View style={styles.logoWrapper}>
+          <LogoNeonSilhouette source={logoSource} delay={0}    duration={3000} maxScale={1.35} maxOpacity={0.2} />
+          <LogoNeonSilhouette source={logoSource} delay={500}  duration={2800} maxScale={1.28} maxOpacity={0.3} />
+          <LogoNeonSilhouette source={logoSource} delay={1000} duration={2600} maxScale={1.22} maxOpacity={0.4} />
+          <LogoNeonSilhouette source={logoSource} delay={1500} duration={2400} maxScale={1.15} maxOpacity={0.5} />
+          <LogoNeonSilhouette source={logoSource} delay={2000} duration={2200} maxScale={1.08} maxOpacity={0.6} />
+          <Image source={logoSource} style={[styles.logoBase, { zIndex: 10 }]} resizeMode="contain" />
+        </View>
+
+        <View style={styles.loadingBarContainer}>
+          <Animated.View 
+            style={[
+              styles.loadingBarFill, 
+              { width: widthInterpolated }
+            ]} 
+          />
+        </View>
       </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#000000' },
-  logoWrapper: { justifyContent: 'center', alignItems: 'center' },
-  logoBase: { width: 150, height: 150 },
-  firefly: { position: 'absolute', backgroundColor: NEON_COLOR, shadowColor: NEON_COLOR, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, elevation: 10 }
+  container: { 
+    flex: 1, 
+    justifyContent: 'center', 
+    alignItems: 'center', 
+    backgroundColor: '#000000' 
+  },
+  contentContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  logoWrapper: { 
+    justifyContent: 'center', 
+    alignItems: 'center',
+    marginBottom: 40, // ✅ 로딩바와 로고 사이 간격
+  },
+  logoBase: { width: 120, height: 120 },
+  
+  firefly: { 
+    position: 'absolute', 
+    backgroundColor: NEON_COLOR, 
+    shadowColor: NEON_COLOR, 
+    shadowOffset: { width: 0, height: 0 }, 
+    shadowOpacity: 0.8, 
+    elevation: 10 
+  },
+
+  // ✅ 로딩 바 스타일
+  loadingBarContainer: {
+    width: LOADING_BAR_WIDTH,
+    height: 4,               // 얇고 세련되게
+    backgroundColor: '#333', // 빈 게이지 색상 (다크 그레이)
+    borderRadius: 2,
+    overflow: 'hidden',      // 채워지는 바가 둥근 모서리를 넘지 않게
+  },
+  loadingBarFill: {
+    height: '100%',
+    backgroundColor: NEON_COLOR, // 채워지는 색상 (형광 연두)
+    shadowColor: NEON_COLOR,     // 빛나는 효과
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 1,
+    shadowRadius: 10,
+  }
 });

@@ -125,7 +125,7 @@ export default function RootNavigator() {
             <Stack.Screen
               name={ROUTES.PREMIUM}
               component={PremiumScreen}
-              options={{ title: "프리미엄" }}
+              options={{ headerShown: false }}
             />
 
             {/* 내가 쓴 글 관리 */}

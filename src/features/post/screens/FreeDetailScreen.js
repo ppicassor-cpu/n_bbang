@@ -156,22 +156,26 @@ export default function FreeDetailScreen({ route, navigation }) {
     navigation.goBack(); 
   };
 
-  const onPressChat = () => {
-  if (post.ownerId === "SAMPLE_DATA") {
-    setSampleModalVisible(true);
-    return;
-  }
-  if (isClosed) return;
-  if (!user?.uid) return;
+  const onPressChat = async () => {
+    if (post.ownerId === "SAMPLE_DATA") {
+      setSampleModalVisible(true);
+      return;
+    }
+    if (isClosed) return;
+    if (!user?.uid) return;
 
-  // ✅ 무료나눔은 1:1 방이 여러 개 열리는 구조이므로 "post_단일방" 금지
-  // ✅ (postId + 두 uid 조합)으로 1:1 고유 방 생성
-  const pairKey = [user.uid, post.ownerId].sort().join("_");
-  const roomId = `free_${post.id}_${pairKey}`;
+    // ✅ 무료나눔은 1:1 방이 여러 개 열리는 구조이므로 "post_단일방" 금지
+    // ✅ (postId + 두 uid 조합)으로 1:1 고유 방 생성
+    const pairKey = [user.uid, post.ownerId].sort().join("_");
+    const roomId = `free_${post.id}_${pairKey}`;
 
-  ensureRoom(roomId, post.title, "free", post.ownerId);
-  navigation.navigate(ROUTES.CHAT_ROOM, { roomId, roomName: post.title });
-};
+    try {
+      await ensureRoom(roomId, post.title, "free", post.ownerId);
+      navigation.navigate(ROUTES.CHAT_ROOM, { roomId, roomName: post.title });
+    } catch (e) {
+      console.error("채팅방 생성/입장 실패:", e);
+    }
+  };
 
   const mapRegion = useMemo(() => ({
     latitude: post?.coords?.latitude || 37.5665,

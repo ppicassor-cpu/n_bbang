@@ -707,7 +707,7 @@ export default function ProfileScreen() {
           >
             <View>
               <Text style={styles.outlineBannerTitle}>무제한으로 N빵하기</Text>
-              <Text style={styles.outlineBannerSub}>작성 제한 해제하기</Text>
+              <Text style={styles.outlineBannerSub}>프리미엄 신청하기</Text>
             </View>
             <MaterialIcons name="arrow-forward" size={20} color={theme.primary} />
           </TouchableOpacity>

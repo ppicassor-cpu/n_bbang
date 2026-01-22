@@ -22,6 +22,7 @@ import {
   limit,
   runTransaction,
   increment,
+  deleteField,
 } from "firebase/firestore";
 
 const safeToDate = (v) => {
@@ -57,9 +58,35 @@ export const ensureRoom = async (roomId, roomName, type, ownerId) => {
   const roomSnap = await getDoc(roomRef);
 
   const isPostRoom = typeof roomId === "string" && roomId.startsWith("post_");
+  // ✅ 무료나눔 방도 판별 추가
+  const isFreeRoom = typeof roomId === "string" && roomId.startsWith("free_");
 
+  // ✅ N빵(post_)과 무료나눔(free_) 각각의 규칙에 맞게 postId 추출
+  let postId = null;
+  if (isPostRoom) {
+    postId = roomId.replace("post_", "");
+  } else if (isFreeRoom) {
+    // free_게시글ID_유저ID 형식에서 게시글ID만 가져옴
+    postId = roomId.split("_")[1];
+  }
+  let resolvedPostOwnerId = ownerId;
+if (isPostRoom && !resolvedPostOwnerId && postId) {
+  try {
+    const postSnap = await getDoc(doc(db, "posts", postId));
+    if (postSnap.exists()) {
+      const postData = postSnap.data() || {};
+      resolvedPostOwnerId =
+        postData.ownerId ||
+        postData.uid ||
+        postData.userId ||
+        postData.senderId ||
+        postData.fromUserId ||
+        null;
+    }
+  } catch (e) {}
+}
   if (!roomSnap.exists()) {
-    const resolvedOwnerId = ownerId || userId;
+    const resolvedOwnerId = isPostRoom ? (resolvedPostOwnerId || userId) : (ownerId || userId);
 
     // ✅ [수정] post_ 방은 "방 생성"과 "참여(=participants 추가)"를 분리
     // - 방 생성 시점에는 방장만 participants에 포함
@@ -93,11 +120,19 @@ export const ensureRoom = async (roomId, roomName, type, ownerId) => {
 
     await setDoc(roomRef, {
       id: roomId,
+      postId: postId, // ✅ postId 필드를 명시적으로 저장 (나중에 쿼리용)
       title: roomName,
       type: type || "group",
       ownerId: resolvedOwnerId,
       isClosed: false,
       participants: participantList,
+
+      // ✅ unreadCounts 초기화 (참여자별 0 세팅)
+      unreadCounts: participantList.reduce((acc, uid) => {
+        acc[uid] = 0;
+        return acc;
+      }, {}),
+
       ...joinedAtData,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
@@ -117,7 +152,7 @@ export const ensureRoom = async (roomId, roomName, type, ownerId) => {
 
     // ✅ post_ 방: 게스트는 여기서 업데이트 금지 (참여는 DetailScreen 트랜잭션에서 처리)
     if (isPostRoom) {
-      const resolvedOwnerId = ownerId || data.ownerId;
+      const resolvedOwnerId = resolvedPostOwnerId || data.ownerId;
 
       // 방장 본인이면 누락된 joinedAt 정도만 보정 가능(이미 participants에 있으니까)
       if (userId === resolvedOwnerId) {
@@ -156,13 +191,42 @@ export const ensureRoom = async (roomId, roomName, type, ownerId) => {
 
     if (type && data.type !== type) updateData.type = type;
 
-    if (!data[`joinedAt_${userId}`]) updateData[`joinedAt_${userId}`] = serverTimestamp();
+    // ✅ [수정] 재입장(명단에 없었음)이거나 필드가 아예 없으면 -> 시간을 '지금'으로 강제 갱신
+    // 이렇게 해야 나갔다 들어왔을 때 과거 대화가 안 보입니다.
+    const leftDate = safeToDate(data[`leftAt_${userId}`]);
+    const joinedDate = safeToDate(data[`joinedAt_${userId}`]);
 
+    if (
+  participantsToAdd.includes(userId) ||
+  !data[`joinedAt_${userId}`] ||
+  (leftDate && (!joinedDate || leftDate.getTime() >= joinedDate.getTime()))
+) {
+  updateData[`joinedAt_${userId}`] = serverTimestamp();
+}
     if (ownerId && ownerId !== userId && !data[`joinedAt_${ownerId}`]) {
       updateData[`joinedAt_${ownerId}`] = serverTimestamp();
     }
 
     if (ownerId && !data.ownerId) updateData.ownerId = ownerId;
+
+    const existingUnreadCounts =
+      data.unreadCounts && typeof data.unreadCounts === "object" ? data.unreadCounts : {};
+    const roomOwnerId = data.ownerId || ownerId || null;
+
+    if (existingUnreadCounts[userId] === undefined) {
+      updateData[`unreadCounts.${userId}`] = 0;
+    }
+
+    if (roomOwnerId && existingUnreadCounts[roomOwnerId] === undefined) {
+      updateData[`unreadCounts.${roomOwnerId}`] = 0;
+    }
+
+    for (const uid of participantsToAdd) {
+      if (!uid) continue;
+      if (existingUnreadCounts[uid] === undefined) {
+        updateData[`unreadCounts.${uid}`] = 0;
+      }
+    }
 
     if (Object.keys(updateData).length > 0) {
       await updateDoc(roomRef, updateData);
@@ -189,6 +253,18 @@ export const sendMessage = async (roomId, text, imageUrl = null, replyTo = null)
   const fallbackNickname = user.displayName || (user.email ? user.email.split("@")[0] : "사용자");
   const safeText = hasText ? String(text) : "";
 
+  const roomData = roomSnap.data() || {};
+  const rawParticipants = Array.isArray(roomData.participants) ? roomData.participants : [];
+  const participants = rawParticipants
+    .map((p) => (p && typeof p === "object" ? p.uid : p))
+    .filter(Boolean);
+  const ownerId = roomData.ownerId || null;
+
+  // ✅ 채팅방 리스트 “안읽음(1)”용 대상자(=보낸 사람 제외, 방장도 보정 포함)
+  const targets = Array.from(
+    new Set([...(participants || []), ownerId].filter(Boolean))
+  ).filter((uid) => uid !== user.uid);;
+
   // ✅ replyTo 정규화 (잘못된 값이면 null로)
   const normalizedReplyTo =
     replyTo && typeof replyTo === "object"
@@ -200,8 +276,8 @@ export const sendMessage = async (roomId, text, imageUrl = null, replyTo = null)
         }
       : null;
 
-  // ✅ image + replyTo 필드 저장
-  await addDoc(collection(db, "chatRooms", roomId, "messages"), {
+  // ✅ image + replyTo 필드 저장 (메시지ID 확보)
+  const msgDocRef = await addDoc(collection(db, "chatRooms", roomId, "messages"), {
     text: safeText,
     image: imageUrl || null,
     senderId: user.uid,
@@ -217,16 +293,22 @@ export const sendMessage = async (roomId, text, imageUrl = null, replyTo = null)
     ? (safeText ? `📷 ${safeText}` : "📷 사진을 보냈습니다.")
     : safeText;
 
+  // ✅ 채팅방 문서에 lastMessage + lastMessageId + unreadBy 저장(리스트 배지용)
+  const unreadCountsUpdate = {};
+  targets.forEach((uid) => {
+    unreadCountsUpdate[`unreadCounts.${uid}`] = increment(1);
+  });
+
   await updateDoc(roomRef, {
     lastMessage: lastMessageText,
     updatedAt: serverTimestamp(),
+    lastMessageId: msgDocRef.id,
+    lastMessageSenderId: user.uid,
+    lastMessageCreatedAt: serverTimestamp(),
+    ...unreadCountsUpdate,
   });
 
   try {
-    const roomData = roomSnap.data() || {};
-    const participants = Array.isArray(roomData.participants) ? roomData.participants : [];
-    const targets = participants.filter((uid) => uid && uid !== user.uid);
-
     if (targets.length === 0) return;
 
     const roomTitle = roomData.title || "채팅방";
@@ -239,9 +321,8 @@ export const sendMessage = async (roomId, text, imageUrl = null, replyTo = null)
           roomId,
           roomName: roomTitle,
           title: roomTitle,
-          body: `${senderNickname}: ${lastMessageText}`, // ✅ 알림 본문도 이미지 표시 적용
+          body: `${senderNickname}: ${lastMessageText}`,
           isRead: false,
-          // ✅ (문제1) 알림 createdAt 누락 대비: 항상 createdAt 세팅(원래도 있었지만 "누락 대비" 명시)
           createdAt: serverTimestamp(),
           senderId: user.uid,
         })
@@ -250,8 +331,9 @@ export const sendMessage = async (roomId, text, imageUrl = null, replyTo = null)
   } catch (e) {}
 };
 
+
 // 3. 메시지 구독 (최신 100개 + 화면 시간순)
-export const subscribeMessages = (roomId, callback) => {
+export const subscribeMessages = (roomId, callback, take = 100) => {
   if (!auth.currentUser) return () => {};
   if (!isValidRoomId(roomId)) return () => {};
   if (typeof callback !== "function") return () => {};
@@ -260,7 +342,10 @@ export const subscribeMessages = (roomId, callback) => {
   const roomRef = doc(db, "chatRooms", roomId);
   const messagesRef = collection(db, "chatRooms", roomId, "messages");
 
-  const q = query(messagesRef, orderBy("createdAt", "desc"), limit(100));
+  const safeTakeRaw = Number(take);
+  const safeTake = Number.isFinite(safeTakeRaw) ? Math.max(1, Math.min(safeTakeRaw, 500)) : 100;
+
+  const q = query(messagesRef, orderBy("createdAt", "desc"), limit(safeTake));
 
   let msgUnsubscribe = null;
 
@@ -269,9 +354,16 @@ export const subscribeMessages = (roomId, callback) => {
 
     const roomData = roomSnap.data() || {};
     const joinedAtRaw = roomData[`joinedAt_${userId}`];
-    const joinedDate = safeToDate(joinedAtRaw);
-    const filterTime = joinedDate ? joinedDate.getTime() - 1000 : 0;
+    const leftAtRaw = roomData[`leftAt_${userId}`];
 
+    const joinedDate = safeToDate(joinedAtRaw);
+    const leftDate = safeToDate(leftAtRaw);
+
+    const effectiveDate =
+      joinedDate && leftDate ? (leftDate > joinedDate ? leftDate : joinedDate)
+     : (joinedDate || leftDate);
+
+    const filterTime = effectiveDate ? effectiveDate.getTime() - 1000 : 0;
     if (msgUnsubscribe) msgUnsubscribe();
 
     msgUnsubscribe = onSnapshot(q, (snapshot) => {
@@ -286,7 +378,7 @@ export const subscribeMessages = (roomId, callback) => {
             ...data,
             senderId: normalizedSenderId,
             createdAt: safeToDate(data.createdAt) || new Date(0),
-            id: d.id, // ✅ 문서ID는 마지막에 고정(데이터의 id 필드가 있어도 절대 덮어써지지 않게)
+            id: d.id,
           };
         })
         .reverse();
@@ -305,6 +397,7 @@ export const subscribeMessages = (roomId, callback) => {
     if (msgUnsubscribe) msgUnsubscribe();
   };
 };
+
 
 // 4. 내 채팅방 목록 구독
 export const subscribeMyRooms = (callback) => {
@@ -337,8 +430,6 @@ export const markAsRead = async (roomId, messageIds) => {
   if (!Array.isArray(messageIds) || messageIds.length === 0) return;
 
   // ✅ (문제3) 중복 호출/중복 id로 write 폭증 방지
-  // - 동일 roomId에서 이미 처리한 msgId는 제외
-  // - 동시에 같은 배열이 여러 번 들어와도 batch가 비면 commit 안 함
   const userId = auth.currentUser.uid;
 
   let seenSet = __markAsReadCache.get(roomId);
@@ -354,7 +445,6 @@ export const markAsRead = async (roomId, messageIds) => {
     seenSet.add(msgId);
     uniqueIds.push(msgId);
 
-    // 캐시 폭주 방지(최대 N개 유지, 초과 시 초기화)
     if (seenSet.size > __CACHE_MAX_PER_ROOM) {
       __markAsReadCache.set(roomId, new Set([msgId]));
       seenSet = __markAsReadCache.get(roomId);
@@ -371,16 +461,30 @@ export const markAsRead = async (roomId, messageIds) => {
   });
 
   await batch.commit();
+
+  // ✅ 채팅방 리스트 “안읽음(1)” 배지 제거용: unreadBy에서 나 제거
+  try {
+    const roomRef = doc(db, "chatRooms", roomId);
+    await updateDoc(roomRef, { [`unreadCounts.${userId}`]: 0 });
+  } catch (e) {}
 };
 
+
 // 6. 채팅방 나가기 (방 문서/메시지 고아 방지: 방 삭제 없음)
+// 6. 채팅방 나가기 (방 문서/메시지 고아 방지: 방 삭제 없음)
+// 6. 채팅방 나가기
 export const leaveRoom = async (roomId) => {
   if (!auth.currentUser) return;
   if (!isValidRoomId(roomId)) return;
 
   const user = auth.currentUser;
-  const nickname = user.displayName || (user.email ? user.email.split("@")[0] : "사용자");
   const roomRef = doc(db, "chatRooms", roomId);
+
+  // ✅ 1. 최신 닉네임 조회
+  const userSnap = await getDoc(doc(db, "users", user.uid));
+  const latestNickname = userSnap.exists() 
+    ? (userSnap.data().displayName || "사용자") 
+    : "사용자";
 
   const isPostRoom = typeof roomId === "string" && roomId.startsWith("post_");
   const postId = isPostRoom ? roomId.replace(/^post_/, "") : null;
@@ -397,54 +501,57 @@ export const leaveRoom = async (roomId) => {
     const participants = Array.isArray(roomData.participants) ? roomData.participants : [];
     ownerIdFromRoom = roomData.ownerId;
 
-    const systemText = `${nickname}님이 채팅방을 떠났습니다.`;
+    const systemText = `${latestNickname}님이 퇴장하셨습니다.`;
 
-    // ✅ 트랜잭션 안에서 메시지/참여자만 처리 (원자성 보장)
     const msgRef = doc(collection(db, "chatRooms", roomId, "messages"));
     tx.set(msgRef, {
       text: systemText,
       senderId: "system",
       senderNickname: "시스템",
+      actorId: user.uid,
+      displayName: latestNickname,
+      type: "system",
       createdAt: serverTimestamp(),
       readBy: [user.uid],
     });
 
-    // 이미 참가자가 아니면 participants 변경 없이 lastMessage만 갱신
+    // ✅ 2. 중복 제거된 깔끔한 참여 로직
     if (!participants.includes(user.uid)) {
       tx.update(roomRef, {
-        lastMessage: `${nickname}님이 퇴장하셨습니다.`,
-        updatedAt: serverTimestamp(),
-      });
+  lastMessage: systemText,
+  updatedAt: serverTimestamp(),
+  [`leftAt_${user.uid}`]: serverTimestamp(),
+  [`joinedAt_${user.uid}`]: deleteField(),
+});
       wasParticipant = false;
       return;
     }
 
     wasParticipant = true;
-
     tx.update(roomRef, {
-      participants: arrayRemove(user.uid),
-      lastMessage: `${nickname}님이 퇴장하셨습니다.`,
-      updatedAt: serverTimestamp(),
-    });
+  participants: arrayRemove(user.uid),
+  lastMessage: systemText,
+  updatedAt: serverTimestamp(),
+  [`leftAt_${user.uid}`]: serverTimestamp(),
+  [`joinedAt_${user.uid}`]: deleteField(),
+});
+    // ❌ (기존의 412~420행 중복 코드는 여기서 삭제됨)
   });
 
-  // post_ 방: 게스트만 카운트 -1 (방장은 leaveRoomAsOwner 경로)
-  // ✅ 카운트는 트랜잭션 밖에서 시도 (실패해도 나가기는 유지)
+  // ✅ 3. 카운트 감소 로직 (생략 없음)
   if (postRef && ownerIdFromRoom && user.uid !== ownerIdFromRoom && wasParticipant) {
     try {
       await runTransaction(db, async (tx) => {
         const postSnap = await tx.get(postRef);
         if (!postSnap.exists()) return;
-
         const postData = postSnap.data() || {};
         const cur = Number(postData.currentParticipants || 0);
-
-        // 최소 1(방장) 유지
         if (cur <= 1) return;
-
         tx.update(postRef, { currentParticipants: cur - 1 });
       });
-    } catch (e) {}
+    } catch (e) {
+      console.error("카운트 감소 실패:", e);
+    }
   }
 };
 
@@ -456,6 +563,12 @@ export const leaveRoomAsOwner = async (roomId) => {
   const user = auth.currentUser;
   const roomRef = doc(db, "chatRooms", roomId);
 
+  // ✅ 1. DB에서 방장의 최신 닉네임을 가져옵니다. (닉네임 해결 핵심)
+  const userSnap = await getDoc(doc(db, "users", user.uid));
+  const latestNickname = userSnap.exists() 
+    ? (userSnap.data().displayName || "방장") 
+    : "방장";
+
   if (typeof roomId === "string" && roomId.startsWith("post_")) {
     const postId = roomId.replace(/^post_/, "");
     if (postId) {
@@ -465,7 +578,8 @@ export const leaveRoomAsOwner = async (roomId) => {
     }
   }
 
-  const systemText = "방장이 채팅방을 떠났습니다. 채팅이 종료되었습니다.";
+  // ✅ 2. 닉네임이 포함된 종료 메시지 구성
+  const systemText = `${latestNickname}님이 채팅방을 떠났습니다. 채팅이 종료되었습니다.`;
 
   await runTransaction(db, async (tx) => {
     const roomSnap = await tx.get(roomRef);
@@ -476,6 +590,9 @@ export const leaveRoomAsOwner = async (roomId) => {
       text: systemText,
       senderId: "system",
       senderNickname: "시스템",
+      actorId: user.uid,           // ✅ 방장 ID 저장
+      displayName: latestNickname, // ✅ 방장 닉네임 저장
+      type: "system",              // ✅ 타입 명시
       createdAt: serverTimestamp(),
       readBy: [user.uid],
     });

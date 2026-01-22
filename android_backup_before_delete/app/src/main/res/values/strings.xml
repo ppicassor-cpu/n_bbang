@@ -1,6 +1,0 @@
-<resources>
-  <string name="app_name">nbbang</string>
-  <string name="expo_splash_screen_resize_mode" translatable="false">contain</string>
-  <string name="expo_splash_screen_status_bar_translucent" translatable="false">false</string>
-  <string name="kakao_app_key">a4b53cefa332f8588fe8ca526b44420e</string>
-</resources>

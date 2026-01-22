@@ -1,4 +1,6 @@
-﻿import React, { useEffect, useRef, useState } from "react";
+﻿// FILE: App.js
+
+import React, { useEffect, useRef, useState } from "react";
 import { Text, TextInput, View, AppState, Modal, TouchableOpacity, StyleSheet } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import Constants from "expo-constants";
@@ -9,7 +11,8 @@ import * as Updates from "expo-updates";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import InitialLoader from "./src/app/screens/InitialLoader"; 
-import { AppProvider } from "./src/app/providers/AppContext";
+// ✅ [수정] useAppContext 훅 추가 임포트 (신호 받기 위함)
+import { AppProvider, useAppContext } from "./src/app/providers/AppContext";
 import RootNavigator from "./src/app/navigation/RootNavigator";
 
 // [폰트 고정 설정]
@@ -44,22 +47,19 @@ const __configureRevenueCatOnce__ = () => {
 };
 __configureRevenueCatOnce__();
 
-export default function App() {
+// ✅ [추가] AppContext 내부에서 동작할 실제 컨텐츠 컴포넌트
+// AppProvider가 감싸고 있어야 useAppContext를 쓸 수 있으므로 분리함
+function AppInner() {
   const appState = useRef(AppState.currentState);
   
-  const [isSplashFinished, setSplashFinished] = useState(false); 
-  const [isDataReady, setIsDataReady] = useState(false);       
+  // ✅ [핵심] AppContext에서 진짜 로딩 상태(isBooting)를 가져옴
+  const { isBooting } = useAppContext();
 
+  const [isSplashFinished, setSplashFinished] = useState(false); 
   const [updateModalVisible, setUpdateModalVisible] = useState(false);
   const updatePromptShownRef = useRef(false);
 
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setIsDataReady(true);
-    }, 10000); 
-
-    return () => clearTimeout(timer);
-  }, []);
+  // ❌ [삭제] 기존의 가짜 10초 타이머 삭제됨 (이제 진짜 데이터 신호를 기다림)
 
   useEffect(() => {
     const handleAppStateChange = async (nextAppState) => {
@@ -87,23 +87,21 @@ export default function App() {
     return () => subscription.remove();
   }, []);
 
-  // ✅ [수정 완료] 전체를 SafeAreaProvider로 감쌌습니다.
-  // 이제 import 구문이 활성화되고, 앱 크래시가 방지됩니다.
   return (
-    <SafeAreaProvider>
+    <>
       {!isSplashFinished ? (
         // 1. 애니메이션 화면
         <InitialLoader 
-          isLoading={!isDataReady}             
+          // ✅ [수정] 가짜 state 대신 진짜 Context 신호(isBooting)를 연결
+          // isBooting이 true인 동안은 로딩 중(isLoading=true)으로 유지됨
+          isLoading={isBooting}            
           onLoaded={() => setSplashFinished(true)} 
         />
       ) : (
-        // 2. 메인 앱 화면
+        // 2. 메인 앱 화면 (데이터가 준비된 상태에서 열림)
         <View style={{ flex: 1, backgroundColor: "black" }}>
           <StatusBar style="light" />
-          <AppProvider>
-            <RootNavigator />
-          </AppProvider>
+          <RootNavigator />
 
           {/* 업데이트 알림 모달 */}
           <Modal visible={updateModalVisible} transparent animationType="fade" onRequestClose={() => {}}>
@@ -141,7 +139,19 @@ export default function App() {
           </Modal>
         </View>
       )}
-    </SafeAreaProvider>
+    </>
+  );
+}
+
+// ✅ [수정] 최상위 컴포넌트 구조 변경
+// AppProvider를 가장 바깥으로 빼서 앱이 켜지자마자 데이터 로딩을 시작하게 함
+export default function App() {
+  return (
+    <AppProvider>
+      <SafeAreaProvider>
+        <AppInner />
+      </SafeAreaProvider>
+    </AppProvider>
   );
 }
 

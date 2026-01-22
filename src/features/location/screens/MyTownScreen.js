@@ -245,11 +245,35 @@ const MyTownScreen = ({ navigation }) => {
   const [isVerified, setIsVerified] = useState(false);
   const [searchText, setSearchText] = useState("");
 
-  const [modalVisible, setModalVisible] = useState(false);
+    const [modalVisible, setModalVisible] = useState(false);
   const [modalConfig, setModalConfig] = useState({ title: "", msg: "", onConfirm: null });
+
+  // ✅ [추가] 줌/이동 중 '번쩍' 숨김용 블랙 오버레이(100~200ms)
+  const [mapFlashCoverVisible, setMapFlashCoverVisible] = useState(false);
+  const mapFlashTimerRef = useRef(null);
+  const mapFlashLockRef = useRef(false);
+
+  const _flashMapCover = () => {
+    if (mapFlashLockRef.current) return; // ✅ 연속 호출 시 1회만(150ms)
+    mapFlashLockRef.current = true;
+    setMapFlashCoverVisible(true);
+
+    if (mapFlashTimerRef.current) clearTimeout(mapFlashTimerRef.current);
+    mapFlashTimerRef.current = setTimeout(() => {
+      mapFlashLockRef.current = false;
+      setMapFlashCoverVisible(false);
+    }, 70);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (mapFlashTimerRef.current) clearTimeout(mapFlashTimerRef.current);
+    };
+  }, []);
 
   // ✅ [추가] TopoJSON/GeoJSON 자동 판별 후, 실제로 사용할 features 준비
   const geoPrepared = useMemo(() => _buildGeoFeatures(GJSON_DATA), []);
+
 
   // ✅ [추가] DongSearchIndex.json (key -> entries[]) 빠른 조회용 맵 (한번만 생성)
   const dongIndexMap = useMemo(() => {
@@ -391,11 +415,7 @@ const MyTownScreen = ({ navigation }) => {
     } catch {}
   };
 
-  useEffect(() => {
-    _getCurrentLocation();
-  }, []);
-
-  useEffect(() => {
+    useEffect(() => {
     if (activeTab === "current") {
       _getCurrentLocation();
     } else {
@@ -410,6 +430,7 @@ const MyTownScreen = ({ navigation }) => {
       setDropdownOpen(false);
     }
   }, [activeTab]);
+
 
   useEffect(() => {
     if (activeTab !== "search") return;
@@ -548,13 +569,13 @@ const MyTownScreen = ({ navigation }) => {
             ? { latitude: myCoords.latitude, longitude: myCoords.longitude }
             : verifyCoords;
 
-        _checkVerification(baseCoords, found);
-        _focusMap(coords);
+                _checkVerification(baseCoords, found);
       } else {
         setSelectedDong(null);
         setIsVerified(false);
         _showModal("알림", "해당 위치의 정보를 찾을 수 없습니다.");
       }
+
     } catch (e) {
       console.warn("Find Dong Error", e);
       setSelectedDong(null);
@@ -1278,63 +1299,81 @@ const MyTownScreen = ({ navigation }) => {
           {/* ✅ 내 위치(myCoords)가 없으면 로딩 화면, 있으면 지도 표시 */}
           {!myCoords ? (
             <View style={styles.mapLoadingContainer}>
-              <ActivityIndicator size="large" color={PRIMARY_COLOR} />
-              <Text style={styles.mapLoadingText}>내 위치를 찾는 중...</Text>
+              <ActivityIndicator size="large" color={PRIMARY_COLOR} />              
             </View>
           ) : (
-            <MapView
-              ref={mapRef}
-              style={styles.map}
-              provider={PROVIDER_GOOGLE}
-              customMapStyle={MAP_STYLE}
-              // ✅ [핵심] 초기 위치를 고정값이 아니라 내 위치(myCoords)로 설정!
-              initialRegion={{
-                latitude: myCoords.latitude,
-                longitude: myCoords.longitude,
-                latitudeDelta: 0.005, // 줌 레벨 좀 더 당겨서(확대) 보여줌
-                longitudeDelta: 0.005,
-              }}
-              showsCompass={true}
-              scrollEnabled={!dropdownOpen}
-              zoomEnabled={!dropdownOpen}
-              rotateEnabled={!dropdownOpen}
-              pitchEnabled={!dropdownOpen}
-              toolbarEnabled={false}
-              showsMyLocationButton={false}
-            >
-              {selectedDong && (
-                <Polygon
-                  coordinates={_renderPolygonCoords()}
-                  fillColor="rgba(141, 251, 67, 0.2)"
-                  strokeColor={PRIMARY_COLOR}
-                  strokeWidth={2}
+            <>
+              <MapView
+                ref={mapRef}
+                style={[styles.map, { backgroundColor: "black" }]}
+                provider={PROVIDER_GOOGLE}
+                customMapStyle={MAP_STYLE}
+                loadingEnabled={true}
+                loadingBackgroundColor="black"
+                onRegionChange={_flashMapCover}
+                // ✅ [핵심] 초기 위치를 고정값이 아니라 내 위치(myCoords)로 설정!
+                initialRegion={{
+                  latitude: myCoords.latitude,
+                  longitude: myCoords.longitude,
+                  latitudeDelta: 0.005, // 줌 레벨 좀 더 당겨서(확대) 보여줌
+                  longitudeDelta: 0.005,
+                }}
+                showsCompass={true}
+                scrollEnabled={!dropdownOpen}
+                zoomEnabled={!dropdownOpen}
+                rotateEnabled={!dropdownOpen}
+                pitchEnabled={!dropdownOpen}
+                toolbarEnabled={false}
+                showsMyLocationButton={false}
+              >
+                {selectedDong && (
+                  <Polygon
+                    coordinates={_renderPolygonCoords()}
+                    fillColor="rgba(141, 251, 67, 0.2)"
+                    strokeColor={PRIMARY_COLOR}
+                    strokeWidth={2}
+                  />
+                )}
+                {/* 내 위치 마커 */}
+                <Marker coordinate={myCoords} title="내 위치" pinColor={PRIMARY_COLOR} />
+                
+                {/* 검색 위치 마커 */}
+                {searchCoords && activeTab === "search" && <Marker coordinate={searchCoords} title="검색 위치" />}
+                            </MapView>
+
+              {mapFlashCoverVisible && (
+                <View
+                  pointerEvents="none"
+                  style={[
+                    StyleSheet.absoluteFillObject,
+                    { backgroundColor: "#000", opacity: 0.12 },
+                  ]}
                 />
               )}
-              {/* 내 위치 마커 */}
-              <Marker coordinate={myCoords} title="내 위치" pinColor={PRIMARY_COLOR} />
-              
-              {/* 검색 위치 마커 */}
-              {searchCoords && activeTab === "search" && <Marker coordinate={searchCoords} title="검색 위치" />}
-            </MapView>
-          )}
 
-          {/* GPS 갱신 버튼 (지도 위에 떠 있어야 하므로 밖으로 뺌) */}
-          {activeTab === "current" && myCoords && (
-            <TouchableOpacity
-              style={styles.gpsBtn}
-              onPress={() => {
-                _getCurrentLocation();
-              }}
-              activeOpacity={0.8}
-            >
-              {loading ? (
-                <ActivityIndicator size="small" color={PRIMARY_COLOR} />
-              ) : (
-                <MaterialIcons name="my-location" size={24} color={PRIMARY_COLOR} />
+              {/* GPS 갱신 버튼 (지도 위에 떠 있어야 하므로 밖으로 뺌) */}
+              {activeTab === "current" && myCoords && (
+                <TouchableOpacity
+                  style={styles.gpsBtn}
+                  onPress={() => {
+                    _getCurrentLocation();
+                  }}
+                  activeOpacity={0.8}
+                >
+                  {/* 버튼 안쪽 로딩 표시는 제거하거나 유지해도 되지만, 중앙 로딩이 뜨므로 아이콘만 둬도 됨 */}
+                  <MaterialIcons name="my-location" size={24} color={PRIMARY_COLOR} />
+                </TouchableOpacity>
               )}
-            </TouchableOpacity>
+              {loading && myCoords && (
+                <View style={styles.loader}>
+                  <ActivityIndicator size="large" color={PRIMARY_COLOR} />
+                  <Text style={styles.mapLoadingText}>위치 찾는 중...</Text>
+                </View>
+              )}
+            </>
           )}
         </View>
+
 
         {/* 하단 패널 */}
         <View style={styles.bottomPanel}>
@@ -1404,12 +1443,6 @@ const MyTownScreen = ({ navigation }) => {
             </View>
           </View>
         </Modal>
-
-        {loading && (
-          <View style={styles.loader}>
-            <ActivityIndicator size="large" color={PRIMARY_COLOR} />
-          </View>
-        )}
       </KeyboardAvoidingView>
     </View>
   );
@@ -1596,8 +1629,12 @@ const styles = StyleSheet.create({
     width: 260,
   },
 
-  mapWrap: { flex: 1, position: "relative" }, // ✅ position: relative 명시 (안전장치)
+  mapWrap: { flex: 1, position: "relative", backgroundColor: "black" }, // ✅ 괄호 안으로 넣어서 수정 완료
   map: { flex: 1 },
+  mapFlashCover: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "black",
+  },
 
   // ✅ [추가] GPS 갱신 버튼 스타일
   gpsBtn: {

@@ -105,7 +105,7 @@ const PostItem = React.memo(({ item, onPress }) => {
 });
 
 export default function HomeScreen({ navigation }) {
-  const { 
+    const { 
     user, 
     isPremium, 
     posts, 
@@ -124,11 +124,16 @@ export default function HomeScreen({ navigation }) {
     checkHotplaceEligibility,
     incrementHotplaceCount,
     purchaseHotplaceExtra,
+    totalUnreadCount,
+
+    // ✅ [추가] 부스트 만료 자동 정리(포커스 1회 호출용)
+    clearExpiredActiveBoostIfNeeded,
 
     // ✅ [추가] 동네 확정/인증 상태 (뱃지 표기용)
     homeDong,
     homeDongVerified
   } = useAppContext();
+
   
   const insets = useSafeAreaInsets();
   
@@ -230,9 +235,18 @@ export default function HomeScreen({ navigation }) {
 
   // ✅ [수정] (1) useFocusEffect에서 refreshPostsAndStores 호출 제거 (loaded 리셋 방지)
   // 상세 화면에서 참여 후 돌아왔을 때 숫자 업데이트는 AppContext의 실시간 스냅샷/상세화면 처리로 해결해야 함
-  useFocusEffect(
+    useFocusEffect(
     useCallback(() => {
       let isActive = true; // 화면이 떠났는지 체크하는 안전장치
+
+      // ✅ [추가] 부스트 만료 자동 정리(포커스 1회)
+      (async () => {
+        try {
+          if (typeof clearExpiredActiveBoostIfNeeded === "function") {
+            await clearExpiredActiveBoostIfNeeded();
+          }
+        } catch (e) {}
+      })();
 
       // ✅ 게이트(좌표 로딩/권한 안내) 끝난 뒤에만 닉네임 체크 실행
       if (locationGateVisible) {
@@ -285,8 +299,9 @@ export default function HomeScreen({ navigation }) {
       return () => {
         isActive = false; // 화면 벗어나면 로직 중단
       };
-    }, [user, locationGateVisible]) // ✅ 게이트 종료 후 실행되도록 의존성 추가
+    }, [user, locationGateVisible, clearExpiredActiveBoostIfNeeded]) // ✅ 의존성 추가
   );
+
 
   // ✅ [추가] 닉네임 저장 및 유효성 검사 로직 - Alert 대신 CustomModal 사용
   const handleSaveNickname = async () => {
@@ -700,12 +715,22 @@ for (let i = 0; i < keyedCombined.length; i++) {
         </TouchableOpacity>
 
         <View style={{ flexDirection: "row", gap: 14, alignItems: "center" }}>
-          <TouchableOpacity
+                   <TouchableOpacity
             onPress={() => navigation.navigate(ROUTES.CHAT_ROOMS)}
             activeOpacity={0.7}
           >
-            <Ionicons name="chatbubbles-outline" size={24} color="white" />
+            <View style={{ position: "relative" }}>
+              <Ionicons name="chatbubbles-outline" size={24} color="white" />
+              {Number(totalUnreadCount || 0) > 0 && (
+                <View style={styles.unreadBadge}>
+                  <Text style={styles.unreadBadgeText}>
+                    {Number(totalUnreadCount) > 99 ? "99+" : String(totalUnreadCount)}
+                  </Text>
+                </View>
+              )}
+            </View>
           </TouchableOpacity>
+
 
           <TouchableOpacity
             onPress={() => navigation.navigate(ROUTES?.PROFILE || "Profile")}
@@ -1052,6 +1077,26 @@ const styles = StyleSheet.create({
   badgeText: { color: theme.primary, fontSize: 11 },
   status: { fontSize: 12, fontWeight: "bold" },
   fab: { position: "absolute", right: 20, backgroundColor: theme.primary, width: 60, height: 60, borderRadius: 30, alignItems: "center", justifyContent: "center" },
-  selectBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", paddingVertical: 14, borderRadius: 8, gap: 8 },
-  selectBtnText: { fontSize: 16, fontWeight: "bold", color: "black" }
+    selectBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", paddingVertical: 14, borderRadius: 8, gap: 8 },
+  selectBtnText: { fontSize: 16, fontWeight: "bold", color: "black" },
+
+  // ✅ [추가] 안읽은 메세지 합계 뱃지(녹색)
+  unreadBadge: {
+    position: "absolute",
+    top: -6,
+    right: -8,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    paddingHorizontal: 5,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: theme.primary,
+  },
+  unreadBadgeText: {
+    color: "black",
+    fontSize: 10,
+    fontWeight: "900",
+  }
 });
+

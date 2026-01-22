@@ -19,7 +19,9 @@ import {
 import {
   collection,
   addDoc,
+  getDocs, // ✅ 추가됨
   query,
+  where,   // ✅ 추가됨 (이미 있다면 확인)
   orderBy,
   deleteDoc,
   updateDoc,
@@ -34,7 +36,7 @@ import {
   runTransaction,
 } from "firebase/firestore";
 import Purchases from "react-native-purchases";
-
+import { subscribeMyRooms } from "../../features/chat/services/chatService";
 // ✅ [추가] 커스텀 모달 import (Alert.alert 대체)
 import CustomModal from "../../components/CustomModal";
 
@@ -201,6 +203,7 @@ function pointInPolygonGeometry(lon, lat, geometry) {
 
 export const AppProvider = ({ children }) => {
   const [user, setUser] = useState(null);
+  const [totalUnreadCount, setTotalUnreadCount] = useState(0);
 
   // ✅ 동 표시 정책: homeDong 우선 (없으면 "내 동네 설정")
   const [currentLocation, setCurrentLocation] = useState("내 동네 설정");
@@ -228,10 +231,14 @@ export const AppProvider = ({ children }) => {
   const [initialReady, setInitialReady] = useState(false);
 
 useEffect(() => {
-  if (!initialReady && authChecked && locationChecked && postsLoaded && storesLoaded) {
+  // ✅ [수정] 스플래시 유지 조건 강화: "좌표(myCoords)가 잡혔거나" or "권한거부 등으로 실패했거나"
+  // 이렇게 해야 홈 화면 진입 시점에 무조건 좌표가 준비되어 있어 깜빡임이 없습니다.
+  const isLocationReady = !!myCoords || (currentLocation === "위치 권한 필요" || currentLocation === "위치 확인 불가");
+
+  if (!initialReady && authChecked && locationChecked && postsLoaded && storesLoaded && isLocationReady) {
     setInitialReady(true);
   }
-}, [initialReady, authChecked, locationChecked, postsLoaded, storesLoaded]);
+}, [initialReady, authChecked, locationChecked, postsLoaded, storesLoaded, myCoords, currentLocation]);
 
 // ✅ 최초 부팅 게이팅은 initialReady만 본다 (루프 방지)
 const isBooting = !initialReady;
@@ -273,7 +280,7 @@ const isBooting = !initialReady;
   const [boostMonthKey, setBoostMonthKey] = useState(null);           // YYYY-MM
   const [boostMembershipUsed, setBoostMembershipUsed] = useState(0);  // 월 N회 사용
   const [activeBoost, setActiveBoost] = useState(null);   
-
+  const [boostTickets, setBoostTickets] = useState(0);
   const [isAdmin, setIsAdmin] = useState(false);
   const isAdminRef = useRef(false);
   useEffect(() => {
@@ -330,6 +337,14 @@ const isBooting = !initialReady;
     "hotplace_one_time",
   ];
 
+  const BOOST_CONSUMABLE_PACKAGE_ID = process.env.EXPO_PUBLIC_BOOST_CONSUMABLE_PACKAGE_ID || "";
+  const BOOST_CONSUMABLE_PRODUCT_ID = process.env.EXPO_PUBLIC_BOOST_CONSUMABLE_PRODUCT_ID || "";
+  const BOOST_CONSUMABLE_FALLBACK_IDS = [
+    "boost_single_099",
+    "boost_099",
+    "boost_single",
+    "boost_one_time",
+  ];
   // ✅ [점검 2] AppContext에서는 절대 configure 하지 않음 (유지)
   const rcLoggedInUidRef = useRef(null);
 
@@ -532,7 +547,7 @@ const isBooting = !initialReady;
     }
   };
 
-  const purchaseHotplaceConsumable = async () => {
+    const purchaseHotplaceConsumable = async () => {
     if (isAdminRef.current) {
       return { status: "PURCHASED", purchaseInfo: { admin: true } };
     }
@@ -568,6 +583,81 @@ const isBooting = !initialReady;
       return { status: "FAILED", purchaseInfo: null, error: e };
     }
   };
+
+  const findBoostConsumablePackage = (offerings) => {
+    try {
+      const current = offerings?.current;
+      const packs = current?.availablePackages || [];
+      if (!packs.length) return null;
+
+      if (BOOST_CONSUMABLE_PACKAGE_ID) {
+        const hit = packs.find((p) => String(p?.identifier || "") === String(BOOST_CONSUMABLE_PACKAGE_ID));
+        if (hit) return hit;
+      }
+
+      const allIds = [];
+      if (BOOST_CONSUMABLE_PRODUCT_ID) allIds.push(String(BOOST_CONSUMABLE_PRODUCT_ID));
+      for (const v of BOOST_CONSUMABLE_FALLBACK_IDS) allIds.push(String(v));
+
+      for (const id of allIds) {
+        const hit = packs.find((p) => String(p?.product?.identifier || "") === id);
+        if (hit) return hit;
+      }
+
+      for (const id of allIds) {
+        const hit = packs.find((p) => String(p?.identifier || "") === id);
+        if (hit) return hit;
+      }
+
+      const priceHit = packs.find((p) => {
+        const priceStr = String(p?.product?.priceString || "");
+        return priceStr.includes("0.99") || priceStr.includes("0,99");
+      });
+      if (priceHit) return priceHit;
+
+      return null;
+    } catch {
+      return null;
+    }
+  };
+
+  const purchaseBoostConsumable = async () => {
+    if (isAdminRef.current) {
+      return { status: "PURCHASED", purchaseInfo: { admin: true } };
+    }
+
+    if (!user?.uid) throw new Error("NO_USER");
+    const apiKey = getRevenueCatApiKey();
+    if (!apiKey) throw new Error("NO_REVENUECAT_API_KEY");
+
+    await initRevenueCatForUser(user.uid);
+
+    const offerings = await Purchases.getOfferings();
+    const targetPackage = findBoostConsumablePackage(offerings);
+    if (!targetPackage) throw new Error("NO_CONSUMABLE_PACKAGE");
+
+    try {
+      const result = await Purchases.purchasePackage(targetPackage);
+
+      const purchaseInfo = {
+        packageIdentifier: String(targetPackage?.identifier || ""),
+        productIdentifier: String(targetPackage?.product?.identifier || ""),
+        priceString: String(targetPackage?.product?.priceString || ""),
+        purchasedAt: new Date().toISOString(),
+        customerInfo: result?.customerInfo || null,
+        transaction: result?.transaction || null,
+      };
+
+      return { status: "PURCHASED", purchaseInfo };
+    } catch (e) {
+      const msg = String(e?.message || "");
+      if (msg.toLowerCase().includes("cancel") || msg.toLowerCase().includes("user_cancel")) {
+        return { status: "CANCELLED", purchaseInfo: null };
+      }
+      return { status: "FAILED", purchaseInfo: null, error: e };
+    }
+  };
+
 
   // ✅ [추가] 홈 동 로드(앱 시작 1회)
   const loadHomeDongFromStorage = async () => {
@@ -980,6 +1070,7 @@ const isBooting = !initialReady;
             hotplaceCount: 0,
             hotplacePaidExtraMonthKey: null,
             hotplacePaidExtraCount: 0,
+            
 
             // ✅ [추가] Boost 기본값
             [BOOST_DAILY_KEY_FIELD]: null,
@@ -1030,48 +1121,81 @@ const isBooting = !initialReady;
   }, []);
 
   useEffect(() => {
-    let unsubUser = null;
+  let unsubUser = null;
 
-    if (user?.uid) {
-      const userRef = doc(db, "users", user.uid);
+  if (user?.uid) {
+    const userRef = doc(db, "users", user.uid);
 
-      unsubUser = onSnapshot(
-        userRef,
-        (snap) => {
-          if (snap.exists()) {
-            const data = snap.data();
-            setBlockedUsers(data.blockedUsers || []);
-
-            setMembershipType(data.membershipType || "free");
-            setHotplaceMonthKey(data.hotplaceMonthKey || null);
-            setHotplaceCount(typeof data.hotplaceCount === "number" ? data.hotplaceCount : 0);
-            setHotplacePaidExtraMonthKey(data.hotplacePaidExtraMonthKey || null);
-            setHotplacePaidExtraCount(typeof data.hotplacePaidExtraCount === "number" ? data.hotplacePaidExtraCount : 0);
-            setBoostDailyKey(data[BOOST_DAILY_KEY_FIELD] || null);
-            setBoostDailyFreeUsed(typeof data[BOOST_DAILY_FREE_USED_FIELD] === "number" ? data[BOOST_DAILY_FREE_USED_FIELD] : 0);
-            setBoostMonthKey(data[BOOST_MONTH_KEY_FIELD] || null);
-            setBoostMembershipUsed(typeof data[BOOST_MEMBERSHIP_USED_FIELD] === "number" ? data[BOOST_MEMBERSHIP_USED_FIELD] : 0);
-            setActiveBoost(data[BOOST_ACTIVE_FIELD] || null);
+    unsubUser = onSnapshot(
+      userRef,
+      (snap) => {
+        if (snap.exists()) {
+          const data = snap.data();
+          setBlockedUsers(data.blockedUsers || []);
+          if (data.boostTickets === undefined) {
+             updateDoc(userRef, { boostTickets: 0 }).catch(() => {});
+             setBoostTickets(0); // 화면에는 일단 0으로 표시
           } else {
-            setBlockedUsers([]);
-
-            setMembershipType("free");
-            setHotplaceMonthKey(null);
-            setHotplaceCount(0);
-            setHotplacePaidExtraMonthKey(null);
-            setHotplacePaidExtraCount(0);
+             setBoostTickets(data.boostTickets);
           }
-        },
-        (e) => {
-          console.warn("blockedUsers onSnapshot Error:", e);
-        }
-      );
-    }
 
-    return () => {
-      if (unsubUser) unsubUser();
-    };
-  }, [user?.uid]);
+          setMembershipType(data.membershipType || "free");
+          setHotplaceMonthKey(data.hotplaceMonthKey || null);
+          setHotplaceCount(typeof data.hotplaceCount === "number" ? data.hotplaceCount : 0);
+          setHotplacePaidExtraMonthKey(data.hotplacePaidExtraMonthKey || null);
+          setHotplacePaidExtraCount(typeof data.hotplacePaidExtraCount === "number" ? data.hotplacePaidExtraCount : 0);
+          setBoostDailyKey(data[BOOST_DAILY_KEY_FIELD] || null);
+          setBoostDailyFreeUsed(typeof data[BOOST_DAILY_FREE_USED_FIELD] === "number" ? data[BOOST_DAILY_FREE_USED_FIELD] : 0);
+          setBoostMonthKey(data[BOOST_MONTH_KEY_FIELD] || null);
+          setBoostMembershipUsed(typeof data[BOOST_MEMBERSHIP_USED_FIELD] === "number" ? data[BOOST_MEMBERSHIP_USED_FIELD] : 0);
+          setActiveBoost(data[BOOST_ACTIVE_FIELD] || null);
+          
+        } else {
+          setBlockedUsers([]);
+
+          setMembershipType("free");
+          setHotplaceMonthKey(null);
+          setHotplaceCount(0);
+          setHotplacePaidExtraMonthKey(null);
+          setHotplacePaidExtraCount(0);
+          setBoostTickets(0);
+        }
+      },
+      (e) => {
+        console.warn("blockedUsers onSnapshot Error:", e);
+      }
+    );
+  }
+
+  return () => {
+    if (unsubUser) unsubUser();
+  };
+}, [user?.uid]);
+
+useEffect(() => {
+  let unsubRooms = null;
+
+  if (user?.uid) {
+    unsubRooms = subscribeMyRooms((rooms) => {
+      const uid = user.uid;
+
+      const sum = (rooms || []).reduce((acc, r) => {
+        const unreadObj = r?.unreadCounts && typeof r.unreadCounts === "object" ? r.unreadCounts : {};
+        const n = Number(unreadObj?.[uid] || 0);
+        return acc + (Number.isFinite(n) ? n : 0);
+      }, 0);
+
+      setTotalUnreadCount(sum);
+    });
+  } else {
+    setTotalUnreadCount(0);
+  }
+
+  return () => {
+    if (unsubRooms) unsubRooms();
+  };
+}, [user?.uid]);
+
 
   function getTodayKST() {
     const now = new Date();
@@ -1495,6 +1619,8 @@ const isBooting = !initialReady;
       hotplaceCount: 0,
       hotplacePaidExtraMonthKey: null,
       hotplacePaidExtraCount: 0,
+      boostTickets: 0,
+      [BOOST_DAILY_KEY_FIELD]: null,
     });
 
     await initRevenueCatForUser(userCredential.user.uid);
@@ -1657,6 +1783,31 @@ const isBooting = !initialReady;
     setHotplaceCount(nextCount);
   };
 
+  const addBoostTicket = async (purchaseInfo = null) => {
+    if (!user?.uid) return;
+
+    // 1. DB에서 현재 보유 티켓 수 조회 (안전장치)
+    const userRef = doc(db, "users", user.uid);
+    const snap = await getDoc(userRef);
+    const currentTickets = snap.exists() ? (snap.data().boostTickets || 0) : 0;
+
+    // 2. DB 업데이트 (+1)
+    await updateDoc(userRef, {
+      boostTickets: currentTickets + 1,
+    });
+
+    // 3. 구매 내역 기록 (선택 사항)
+    try {
+      await addDoc(collection(db, "users", user.uid, "boostPurchases"), {
+        type: "ticket_purchase",
+        purchaseInfo: purchaseInfo || null,
+        createdAt: new Date().toISOString(),
+      });
+    } catch (e) {
+      console.warn("부스트 구매기록 저장 실패(무시)", e);
+    }
+  };
+
   const getNowIso = () => new Date().toISOString();
 
   const getTodayKSTKey = () => {
@@ -1682,9 +1833,44 @@ const isBooting = !initialReady;
     return Number.isFinite(t) ? t : 0;
   };
 
-  const _isActiveBoost = (ab) => {
+    const _isActiveBoost = (ab) => {
     const untilMs = _parseMs(ab?.until);
     return untilMs > Date.now();
+  };
+
+  // ✅ [추가] paid(단건 유료) 중복 방지용 구매ID 추출
+  const _getPurchaseIdFromPurchaseInfo = (purchaseInfo) => {
+    try {
+      if (!purchaseInfo || typeof purchaseInfo !== "object") return "";
+
+      const t = purchaseInfo?.transaction || null;
+
+      const candidates = [
+        t?.transactionIdentifier,          // iOS
+        t?.originalTransactionIdentifier,  // iOS
+        t?.purchaseToken,                  // Android
+        t?.identifier,                     // fallback
+        purchaseInfo?.purchaseId,
+        purchaseInfo?.orderId,
+        purchaseInfo?.purchasedAt && `${purchaseInfo.purchasedAt}:${purchaseInfo?.productIdentifier || ""}`,
+      ];
+
+      for (const v of candidates) {
+        const s = v != null ? String(v).trim() : "";
+        if (s) return s;
+      }
+
+      const raw = JSON.stringify(purchaseInfo);
+      if (!raw) return "";
+
+      let hash = 0;
+      for (let i = 0; i < raw.length; i++) {
+        hash = (hash * 31 + raw.charCodeAt(i)) >>> 0;
+      }
+      return `pi_${hash}`;
+    } catch {
+      return "";
+    }
   };
 
   // [수정 후]
@@ -1713,6 +1899,7 @@ const checkBoostEligibility = async ({ contentType = "post", contentId, mode = "
       return { status: "HAS_ACTIVE_BOOST", ok: false, activeBoost: ab };
     }
   }
+
 
   // ✅ 게시글/스토어 문서 확인 + 6시간 경과 조건(도배 방지)
   // - paid도 동일하게 걸어두었음(원하면 paid만 즉시 허용으로 바꿀 수 있음)
@@ -1762,7 +1949,8 @@ const checkBoostEligibility = async ({ contentType = "post", contentId, mode = "
 };
 
   // [수정 후]
-const applyBoostToContent = async ({ contentType = "post", contentId, mode = "free", durationHours = 6 } = {}) => {
+const applyBoostToContent = async ({ contentType = "post", contentId, mode = "free", durationHours = 6, purchaseInfo = null } = {}) => {
+
   if (!user?.uid) return { status: "NO_USER", ok: false };
   if (!contentId) return { status: "NO_CONTENT_ID", ok: false };
 
@@ -1811,6 +1999,34 @@ const applyBoostToContent = async ({ contentType = "post", contentId, mode = "fr
       let nextMonthKey = userData?.[BOOST_MONTH_KEY_FIELD] || null;
       let nextMembershipUsed = typeof userData?.[BOOST_MEMBERSHIP_USED_FIELD] === "number" ? userData?.[BOOST_MEMBERSHIP_USED_FIELD] : 0;
 
+      // ✅ [추가] paid(단건 유료) 중복 방지용 구매ID
+      let paidPurchaseId = "";
+      if (mode === "paid") {
+        paidPurchaseId = _getPurchaseIdFromPurchaseInfo(purchaseInfo);
+        if (!paidPurchaseId) return { ok: false, status: "NO_PURCHASE_ID" };
+
+        // users/{uid}/boostPurchases/{purchaseId} 존재하면 이미 처리된 결제 -> boostCount 중복 +1 금지
+        const purchaseRef = doc(db, "users", user.uid, "boostPurchases", String(paidPurchaseId));
+        const purchaseSnap = await tx.get(purchaseRef);
+        if (purchaseSnap.exists()) {
+          return { ok: false, status: "DUPLICATE_PURCHASE", purchaseId: paidPurchaseId };
+        }
+
+        // ✅ 아직 처리 안된 결제면 기록 + boostCount +1 (트랜잭션)
+        const baseBoostCount = typeof userData?.boostCount === "number" ? userData.boostCount : 0;
+        tx.set(purchaseRef, {
+          purchaseId: String(paidPurchaseId),
+          contentType: String(contentType),
+          contentId: String(contentId),
+          purchaseInfo: purchaseInfo || null,
+          createdAt: serverTimestamp(),
+        });
+
+        tx.update(userRef, {
+          boostCount: baseBoostCount + 1,
+        });
+      }
+
       if (mode === "free") {
         const used = (nextDailyKey === todayKey) ? Number(nextDailyUsed || 0) : 0;
         if (used >= 1) return { ok: false, status: "FREE_DAILY_LIMIT", todayKey, used };
@@ -1831,7 +2047,7 @@ const applyBoostToContent = async ({ contentType = "post", contentId, mode = "fr
         if (used >= limit) return { ok: false, status: "MEMBERSHIP_LIMIT", monthKey, limit, used };
 
         nextMonthKey = monthKey;
-        nextMembershipUsed = used + 1;
+        nextMembershipUsed = used + 1;      
       }
 
       // ✅ 콘텐츠 문서 부스트 필드
@@ -1961,13 +2177,67 @@ const applyBoostToContent = async ({ contentType = "post", contentId, mode = "fr
 
   const updatePost = async (postId, updatedData) => {
     if (!postId) return;
+    
+    // 1. 게시물 업데이트
     await updateDoc(doc(db, "posts", postId), updatedData);
+
+    // ✅ 2. 해당 postId를 가진 모든 채팅방에 알림 전송
+    try {
+      // 닉네임 불일치 문제를 해결하기 위해 최신 닉네임을 조회합니다.
+      const userSnap = await getDoc(doc(db, "users", user.uid));
+      const latestNickname = userSnap.exists() 
+        ? (userSnap.data().displayName || "방장") 
+        : "방장";
+
+      const q = query(collection(db, "chatRooms"), where("postId", "==", postId));
+      const roomSnaps = await getDocs(q);
+
+      roomSnaps.forEach(async (roomDoc) => {
+        await addDoc(collection(db, "chatRooms", roomDoc.id, "messages"), {
+          text: "방장이 게시물을 수정하였습니다.",
+          senderId: "system",
+          actorId: user.uid,           // ✅ 누가 수정했는지 ID 저장
+          displayName: latestNickname, // ✅ 수정 당시의 닉네임 저장
+          type: "system",
+          createdAt: new Date().toISOString(),
+        });
+      });
+    } catch (e) {
+      console.warn("수정 알림 전송 실패:", e);
+    }
   };
 
   const deletePost = async (postId) => {
+    if (!postId) return;
+
+    // ✅ 1. 삭제 전, 해당 postId를 가진 모든 채팅방에 알림 전송
+    try {
+      // 닉네임 불일치 문제를 해결하기 위해 최신 닉네임을 조회합니다.
+      const userSnap = await getDoc(doc(db, "users", user.uid));
+      const latestNickname = userSnap.exists() 
+        ? (userSnap.data().displayName || "방장") 
+        : "방장";
+
+      const q = query(collection(db, "chatRooms"), where("postId", "==", postId));
+      const roomSnaps = await getDocs(q);
+
+      for (const roomDoc of roomSnaps.docs) {
+        await addDoc(collection(db, "chatRooms", roomDoc.id, "messages"), {
+          text: "방장이 게시물을 삭제하였습니다.",
+          senderId: "system",
+          actorId: user.uid,           // ✅ 누가 삭제했는지 ID 저장
+          displayName: latestNickname, // ✅ 삭제 당시의 닉네임 저장
+          type: "system",
+          createdAt: new Date().toISOString(),
+        });
+      }
+    } catch (e) {
+      console.warn("삭제 알림 전송 실패:", e);
+    }
+
+    // 2. 게시물 삭제
     await deleteDoc(doc(db, "posts", postId));
   };
-
   return (
     <AppContext.Provider
       value={{
@@ -1978,6 +2248,8 @@ const applyBoostToContent = async ({ contentType = "post", contentId, mode = "fr
         signup,
         logout,
         resetPassword,
+        boostTickets,      // (현재 보유 개수)
+        addBoostTicket,    // (티켓 추가 함수)
 
         currentLocation,
         setCurrentLocation,
@@ -2035,6 +2307,8 @@ const applyBoostToContent = async ({ contentType = "post", contentId, mode = "fr
         purchaseHotplaceConsumable,
         purchaseHotplaceExtra: purchaseHotplaceConsumable,
 
+        purchaseBoostConsumable,
+
         isAdmin,
 
         blockedUsers,
@@ -2050,6 +2324,7 @@ const applyBoostToContent = async ({ contentType = "post", contentId, mode = "fr
         checkBoostEligibility,
         applyBoostToContent,
         clearExpiredActiveBoostIfNeeded,
+        totalUnreadCount,
       }}
     >
       {children}
