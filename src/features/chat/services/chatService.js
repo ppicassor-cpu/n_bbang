@@ -42,6 +42,27 @@ const safeToDate = (v) => {
 
 const isValidRoomId = (roomId) => typeof roomId === "string" && roomId.trim().length > 0;
 
+const getMyDisplayName = async () => {
+  try {
+    const uid = auth?.currentUser?.uid;
+    if (uid) {
+      const snap = await getDoc(doc(db, "users", uid));
+      if (snap.exists()) {
+        const data = snap.data() || {};
+        const name = String(data.displayName || "").trim();
+        if (name) return name;
+      }
+    }
+  } catch (e) {}
+
+  const u = auth?.currentUser;
+  const fromAuth = String(u?.displayName || "").trim();
+  if (fromAuth) return fromAuth;
+
+  const fromEmail = u?.email ? String(u.email).split("@")[0] : "";
+  return fromEmail || "사용자";
+};
+
 // ✅ (문제3) markAsRead 폭증 방지용: room 단위로 최근 처리한 메시지ID 캐시
 // - 로직 구조는 그대로(배치 업데이트) 유지
 // - 동일 messageIds가 반복 들어오면 write 생략
@@ -250,7 +271,7 @@ export const sendMessage = async (roomId, text, imageUrl = null, replyTo = null)
   if (roomSnap.data()?.isClosed) throw new Error("ROOM_CLOSED");
 
   const user = auth.currentUser;
-  const fallbackNickname = user.displayName || (user.email ? user.email.split("@")[0] : "사용자");
+  const senderDisplayName = await getMyDisplayName();
   const safeText = hasText ? String(text) : "";
 
   const roomData = roomSnap.data() || {};
@@ -263,7 +284,7 @@ export const sendMessage = async (roomId, text, imageUrl = null, replyTo = null)
   // ✅ 채팅방 리스트 “안읽음(1)”용 대상자(=보낸 사람 제외, 방장도 보정 포함)
   const targets = Array.from(
     new Set([...(participants || []), ownerId].filter(Boolean))
-  ).filter((uid) => uid !== user.uid);;
+  ).filter((uid) => uid !== user.uid);
 
   // ✅ replyTo 정규화 (잘못된 값이면 null로)
   const normalizedReplyTo =
@@ -277,12 +298,13 @@ export const sendMessage = async (roomId, text, imageUrl = null, replyTo = null)
       : null;
 
   // ✅ image + replyTo 필드 저장 (메시지ID 확보)
+  // ✅ senderNickname => displayName 기준으로 고정 저장
   const msgDocRef = await addDoc(collection(db, "chatRooms", roomId, "messages"), {
     text: safeText,
     image: imageUrl || null,
     senderId: user.uid,
     senderEmail: user.email || null,
-    senderNickname: fallbackNickname,
+    senderNickname: senderDisplayName,
     createdAt: serverTimestamp(),
     readBy: [user.uid],
     replyTo: normalizedReplyTo,
@@ -312,7 +334,6 @@ export const sendMessage = async (roomId, text, imageUrl = null, replyTo = null)
     if (targets.length === 0) return;
 
     const roomTitle = roomData.title || "채팅방";
-    const senderNickname = fallbackNickname;
 
     await Promise.all(
       targets.map((targetUid) =>
@@ -321,7 +342,7 @@ export const sendMessage = async (roomId, text, imageUrl = null, replyTo = null)
           roomId,
           roomName: roomTitle,
           title: roomTitle,
-          body: `${senderNickname}: ${lastMessageText}`,
+          body: `${senderDisplayName}: ${lastMessageText}`,
           isRead: false,
           createdAt: serverTimestamp(),
           senderId: user.uid,
@@ -330,6 +351,7 @@ export const sendMessage = async (roomId, text, imageUrl = null, replyTo = null)
     );
   } catch (e) {}
 };
+
 
 
 // 3. 메시지 구독 (최신 100개 + 화면 시간순)
