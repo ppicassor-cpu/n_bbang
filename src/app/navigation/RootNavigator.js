@@ -107,7 +107,7 @@ export default function RootNavigator() {
             <Stack.Screen name={ROUTES.WRITE} component={WriteScreen} options={{ title: "N빵 모집하기" }} />
             <Stack.Screen name={ROUTES.WRITE_FREE} component={WriteFreeScreen} options={{ title: "무료나눔 하기" }} />
             <Stack.Screen name={ROUTES.DETAIL} component={DetailScreen} options={{ title: "상세 정보" }} />
-            <Stack.Screen name={ROUTES.FREE_DETAIL} component={FreeDetailScreen} options={{ title: "무료나눔 상세" }} />
+            <Stack.Screen name={ROUTES.FREE_DETAIL} component={FreeDetailScreen} options={{ title: "무료나눔" }} />
 
             {/* ✅ [추가] 스토어 글쓰기 화면 */}
             <Stack.Screen name={ROUTES.STORE_WRITE} component={StoreWriteScreen} options={{ title: "핫스토어 등록" }} />
@@ -160,7 +160,7 @@ export default function RootNavigator() {
             <Stack.Screen 
               name={ROUTES.MY_TOWN} 
               component={MyTownScreen} 
-              options={{ title: "내 동네", headerShown: true }} 
+              options={{ title: "내 동네 설정", headerShown: true }} 
             />
           </>
         )}

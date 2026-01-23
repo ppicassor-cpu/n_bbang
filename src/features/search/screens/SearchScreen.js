@@ -12,24 +12,23 @@ import {
   Easing,
   TouchableWithoutFeedback 
 } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
-import { Text } from "../../../components/MyText";
 import { useNavigation } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-// ✅ [추가] 파이어베이스 Firestore 관련 임포트
-import { collection, query, where, getDocs, orderBy, limit } from "firebase/firestore";
-import { db } from "../../../firebaseConfig"; 
+import { Image } from "expo-image";
+import { Ionicons, MaterialIcons } from "@expo/vector-icons";
 import { useAppContext } from "../../../app/providers/AppContext";
 import { theme } from "../../../theme"; 
+import { ROUTES } from "../../../app/navigation/routes";
 import CustomModal from "../../../components/CustomModal"; 
+import { Text } from "../../../components/MyText";
 
 const SEARCH_HISTORY_KEY = "SEARCH_HISTORY_V1";
 const AUTO_SAVE_KEY = "SEARCH_AUTO_SAVE_V1";
 
 // ✅ [수정] homeDong을 props나 전역 상태에서 받아오도록 설정
 export default function SearchScreen() {
-  const { homeDong, myCoords, getDistanceFromLatLonInKm } = useAppContext();
+  const { homeDong, myCoords, getDistanceFromLatLonInKm, posts, stores } = useAppContext();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const bottomSafePadding = Math.max(insets.bottom, 12);
@@ -61,65 +60,41 @@ export default function SearchScreen() {
     if (homeDong && homeDong !== "내 동네 설정") {
       fetchSourceData(); 
     }
-  }, [homeDong]); // ✅ homeDong이 확정되는 순간 다시 불러오도록 구조 수정
+  }, [homeDong, posts, stores]); // ✅ homeDong이 확정되는 순간 다시 불러오도록 구조 수정
 
   // ✅ [추가] 파이어베이스에서 우리 동네 전체 게시글 로드
   const fetchSourceData = async () => {
-  // 구조적 핵심: homeDong이 유효한 문자열(동네이름)일 때만 Firebase 호출 허용
-  if (!homeDong || typeof homeDong !== "string" || homeDong === "내 동네 설정") return;
+    if (!homeDong || typeof homeDong !== "string" || homeDong === "내 동네 설정") return;
 
-  try {
-    // 1) posts: location==homeDong + dong==homeDong 두 케이스 모두 커버
-    const postsRef = collection(db, "posts");
-    const q1 = query(postsRef, where("location", "==", homeDong));
-    const q2 = query(postsRef, where("dong", "==", homeDong));
+    try {
+      const postsData = Array.isArray(posts) ? posts : [];
 
-    const [snap1, snap2] = await Promise.all([getDocs(q1), getDocs(q2)]);
+      const storesData = (Array.isArray(stores) ? stores : []).map((s) => {
+        const _s = s || {};
+        const name = _s?.name || _s?.storeName || _s?.title;
 
-    const postsMap = new Map();
-    snap1.docs.forEach((d) => postsMap.set(d.id, { id: d.id, ...d.data() }));
-    snap2.docs.forEach((d) => postsMap.set(d.id, { id: d.id, ...d.data() }));
+        return {
+          ..._s,
+          type: "store",
+          title: _s?.title || name,
+          storeName: _s?.storeName || name,
+          name,
+          location: _s?.address,
+          address: _s?.address,
+          coords: _s?.coords || _s?.location,
+          category: _s?.category || "핫플레이스",
+          realCategory: _s?.realCategory || _s?.category,
+        };
+      });
 
-    const postsData = Array.from(postsMap.values());
+      const merged = [...postsData, ...storesData];
 
-    // 2) stores: stores 컬렉션 로드 → Search용으로 posts 형태로 정규화
-    const storesRef = collection(db, "stores");
-    const qs = query(storesRef, orderBy("createdAt", "desc"), limit(500));
-    const storesSnap = await getDocs(qs);
-
-    const storesData = storesSnap.docs.map((d) => {
-      const s = d.data() || {};
-      return {
-        id: d.id,
-        ...s,
-
-        // ✅ Search/탭필터/표시 통일용 필드
-        type: "store",
-        title: s.name,
-        storeName: s.name,
-        name: s.name,
-
-        // ✅ 홈에서 보이던 주소 표시용(동+상세주소가 address에 들어있으면 그대로 노출)
-        location: s.address,
-        address: s.address,
-
-        // ✅ 거리 계산용 좌표 통일
-        coords: s.location,
-
-        // ✅ 홈처럼 “핫플레이스/실카테고리” 구분 가능하게
-        category: "핫플레이스",
-        realCategory: s.category,
-      };
-    });
-
-    const merged = [...postsData, ...storesData];
-
-    setSourceData(merged);
-    console.log(`[${homeDong}] posts:${postsData.length} / stores:${storesData.length} / total:${merged.length} 로드 완료`);
-  } catch (e) {
-    console.error("DB 데이터 로딩 실패:", e);
-  }
-};
+      setSourceData(merged);
+      console.log(`[${homeDong}] posts:${postsData.length} / stores:${storesData.length} / total:${merged.length} 로드 완료`);
+    } catch (e) {
+      console.error("sourceData 구성 실패:", e);
+    }
+  };
 
 
   // 🔹 토글 애니메이션 효과
@@ -158,12 +133,8 @@ export default function SearchScreen() {
 
   // ✅ [핵심] 탭 필터용 카테고리 정규화 (NBANG / STORE / OTHER)
   const getItemCategory = (item) => {
-    const raw = normalizeString(item?.type || item?.postType || item?.category || item?.kind);
-
-    if (raw.includes("nbang") || raw.includes("n빵") || raw.includes("나눔")) return "NBANG";
-    if (raw.includes("store") || raw.includes("핫스토어") || raw.includes("hotstore") || raw.includes("핫플") || raw.includes("hotplace")) return "STORE";
-
-    return "OTHER";
+    if (item?.type === "store") return "STORE";
+    return "NBANG";
   };
 
   // ✅ [핵심] 검색 대상 텍스트(상호 포함) 구성
@@ -263,6 +234,13 @@ const getDistanceText = (item) => {
 
   // ✅ [추가] 입력 시 자동 추천 로직
   const handleTextChange = (text) => {
+    // ✅ [추가] 동네가 설정되지 않았으면 입력 차단 및 모달 표시
+    if (!homeDong || homeDong === "내 동네 설정") {
+      Keyboard.dismiss(); // 키보드 내리기
+      setModalType("REQUIRE_DONG"); // 모달 띄우기
+      return;
+    }
+
     setKeyword(text);
     if (text.trim().length > 0) {
       setSearchMode("SUGGESTING"); 
@@ -510,10 +488,11 @@ const getDistanceText = (item) => {
                 results
                   .filter(item => activeTab === 'ALL' || getItemCategory(item) === activeTab)
                   .map((item, index) => (
-                    // ✅ [수정] 클릭 시 게시물 상세로 연결 (N빵: Detail, 스토어: StoreDetail)
+                    // ✅ [수정] 홈 화면 스타일 (왼쪽 이미지 + 오른쪽 4줄 정보)
                     <TouchableOpacity 
                       key={item.id || `result_${index}`} 
-                      style={styles.resultCardPlaceholder}
+                      style={styles.resultCard} 
+                      activeOpacity={0.7}
                       onPress={() => {
                         if (item.type === 'store') {
                           navigation.navigate('StoreDetail', { store: item });
@@ -522,26 +501,39 @@ const getDistanceText = (item) => {
                         }
                       }}
                     >
-                      <View style={styles.resultItemLayout}>
-                        {/* 1. 왼쪽: 제목 (한 줄) */}
-                        <Text style={styles.resultTitle} numberOfLines={1}>
-                          {getDisplayTitle(item)}
+                      {/* 1. 왼쪽: 이미지 박스 (홈 화면 규격 적용) */}
+                      <View style={styles.resultImageBox}>
+                        {item.images && item.images.length > 0 ? (
+                          <Image 
+                            source={{ uri: (typeof item.images[0] === 'string' ? item.images[0] : item.images[0]?.uri) }} 
+                            style={styles.resultImage} 
+                            contentFit="cover"
+                            transition={200}
+                          />
+                        ) : (
+                          <MaterialIcons name={item.type === 'store' ? "storefront" : "receipt-long"} size={30} color="#555" />
+                        )}
+                      </View>
+
+                      {/* 2. 오른쪽: 4줄 정보 박스 */}
+                      <View style={styles.resultInfoBox}>
+                        {/* 1줄: 제목 */}
+                        <Text style={styles.resultTitleText} numberOfLines={1}>{getDisplayTitle(item)}</Text>
+                        
+                        {/* 2줄: 동네(주소) + 거리 */}
+                        <Text style={styles.resultLocationText} numberOfLines={1}>
+                          {(getDisplayLocation(item) || "지역 정보 없음")}{getDistanceText(item)}
                         </Text>
 
-                        {/* 2. 오른쪽: 주소+거리(상단) & 시간(하단) - 두 줄 구성 */}
-                        <View style={styles.resultInfoGroup}>
-                          <Text style={styles.resultSubInfo} numberOfLines={1}>
-                            {(getDisplayLocation(item) || "지역 정보 없음")}{getDistanceText(item)}
-                          </Text>
-                          <Text style={styles.resultMeta}>
-                            {getTimeStatusText(item)}
-                          </Text>
-                        </View>
+                        {/* 3줄: 금액(N빵) / 무료(나눔) / 업종(핫스토어) */}
+                        <Text style={styles.resultPriceText}>
+                          {item.type === "store" 
+                            ? item.realCategory 
+                            : (item.category === "무료나눔" || item.isFree === true ? "무료" : `${(Number(item.pricePerPerson || 0) + Number(item.tip || 0)).toLocaleString()}원`)}
+                        </Text>
 
-                        {/* 3. 맨 오른쪽: 바로가기 아이콘 (두 줄 높이 중앙 배치) */}
-                        <View style={styles.resultActionIcon}>
-                          <Ionicons name="chevron-forward" size={18} color="#666" />
-                        </View>
+                        {/* 4줄: 작성/수정 시간 */}
+                        <Text style={styles.resultTimeText}>{getTimeStatusText(item)}</Text>
                       </View>
                     </TouchableOpacity>
                   ))
@@ -561,10 +553,9 @@ const getDistanceText = (item) => {
           <View style={styles.adTag}>
             <Text style={styles.adTagText}>AD</Text>
           </View>
-          <Text style={styles.adText}>광고 문의</Text>
+          <Text style={styles.adText}>Google AdMob 배너 영역</Text>
         </TouchableOpacity>
         <View style={{ height: insets.bottom }} />
-        <View style={{ height: bottomSafePadding }} />
 
         <CustomModal
           visible={modalType === 'DELETE_ALL'}
@@ -597,6 +588,19 @@ const getDistanceText = (item) => {
           confirmText="확인"
           type="alert"
         />
+
+        {/* ✅ [추가] 동네 미설정 안내 모달 (취소 버튼 없음) */}
+        <CustomModal
+          visible={modalType === 'REQUIRE_DONG'}
+          title="동네 설정 필요"
+          message={"내 동네를 설정한 후 다시 검색해주세요."}
+          type="alert" // alert 타입은 버튼이 하나만 나옵니다 (취소 없음)
+          confirmText="내 동네 설정하러 가기"
+          onConfirm={() => {
+            setModalType(null);
+            navigation.navigate(ROUTES.MY_TOWN); // 내 동네 설정 화면으로 이동
+          }}
+        />
       </View>
     </TouchableWithoutFeedback>
   );
@@ -624,7 +628,7 @@ const styles = StyleSheet.create({
   input: {
     flex: 1,
     color: "white",
-    fontSize: 14,
+    fontSize: 13,
     marginLeft: 8,
     height: "100%",
   },
@@ -693,43 +697,55 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
 
-  resultCardPlaceholder: {
+  // ✅ [수정] 홈 화면과 통일된 카드 스타일
+  resultCard: {
+    flexDirection: 'row',
     backgroundColor: '#1A1A1A',
-    padding: 16,
-    borderRadius: 12,
+    borderRadius: 16,
+    padding: 12,
     marginBottom: 12,
     borderWidth: 1,
     borderColor: '#222',
-  },
-  // ✅ [수정] 전체 3단 정렬 레이아웃
-  resultItemLayout: {
-    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
   },
-  resultTitle: { 
+  resultImageBox: { 
+    width: 80, 
+    height: 80, 
+    backgroundColor: "#222", 
+    borderRadius: 12, 
+    alignItems: "center", 
+    justifyContent: "center", 
+    overflow: "hidden" 
+  },
+  resultImage: { 
+    width: "100%", 
+    height: "100%" 
+  },
+  resultInfoBox: { 
+    flex: 1, 
+    marginLeft: 16, 
+    justifyContent: "center" 
+  },
+  resultTitleText: { 
     color: 'white', 
-    fontWeight: 'bold',
-    fontSize: 15,
-    flex: 1, // 왼쪽에서 최대 공간 차지
-    marginRight: 12,
+    fontWeight: 'bold', 
+    fontSize: 16, 
+    marginBottom: 2 
   },
-  resultInfoGroup: {
-    alignItems: 'flex-end', // 오른쪽 텍스트들을 우측 정렬
-    justifyContent: 'center',
-  },
-  resultSubInfo: { 
+  resultLocationText: { 
     color: '#AAA', 
-    fontSize: 12,
-    marginBottom: 2, // 위아래 간격 조절
+    fontSize: 13, 
+    marginBottom: 1 
   },
-  resultMeta: { 
+  resultPriceText: { 
+    color: 'white', 
+    fontSize: 15, 
+    fontWeight: 'bold', 
+    marginBottom: 2 
+  },
+  resultTimeText: { 
     color: '#666', 
-    fontSize: 11,
-  },
-  resultActionIcon: {
-    marginLeft: 10,
-    justifyContent: 'center',
+    fontSize: 11 
   },
 
   emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingTop: 100 },

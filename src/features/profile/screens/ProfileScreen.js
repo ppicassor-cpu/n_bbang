@@ -47,6 +47,28 @@ export default function ProfileScreen() {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
 
+  React.useLayoutEffect(() => {
+    navigation.setOptions({
+      headerTitle: () => (
+        <Text 
+          style={{ 
+            fontSize: 23,       
+            fontWeight: "bold", 
+            color: "white"      
+          }} 
+          allowFontScaling={false} // ✅ 핵심: 시스템 폰트 크기 무시
+        >
+          내 정보 
+        </Text>
+      ),
+      headerStyle: {
+        backgroundColor: "black", 
+        shadowColor: "transparent", 
+      },
+      headerTitleAlign: "center", 
+    });
+  }, [navigation]);
+
   // ✅ Context 데이터
   const {
     user,

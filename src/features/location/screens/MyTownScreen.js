@@ -32,7 +32,15 @@ import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 
 // ✅ 데이터 파일 (경로 정확해야 함)
 import GJSON_DATA from "../../../../assets/geo/HangJeongDong.json";
-import DONG_INDEX from "../../../../assets/geo/DongSearchIndex.json";
+import LEGAL_DONG_INDEX from "../../../../assets/geo/LegalDongSearchIndex.json";
+import ADM_TO_LEGAL_MAP from "../../../../assets/geo/AdmToLegalMap.json";
+
+const LEGAL_TO_ADM_MAP = {};
+Object.entries(ADM_TO_LEGAL_MAP).forEach(([admCd, legalList]) => {
+  legalList.forEach(legal => {
+    LEGAL_TO_ADM_MAP[legal.adm_cd] = admCd;
+  });
+});
 
 const { width } = Dimensions.get("window");
 const PRIMARY_COLOR = "#CCFF00"; // 라임 그린
@@ -232,6 +240,27 @@ const MyTownScreen = ({ navigation }) => {
   const mapRef = useRef(null);
 
   const { saveHomeDong, verifyHomeDongByGps } = useAppContext();
+  React.useLayoutEffect(() => {
+    navigation.setOptions({
+      headerTitle: () => (
+        <Text 
+          style={{ 
+            fontSize: 23,       // 👈 여기서 원하는 크기로 조절 (보통 16~18)
+            fontWeight: "bold", 
+            color: "white"      // 배경이 검정이므로 흰색 지정
+          }} 
+          allowFontScaling={false} // ✅ 핵심: 시스템 폰트 크기 무시!
+        >
+          내 동네 설정
+        </Text>
+      ),
+      headerStyle: {
+        backgroundColor: "black", // 헤더 배경색
+        shadowColor: "transparent", // 하단 그림자 제거 (선택사항)
+      },
+      headerTitleAlign: "center", // 안드로이드에서도 가운데 정렬
+    });
+  }, [navigation]);
 
   // GeoJSON 검증용 Ref
   const geoIsWgs84Ref = useRef(null);
@@ -282,15 +311,15 @@ const MyTownScreen = ({ navigation }) => {
   // ✅ [추가] DongSearchIndex.json (key -> entries[]) 빠른 조회용 맵 (한번만 생성)
   const dongIndexMap = useMemo(() => {
     const m = new Map();
-    const arr = Array.isArray(DONG_INDEX) ? DONG_INDEX : [];
+    const arr = LEGAL_DONG_INDEX || [];
 
     for (let i = 0; i < arr.length; i++) {
-      const it = arr[i] || {};
+      const it = arr[i];
       const k = String(it.key || "");
       if (!k) continue;
 
       if (!m.has(k)) m.set(k, []);
-      m.get(k).push(it);
+      m.get(k).push(it); // it에는 이제 adm_nm, adm_cd가 들어있음
     }
     return m;
   }, []);
@@ -561,12 +590,23 @@ const MyTownScreen = ({ navigation }) => {
       });
 
       if (found) {
-        setSelectedDong(found);
+        // ✅ [수정] 행정동 코드로 법정동 매핑 데이터 조회 및 속성 덮어쓰기
+        const admCd = found.properties?.adm_cd;
+        const legalDongs = ADM_TO_LEGAL_MAP[admCd];
+
+        if (legalDongs && legalDongs.length > 0) {
+          // 우선 첫 번째 법정동을 기본값으로 사용하며 기존 adm_nm, adm_cd를 교체합니다.
+          found.properties = {
+            ...found.properties,
+            adm_nm: legalDongs[0].adm_nm, // 행정동 명칭 -> 법정동 명칭 교체 // ✅ [수정]
+            adm_cd: legalDongs[0].adm_cd  // 행정동 코드 -> 법정동 코드 교체 // ✅ [수정]
+          };
+        }
+
+        setSelectedDong({ ...found }); // ✅ [수정]
 
         // ✅ 판정 기준 좌표
-        // - 지도 탭(verifyWithMyCoords=true): "내 현재 위치(myCoords)" 기준으로 인증 판정
-        // - search 탭: 내 GPS(myCoords) 기준 유지
-        // - current 탭 GPS 갱신: verifyCoordsOverride(있으면) → 없으면 coords
+       // - current 탭 GPS 갱신: verifyCoordsOverride(있으면) → 없으면 coords
         const verifyCoords = verifyCoordsOverride || coords;
 
         const baseCoords = verifyWithMyCoords
@@ -669,23 +709,27 @@ const MyTownScreen = ({ navigation }) => {
       const geom = feature?.geometry;
       if (!geom?.type || !geom?.coordinates) return null;
 
-      // Polygon: coordinates[0] (outer ring)
-      // MultiPolygon: coordinates[0][0] (첫 polygon의 outer ring)
-      const ring =
-        geom.type === "Polygon"
-          ? geom.coordinates?.[0]
-          : geom.type === "MultiPolygon"
-          ? geom.coordinates?.[0]?.[0]
-          : null;
+      const points = [];
 
-      if (!Array.isArray(ring) || ring.length < 2) return null;
+      if (geom.type === "Polygon") {
+        const ring = geom.coordinates?.[0];
+        if (Array.isArray(ring)) for (const c of ring) points.push(c);
+      } else if (geom.type === "MultiPolygon") {
+        const polys = Array.isArray(geom.coordinates) ? geom.coordinates : [];
+        for (let p = 0; p < polys.length; p++) {
+          const ring = polys[p]?.[0];
+          if (Array.isArray(ring)) for (const c of ring) points.push(c);
+        }
+      }
+
+      if (points.length < 2) return null;
 
       let minLon = Infinity;
       let maxLon = -Infinity;
       let minLat = Infinity;
       let maxLat = -Infinity;
 
-      for (const c of ring) {
+      for (const c of points) {
         const lon = c?.[0];
         const lat = c?.[1];
         if (typeof lon !== "number" || typeof lat !== "number") continue;
@@ -766,18 +810,28 @@ const MyTownScreen = ({ navigation }) => {
       // CASE A-2: adm_cd가 존재함 -> featureByAdmCd에서 재조회
       // =========================================================
       if (opt?.adm_cd) {
-        const admCd = _normalizeAdmCd(opt.adm_cd);
-        const feature = admCd ? featureByAdmCd.get(admCd) : null;
+        // ✅ [수정] 법정동 코드로 부모 행정동(폴리곤 소유자) 코드를 찾아 실제 도형과 연결합니다.
+        const parentAdmCd = LEGAL_TO_ADM_MAP[opt.adm_cd];
+        const feature = parentAdmCd ? featureByAdmCd.get(parentAdmCd) : (opt.feature || null);
 
         if (feature) {
           const center = opt?.coords || _calcFeatureCenter(feature);
-
           if (center) {
             setSearchCoords(center);
             _focusMap(center);
           }
 
-          setSelectedDong(feature);
+          // ✅ [수정] 선택한 법정동 정보(이름, 코드)로 폴리곤 속성을 완전히 교체합니다.
+          const finalFeature = {
+            ...feature,
+            properties: {
+              ...feature.properties,
+              adm_nm: opt.adm_nm || opt.label, // 법정동 명칭 주입 // ✅ [수정]
+              adm_cd: opt.adm_cd               // 법정동 코드 주입 // ✅ [수정]
+            }
+          };
+
+          setSelectedDong(finalFeature);
 
           if (myCoords) {
             _checkVerification(
@@ -858,27 +912,25 @@ const MyTownScreen = ({ navigation }) => {
 
     let entries = [];
 
-    // ✅ 1) 기존 배열 구조([{key,label,adm_cd,...}, ...]) 지원
-    if (Array.isArray(DONG_INDEX)) {
-      entries = dongIndexMap?.get(qKey) || [];
+    // ✅ [수정] LEGAL_DONG_INDEX 기반 검색 로직으로 단순화
+    // 1) 정확 매칭 검색 (IndexMap 활용)
+    entries = dongIndexMap?.get(qKey) || [];
 
-      // 2) 정확 매칭이 없으면 부분 매칭(너무 많은 경우 대비 제한)
-      if (!entries.length) {
-        const arr = Array.isArray(DONG_INDEX) ? DONG_INDEX : [];
-        const temp = [];
-        const LIMIT = 300;
+    // 2) 정확 매칭이 없으면 부분 매칭 검색
+    if (!entries.length) {
+      const arr = LEGAL_DONG_INDEX || [];
+      const temp = [];
+      const LIMIT = 100;
 
-        for (let i = 0; i < arr.length; i++) {
-          const it = arr[i] || {};
-          const k = String(it.key || "");
-          if (!k) continue;
-          if (k.includes(qKey)) {
-            temp.push(it);
-            if (temp.length >= LIMIT) break;
-          }
+      for (let i = 0; i < arr.length; i++) {
+        const it = arr[i];
+        // 키워드 또는 전체 명칭에 검색어가 포함되어 있는지 확인
+        if (it.key.includes(qKey) || it.adm_nm.includes(qKey)) {
+          temp.push(it);
+          if (temp.length >= LIMIT) break;
         }
-        entries = temp;
       }
+      entries = temp;
     }
 
     // ✅ 2) 압축 구조({v,labels,keys}) 지원: keys[key] = [[adm_cd,labelId,bjd_cd], ...]
@@ -979,7 +1031,7 @@ const MyTownScreen = ({ navigation }) => {
 
         out.push({
           id: `${admCd}_${i}`,
-          label,
+          label: it.adm_nm, // ✅ [수정] it.label 대신 it.adm_nm 사용
           coords: center,
           feature,
           adm_cd: admCd,
@@ -1166,21 +1218,45 @@ const MyTownScreen = ({ navigation }) => {
     setModalVisible(true);
   };
 
-  const _renderPolygonCoords = () => {
+  const _renderPolygonList = () => {
     if (!selectedDong?.geometry) return [];
     try {
       const geom = selectedDong.geometry;
+
+      const toLatLngRing = (ring) => {
+        if (!Array.isArray(ring)) return [];
+        return ring.map((c) => ({ longitude: c[0], latitude: c[1] }));
+      };
+
+      // Polygon: [outer, hole1, hole2...]
       if (geom.type === "Polygon") {
-        return geom.coordinates[0].map((c) => ({ longitude: c[0], latitude: c[1] }));
+        const rings = Array.isArray(geom.coordinates) ? geom.coordinates : [];
+        const outer = toLatLngRing(rings[0]);
+        const holes = rings.slice(1).map(toLatLngRing).filter((h) => h.length >= 3);
+        return outer.length ? [{ coordinates: outer, holes }] : [];
       }
+
+      // MultiPolygon: [ [ [outer, hole...], ... ], ... ]
       if (geom.type === "MultiPolygon") {
-        return geom.coordinates[0][0].map((c) => ({ longitude: c[0], latitude: c[1] }));
+        const polys = Array.isArray(geom.coordinates) ? geom.coordinates : [];
+        const out = [];
+        for (let p = 0; p < polys.length; p++) {
+          const rings = Array.isArray(polys[p]) ? polys[p] : [];
+          const outer = toLatLngRing(rings[0]);
+          const holes = rings.slice(1).map(toLatLngRing).filter((h) => h.length >= 3);
+          if (outer.length) out.push({ coordinates: outer, holes });
+        }
+        return out;
       }
     } catch {}
     return [];
   };
 
   const _getDongLabel = () => {
+    // ✅ [수정] 주입된 법정동 이름(display_name)이 있으면 우선 사용
+    const legalName = selectedDong?.properties?.display_name;
+    if (legalName) return legalName;
+
     const fullName = selectedDong?.properties?.adm_nm || "";
     if (!fullName) return "주소를 검색해주세요";
     return fullName.split(" ").pop();
@@ -1235,6 +1311,7 @@ const MyTownScreen = ({ navigation }) => {
                     onChangeText={setSearchText}
                     returnKeyType="search"
                     onSubmitEditing={_onSearchAddress}
+                    allowFontScaling={false}
                   />
                 </View>
                 <TouchableOpacity
@@ -1353,14 +1430,17 @@ const MyTownScreen = ({ navigation }) => {
                 showsMyLocationButton={false}
               >
 
-                {selectedDong && (
-                  <Polygon
-                    coordinates={_renderPolygonCoords()}
-                    fillColor="rgba(141, 251, 67, 0.2)"
-                    strokeColor={PRIMARY_COLOR}
-                    strokeWidth={2}
-                  />
-                )}
+                {selectedDong &&
+                  _renderPolygonList().map((p, idx) => (
+                    <Polygon
+                      key={`dong_poly_${idx}`}
+                      coordinates={p.coordinates}
+                      holes={p.holes}
+                      fillColor="rgba(141, 251, 67, 0.2)"
+                      strokeColor={PRIMARY_COLOR}
+                      strokeWidth={2}
+                    />
+                  ))}
                 {/* 내 위치 마커 */}
                 <Marker coordinate={myCoords} title="내 위치" pinColor={PRIMARY_COLOR} />
                 

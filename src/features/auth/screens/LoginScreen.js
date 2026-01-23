@@ -189,6 +189,7 @@ export default function LoginScreen() {
             autoCapitalize="none"
             value={email}
             onChangeText={setEmail}
+            allowFontScaling={false}
           />
           
           {mode === "signup" && (
@@ -198,6 +199,7 @@ export default function LoginScreen() {
               placeholderTextColor="#999"
               value={nickname}
               onChangeText={setNickname}
+              allowFontScaling={false}
             />
           )}
 
@@ -209,6 +211,7 @@ export default function LoginScreen() {
               secureTextEntry
               value={password}
               onChangeText={setPassword}
+              allowFontScaling={false}
             />
           )}
 
@@ -281,7 +284,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.background, justifyContent: "center", alignItems: "center" },
   overlay: { width: "90%", padding: 25, backgroundColor: "rgba(30, 30, 30, 0.95)", borderRadius: 20, alignItems: "center", borderWidth: 1, borderColor: "#333", elevation: 10 },
   
-  logoContainer: { alignItems: "center", marginBottom: 20 },
+  logoContainer: { alignItems: "center", marginBottom: 5 },
   logoImage: { width: 120, height: 120 },
 
   subtitle: { fontSize: 16, color: "#AAA", marginBottom: 25, fontWeight: "600" },

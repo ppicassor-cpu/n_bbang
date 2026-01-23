@@ -282,7 +282,7 @@ export default function DetailScreen({ route, navigation }) {
       setAlertMsg("모집 상태가 성공적으로 변경되었습니다.");
       setSuccessModalVisible(true);
     } catch (error) {
-      setAlertMsg("상태 변경에 실패했습니다.");
+      setAlertMsg("변경에 실패했습니다.");
       setErrorModalVisible(true);
     } finally {
       setLoading(false);

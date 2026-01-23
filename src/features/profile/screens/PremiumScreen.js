@@ -218,7 +218,7 @@ export default function PremiumScreen({ navigation }) {
         <View style={styles.benefitBox}>
           <BenefitItem text="하루 글 작성 무제한" />
           <BenefitItem text="방장 수고비 상한 15%로 상향" />
-          <BenefitItem text="부스트 글 우선 노출" />
+          <BenefitItem text="부스트업 티켓 매월 추가지급" />
           <BenefitItem text="핫스토어 등록 월 2회 무료" />
         </View>
 
