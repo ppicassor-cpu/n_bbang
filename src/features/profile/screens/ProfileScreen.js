@@ -3,7 +3,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
-  Text,
   StyleSheet,
   TouchableOpacity,
   ScrollView,
@@ -22,7 +21,7 @@ import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import { checkNotifications, requestNotifications } from 'react-native-permissions';
-
+import { Text } from "../../../components/MyText";
 // ✅ [수정] 탈퇴 처리를 위해 writeBatch, getDocs 추가됨
 import { 
   collection, query, where, onSnapshot, doc, getDoc, updateDoc, 

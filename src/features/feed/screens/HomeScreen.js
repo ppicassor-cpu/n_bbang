@@ -1152,7 +1152,7 @@ const handleSaveNickname = async () => {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.background },
   header: { flexDirection: "row", justifyContent: "space-between", padding: 16, alignItems: "center" },
-  location: { color: "white", fontSize: 20, fontWeight: "bold" },
+  location: { color: "white", fontSize: 25, fontWeight: "bold" },
   miniBadge: {
     marginLeft: 8,
     paddingHorizontal: 6,
@@ -1174,7 +1174,7 @@ const styles = StyleSheet.create({
   categoryRow: { flexDirection: "row", justifyContent: "space-between", paddingHorizontal: 16, paddingBottom: 10, borderBottomWidth: 1, borderBottomColor: "#333", backgroundColor: theme.background },
   categoryBtn: { paddingVertical: 6, paddingHorizontal: 8, borderRadius: 15 },
   categoryBtnActive: { backgroundColor: theme.primary },
-  categoryText: { color: "#888", fontSize: 14, fontWeight: "600" },
+  categoryText: { color: "#888", fontSize: 15, fontWeight: "700" },
   categoryTextActive: { color: "black", fontWeight: "bold" },
   
   card: { 
@@ -1189,17 +1189,17 @@ const styles = StyleSheet.create({
   closedOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "center", alignItems: "center" },
   closedOverlayText: { color: "white", fontWeight: "bold" },
   infoBox: { flex: 1, marginLeft: 16, justifyContent: "center" },
-  title: { color: "white", fontSize: 16, fontWeight: "bold" },
-  subInfo: { color: "grey", fontSize: 13 },
+  title: { color: "white", fontSize: 18, fontWeight: "bold" }, // ✅ [수정] 리스트 제목 크기
+  subInfo: { color: "grey", fontSize: 13 }, // ✅ [수정] 동네명, 카테고리 크기
   row: { flexDirection: "row", alignItems: "center" },
-  price: { color: "white", fontSize: 18, fontWeight: "bold" },
+  price: { color: "white", fontSize: 17, fontWeight: "bold" }, // ✅ [수정] 가격 숫자 크기
   badge: { backgroundColor: "rgba(204,255,0,0.15)", paddingHorizontal: 6, borderRadius: 4 },
-  badgeText: { color: theme.primary, fontSize: 11 },
+  badgeText: { color: theme.primary, fontSize: 12 },
   statusRow: { flexDirection: "row", alignItems: "center" },
   boostRow: { flexDirection: "row", alignItems: "center", marginLeft: 8, gap: 4 },
-  boostText: { color: "grey", fontSize: 11, fontWeight: "700" },
+  boostText: { color: "grey", fontSize: 12, fontWeight: "700" }, // ✅ [수정] 'N분 전 부스트됨' 크기
 
-  status: { fontSize: 12, fontWeight: "bold" },
+  status: { fontSize: 12, fontWeight: "bold" }, // ✅ [수정] '참여중/마감' 텍스트 크기
   fab: { position: "absolute", right: 20, backgroundColor: theme.primary, width: 60, height: 60, borderRadius: 30, alignItems: "center", justifyContent: "center" },
     selectBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", paddingVertical: 14, borderRadius: 8, gap: 8 },
   selectBtnText: { fontSize: 16, fontWeight: "bold", color: "black" },

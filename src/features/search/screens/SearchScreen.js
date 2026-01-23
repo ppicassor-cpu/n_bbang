@@ -3,7 +3,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { 
   View, 
-  Text, 
   TextInput, 
   TouchableOpacity, 
   StyleSheet, 
@@ -14,6 +13,7 @@ import {
   TouchableWithoutFeedback 
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { Text } from "../../../components/MyText";
 import { useNavigation } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -32,6 +32,7 @@ export default function SearchScreen() {
   const { homeDong, myCoords, getDistanceFromLatLonInKm } = useAppContext();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
+  const bottomSafePadding = Math.max(insets.bottom, 12);
 
   // ✅ [수정] 검색 프로세스 및 데이터 관리를 위한 상태들
   const [keyword, setKeyword] = useState("");
@@ -352,6 +353,7 @@ const getDistanceText = (item) => {
               onSubmitEditing={() => handleSearch()} 
               returnKeyType="search"
               autoFocus={true}
+              allowFontScaling={false}
             />
             {keyword.length > 0 && (
               <TouchableOpacity 
@@ -559,9 +561,10 @@ const getDistanceText = (item) => {
           <View style={styles.adTag}>
             <Text style={styles.adTagText}>AD</Text>
           </View>
-          <Text style={styles.adText}>Google AdMob 배너 영역</Text>
+          <Text style={styles.adText}>광고 문의</Text>
         </TouchableOpacity>
         <View style={{ height: insets.bottom }} />
+        <View style={{ height: bottomSafePadding }} />
 
         <CustomModal
           visible={modalType === 'DELETE_ALL'}
@@ -621,7 +624,7 @@ const styles = StyleSheet.create({
   input: {
     flex: 1,
     color: "white",
-    fontSize: 16,
+    fontSize: 14,
     marginLeft: 8,
     height: "100%",
   },

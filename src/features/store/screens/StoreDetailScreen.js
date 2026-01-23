@@ -3,7 +3,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { 
   View, 
-  Text, 
   StyleSheet, 
   ScrollView, 
   TouchableOpacity, 
@@ -12,7 +11,7 @@ import {
   ActivityIndicator
 } from "react-native";
 import { useFocusEffect } from "@react-navigation/native"; // ✅ [추가] 화면 포커스 감지
-
+import { Text } from "../../../components/MyText";
 import { Image } from "expo-image";
 import ImageDetailModal from "../../../components/ImageDetailModal";
 

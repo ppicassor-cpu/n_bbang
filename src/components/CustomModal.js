@@ -4,7 +4,6 @@ import React, { useEffect, useRef } from "react";
 import {
   Modal,
   View,
-  Text,
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
@@ -12,6 +11,7 @@ import {
   Platform,
   Animated,
 } from "react-native";
+import { Text } from "./MyText";
 import { theme } from "../theme";
 
 const CustomModal = ({

@@ -6,7 +6,6 @@ import React, { useState, useEffect, useRef, useMemo } from "react";
 import {SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   View,
-  Text,
   StyleSheet,
   TouchableOpacity,
   TextInput,
@@ -21,6 +20,7 @@ import {
 } from "react-native";
 import MapView, { Polygon, Marker, PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
+import { Text } from "../../../components/MyText";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useAppContext } from "../../../app/providers/AppContext";
 // ✅ Turf 라이브러리 (없으면 크래쉬 남)
@@ -1474,7 +1474,7 @@ const MyTownScreen = ({ navigation }) => {
           <View style={styles.saveModalOverlay}>
             <View style={styles.saveModalContent}>
               <ActivityIndicator size="small" color={PRIMARY_COLOR} />
-              <Text style={styles.saveModalMsg}>내동네로저장중입니다</Text>
+              <Text style={styles.saveModalMsg}>내 동네로 저장중입니다</Text>
             </View>
           </View>
         </Modal>
@@ -1580,7 +1580,7 @@ const styles = StyleSheet.create({
     flex: 1,
     marginLeft: 8,
     color: "white",
-    fontSize: 15,
+    fontSize: 13,
   },
   searchBtn: {
     marginLeft: 12,
@@ -1743,7 +1743,7 @@ const styles = StyleSheet.create({
   },
   dongName: {
     color: "white",
-    fontSize: 26,
+    fontSize: 22,
     fontWeight: "800",
     letterSpacing: -0.5,
   },
