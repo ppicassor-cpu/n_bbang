@@ -1,7 +1,8 @@
 // FILE: src/features/profile/screens/NotificationScreen.js
 
 import React, { useState, useEffect } from "react";
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator } from "react-native"; 
+import { View, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator  } from "react-native";
+import { Text } from "../../../components/MyText"; 
 import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";

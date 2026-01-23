@@ -1,7 +1,8 @@
 // FILE: src/features/post/screens/FreeDetailScreen.js
 
 import React, { useState, useEffect, useMemo } from "react";
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Dimensions } from "react-native";
+import { View, ScrollView, TouchableOpacity, StyleSheet, Dimensions  } from "react-native";
+import { Text } from "../../../components/MyText";
 import { Image } from "expo-image";
 import ImageDetailModal from "../../../components/ImageDetailModal";
 import MapView, { Marker } from "react-native-maps";

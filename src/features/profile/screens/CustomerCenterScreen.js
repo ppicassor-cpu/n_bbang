@@ -1,7 +1,8 @@
 // FILE: src/features/profile/screens/CustomerCenterScreen.js
 
 import React from "react";
-import { View, Text, StyleSheet, TouchableOpacity, Linking } from "react-native";
+import { View, StyleSheet, TouchableOpacity, Linking  } from "react-native";
+import { Text } from "../../../components/MyText";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialIcons } from "@expo/vector-icons";
 import { theme } from "../../../theme";

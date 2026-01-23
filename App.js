@@ -1,7 +1,18 @@
 ﻿// FILE: App.js
 
 import React, { useEffect, useRef, useState } from "react";
-import { Text, TextInput, View, AppState, Modal, TouchableOpacity, StyleSheet } from "react-native";
+import { 
+  TextInput, 
+  View, 
+  AppState, 
+  Modal, 
+  TouchableOpacity, 
+  StyleSheet, 
+  Platform 
+} from "react-native";
+
+// ✅ 우리가 만든 커스텀 Text만 여기서 가져옵니다.
+import { Text } from "./src/components/MyText";
 import { StatusBar } from "expo-status-bar";
 import Constants from "expo-constants";
 import Purchases from "react-native-purchases";
@@ -64,23 +75,24 @@ function AppInner() {
 
   // ✅ [수정] 타입을 인자로 받아 상태를 설정하는 통합 함수
   const fetchUpdateIfAvailable = async (type) => {
-    if (__DEV__) return;
-    try {
-      if (updatePromptShownRef.current) return;
+  // ✅ [테스트] 이 줄을 잠시 주석 처리하세요!
+  // if (__DEV__) return; 
 
-      const update = await Updates.checkForUpdateAsync();
-      if (update.isAvailable) {
-        await Updates.fetchUpdateAsync();
-        
-        updatePromptShownRef.current = true;
-        setUpdateType(type); // 타입 저장
-        setUpdateModalVisible(true);
-      }
-    } catch (e) {
-      console.log(`Update process failed (${type}):`, e);
+  try {
+    // 💡 폰 화면에 이 메시지가 뜨는지 확인하기 위함입니다.
+    // alert("업데이트 체크 시작! 타입: " + type); 
+
+    const update = await Updates.checkForUpdateAsync();
+    if (update.isAvailable) {
+      await Updates.fetchUpdateAsync();
+      updatePromptShownRef.current = true;
+      setUpdateType(type);
+      setUpdateModalVisible(true);
     }
-  };  
-
+  } catch (e) {
+    console.log(`Update failed:`, e);
+  }
+};
   // ✅ [수정] 앱 초기 실행 시 (LAUNCH 타입)
   useEffect(() => {
     fetchUpdateIfAvailable("LAUNCH");

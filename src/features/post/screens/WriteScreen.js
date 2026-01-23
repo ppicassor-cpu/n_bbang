@@ -1,7 +1,8 @@
 ﻿﻿// FILE: src/features/write/screens/WriteScreen.js
 
 import React, { useState, useEffect, useRef } from "react";
-import { View, Text, TextInput, ScrollView, TouchableOpacity, StyleSheet, Image, Modal, KeyboardAvoidingView, Platform, Keyboard } from "react-native";
+import { View, TextInput, ScrollView, TouchableOpacity, StyleSheet, Image, Modal, KeyboardAvoidingView, Platform, Keyboard  } from "react-native";
+import { Text } from "../../../components/MyText";
 import * as ImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
 import MapView, { Marker } from "react-native-maps";

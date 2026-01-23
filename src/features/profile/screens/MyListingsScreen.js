@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, Image } from 'react-native';
+import { View, FlatList, TouchableOpacity, StyleSheet, Image  } from "react-native";
+import { Text } from "../../../components/MyText";
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context'; // ✅ 안전 영역 훅 추가

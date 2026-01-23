@@ -2,7 +2,8 @@
 
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 // ✅ [수정] react-native의 Image 대신 expo-image 사용
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, RefreshControl, Platform } from "react-native";
+import { View, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, RefreshControl, Platform  } from "react-native";
+import { Text } from "../../../components/MyText";
 import { Image } from "expo-image";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { MaterialIcons, Ionicons, FontAwesome5 } from "@expo/vector-icons"; 

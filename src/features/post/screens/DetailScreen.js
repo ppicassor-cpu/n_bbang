@@ -1,7 +1,8 @@
 ﻿// FILE: src/features/post/screens/DetailScreen.js
 
 import React, { useState, useEffect, useMemo } from "react";
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Dimensions, ActivityIndicator, Alert, Modal } from "react-native";
+import { View, ScrollView, TouchableOpacity, StyleSheet, Dimensions, ActivityIndicator, Alert, Modal  } from "react-native";
+import { Text } from "../../../components/MyText";
 import { Image } from "expo-image";
 import ImageView from "react-native-image-viewing"; 
 import MapView, { Marker } from "react-native-maps";

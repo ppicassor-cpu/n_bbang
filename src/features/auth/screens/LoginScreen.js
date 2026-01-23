@@ -1,5 +1,6 @@
 ﻿import React, { useState, useEffect, useRef } from "react";
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, KeyboardAvoidingView, Platform, ActivityIndicator, Image } from "react-native";
+import { View, StyleSheet, TouchableOpacity, TextInput, KeyboardAvoidingView, Platform, ActivityIndicator, Image  } from "react-native";
+import { Text } from "../../../components/MyText";
 import { useNavigation } from "@react-navigation/native";
 import { useAppContext } from "../../../app/providers/AppContext"; 
 import { ROUTES } from "../../../app/navigation/routes";

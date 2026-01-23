@@ -1,7 +1,8 @@
 // FILE: src/features/profile/screens/OperationPolicyScreen.js
 
 import React from "react";
-import { View, Text, ScrollView, StyleSheet } from "react-native";
+import { View, ScrollView, StyleSheet  } from "react-native";
+import { Text } from "../../../components/MyText";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { theme } from "../../../theme";
 

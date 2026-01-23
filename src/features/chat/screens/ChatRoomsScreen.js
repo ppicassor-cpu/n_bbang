@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator } from "react-native";
+import { View, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator  } from "react-native";
+import { Text } from "../../../components/MyText";
 import { MaterialIcons, Ionicons } from "@expo/vector-icons"; // ✅ Ionicons 추가
 import { auth } from "../../../firebaseConfig"; // ✅ [추가] 내 uid로 unreadCounts 읽기
 import { theme } from "../../../theme";

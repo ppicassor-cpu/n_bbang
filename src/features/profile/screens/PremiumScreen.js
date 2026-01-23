@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, TouchableOpacity, StyleSheet, Platform, ActivityIndicator, Linking, ScrollView } from "react-native";
+import { View, TouchableOpacity, StyleSheet, Platform, ActivityIndicator, Linking, ScrollView  } from "react-native";
+import { Text } from "../../../components/MyText";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Constants from "expo-constants";
 import { useAppContext } from "../../../app/providers/AppContext";

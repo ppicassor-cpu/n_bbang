@@ -1,5 +1,6 @@
 ﻿import React, { useState } from "react";
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Image } from "react-native";
+import { View, StyleSheet, FlatList, TouchableOpacity, Image  } from "react-native";
+import { Text } from "../../components/MyText";
 import { useRouter } from "expo-router";
 import { useAppContext } from "../providers/AppContext";
 import { Ionicons } from "@expo/vector-icons";

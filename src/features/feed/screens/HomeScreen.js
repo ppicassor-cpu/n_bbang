@@ -4,7 +4,8 @@
 
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 // ✅ [필수] 화면 표시용 컴포넌트들
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, RefreshControl, TextInput, Alert, Linking } from "react-native";
+import { View, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, RefreshControl, TextInput, Alert, Linking  } from "react-native";
+import { Text } from "../../../components/MyText";
 import { Image } from "expo-image"; 
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { MaterialIcons, Ionicons } from "@expo/vector-icons"; 
