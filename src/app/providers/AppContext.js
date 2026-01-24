@@ -39,7 +39,6 @@ import Purchases from "react-native-purchases";
 import { subscribeMyRooms } from "../../features/chat/services/chatService";
 // ✅ [추가] 커스텀 모달 import (Alert.alert 대체)
 import CustomModal from "../../components/CustomModal";
-import { signInWithCustomToken } from "firebase/auth";
 const AppContext = createContext();
 const STORAGE_KEY = "user_location_auth_v3";
 
