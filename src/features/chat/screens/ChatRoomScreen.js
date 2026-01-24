@@ -15,6 +15,11 @@ import { db, storage } from "../../../firebaseConfig";
 import { doc, getDoc, onSnapshot, collection, addDoc, query, where, getDocs, updateDoc } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 
+// ✅ [추가] 라이브러리 임포트
+import Swipeable from 'react-native-gesture-handler/Swipeable';
+import * as Clipboard from 'expo-clipboard';
+import { captureRef } from 'react-native-view-shot';
+
 import * as ImageManipulator from "expo-image-manipulator";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
@@ -104,6 +109,9 @@ export default function ChatRoomScreen({ route, navigation }) {
 
   const [imageErrorModalVisible, setImageErrorModalVisible] = useState(false);
   const [imageErrorMessage, setImageErrorMessage] = useState("");
+  const [captureModalVisible, setCaptureModalVisible] = useState(false);
+  const [captureModalTitle, setCaptureModalTitle] = useState("");
+  const [captureModalMessage, setCaptureModalMessage] = useState("");
 
   const [blockLeaveModalVisible, setBlockLeaveModalVisible] = useState(false);
 
@@ -672,6 +680,41 @@ export default function ChatRoomScreen({ route, navigation }) {
     }
   };
 
+  // ✅ [추가] 메시지 복사 핸들러
+  const handleCopyMsg = async (msg) => {
+    setMenuVisible(false);
+    if (msg.text) {
+      await Clipboard.setStringAsync(msg.text);
+    }
+  };
+
+  // ✅ [수정] 메시지 캡쳐 핸들러 (커스텀 모달 적용)
+  const handleCaptureMsg = async (msg) => {
+    setMenuVisible(false);
+    try {
+      // flatListRef는 이미 useRef로 선언되어 있습니다.
+      const uri = await captureRef(flatListRef, {
+        format: "jpg",
+        quality: 0.8,
+        result: "tmpfile" 
+      });
+      
+      console.log("캡쳐된 이미지 경로:", uri);
+      
+      // Alert.alert 대신 상태 업데이트
+      setCaptureModalTitle("캡쳐 완료");
+      setCaptureModalMessage("이미지가 임시 저장되었습니다.\n" + uri);
+      setCaptureModalVisible(true);
+      
+    } catch (e) {
+      console.error("캡쳐 실패", e);
+      // Alert.alert 대신 상태 업데이트
+      setCaptureModalTitle("오류");
+      setCaptureModalMessage("캡쳐에 실패했습니다.");
+      setCaptureModalVisible(true);
+    }
+  };
+
   const handleDeleteMsg = async (msg) => {
     setMenuVisible(false);
     if (msg.senderId !== user.uid) {
@@ -694,21 +737,17 @@ export default function ChatRoomScreen({ route, navigation }) {
     
     if (isSystemLeave) {
       const actorId = item?.actorId || item?.userId || item?.uid || null;
-      
-      // ✅ 닉네임(displayName) 추출: 정보가 없으면 "사용자"로 고정
       const actorName = item?.displayName || 
                         (actorId ? (senderMap?.[actorId]?.nickname || senderMap?.[actorId]?.displayName) : null) || 
                         "사용자";
 
       let displayText = item?.text || "";
       
-      // ✅ 메시지 내용 가공: 텍스트에 ID가 포함되어 있더라도 닉네임으로 강제 치환
       if (displayText.includes("님이 퇴장") || displayText.includes("님이 나갔") || displayText.includes("떠났습니다")) {
         displayText = `${actorName}님이 퇴장하셨습니다.`;
       } else if (displayText.includes("님이 입장")) {
         displayText = `${actorName}님이 입장했습니다.`;
       } else if (!displayText.includes(actorName)) {
-        // 그 외 기타 시스템 알림 (수정/삭제 등)
         displayText = `${actorName}: ${displayText}`;
       }
       
@@ -733,96 +772,118 @@ export default function ChatRoomScreen({ route, navigation }) {
     const readCount = Math.max(0, Math.min(readBySet.size, safeTotal));
     const unreadCount = Math.max(0, safeTotal - readCount);
 
-    return (
-      <TouchableOpacity 
-        activeOpacity={0.9} 
-        onLongPress={(e) => {
-          if (item.isDeleted) return; 
-          Vibration.vibrate(20);
-          const { pageY } = e.nativeEvent;
-          const { height: screenHeight } = Dimensions.get('window');
-          const menuHeight = 170;
-          const kb = keyboardHeightRef.current || 0;
-          const usableBottom = screenHeight - kb - (insets?.bottom || 0);
-          const shouldOpenUp = pageY + menuHeight + 16 > usableBottom;
-          let topPos = shouldOpenUp ? pageY - menuHeight : pageY + 10;
-          const minTop = (insets?.top || 0) + 10;
-          const maxTop = usableBottom - menuHeight - 10;
-          topPos = Math.max(minTop, Math.min(topPos, maxTop));
-          setMenuPosition({ 
-            top: topPos, 
-            align: isMy ? 'right' : 'left' 
-          });
-          setSelectedMsg(item);
-          setMenuVisible(true);
-        }}
-        style={[styles.msgContainer, isMy ? styles.myMsgContainer : styles.otherMsgContainer]}
-      >
-        {!isMy && (
-          <View style={styles.senderRow}>
-            <Image source={{ uri: senderMap?.[item.senderId]?.photoURL }} style={styles.senderAvatar} />
-            <Text style={styles.senderName}>{senderMap?.[item.senderId]?.nickname || "사용자"}</Text>
-          </View>
-        )}
-        <View style={{ flexDirection: isMy ? "row-reverse" : "row", alignItems: "flex-end" }}>
-          <View style={[
-            styles.bubble,
-            isMy ? styles.myBubble : styles.otherBubble,
-            item.image && { backgroundColor: "transparent", padding: 0 },
-            item.isDeleted && styles.deletedBubble,
-            item.replyTo && !item.isDeleted && { minWidth: 200 }
-          ]}>
-            {item.replyTo && !item.isDeleted && (
-              <TouchableOpacity
-                activeOpacity={0.85}
-                onPress={() => {
-                  const targetId =
-                    item.replyTo?.id ||
-                    item.replyTo?.messageId ||
-                    item.replyTo?.msgId ||
-                    item.replyTo?.targetId ||
-                    null;
-                  scrollToMessageById(targetId);
-                }}
-              >
-                <View style={[
-                  styles.replyInBubble,
-                  { backgroundColor: isMy ? 'rgba(0,0,0,0.1)' : 'rgba(255,255,255,0.15)' }
-                ]}>
-                  <View style={[styles.replyBarLine, { backgroundColor: isMy ? 'black' : theme.primary }]} />
-                  <View style={{ flex: 1 }}>
-                    {/* ✅ 답장 표시 이름 (senderName) 사용 유지 */}
-                    <Text style={[styles.replyInName, { color: isMy ? '#333' : '#DDD' }]}>
-                      {item.replyTo.senderName}에게 답장
-                    </Text>
-                    <Text style={[styles.replyInText, { color: isMy ? 'black' : 'white' }]}>
-                      {item.replyTo.text}
-                    </Text>
-                  </View>
-                </View>
-              </TouchableOpacity>
-            )}
-
-            {item.isDeleted ? (
-              <Text style={[styles.msgText, isMy ? styles.myMsgText : styles.otherMsgText, styles.deletedText]}>
-                삭제된 메시지입니다.
-              </Text>
-            ) : item.image ? (
-              <TouchableOpacity activeOpacity={0.9} onPress={() => { setSelectedImageUri(item.image); setIsImageViewerVisible(true); }}>
-                <Image source={{ uri: item.image }} style={{ width: 200, height: 200, borderRadius: 8 }} resizeMode="cover" />
-              </TouchableOpacity>
-            ) : (
-              <Text style={[styles.msgText, isMy ? styles.myMsgText : styles.otherMsgText]}>{item.text}</Text>
-            )}
-          </View>
-           <View style={{ alignItems: isMy ? "flex-end" : "flex-start", marginHorizontal: 5 }}>
-            {isMy && !item.isDeleted && unreadCount > 0 && (
-              <Text style={styles.unreadCountText}>{unreadCount}</Text>
-            )}
-            <Text style={styles.timeText}>{timeString}</Text>
-          </View>
+    // ✅ [추가] 스와이프 액션 (왼쪽으로 밀면 보이는 아이콘)
+    const renderRightActions = (progress, dragX) => {
+      return (
+        <View style={styles.swipeReplyIconContainer}>
+          <Ionicons name="arrow-undo" size={24} color={theme.primary} />
         </View>
-      </TouchableOpacity>
+      );
+    };
+
+    // ✅ [필수] 이 변수 선언이 꼭 있어야 에러가 안 납니다!
+    let rowRef = null;
+
+    return (
+      // ✅ [추가] Swipeable 감싸기 시작
+      <Swipeable
+        ref={(ref) => (rowRef = ref)}
+        renderRightActions={renderRightActions}
+        onSwipeableOpen={() => {
+          setReplyTo(item); // 답장 모드 설정
+          rowRef?.close();  // 즉시 닫기 (카카오톡 스타일)
+        }}
+        friction={2}
+      >
+        <TouchableOpacity 
+          activeOpacity={0.9} 
+          onLongPress={(e) => {
+            if (item.isDeleted) return; 
+            Vibration.vibrate(20);
+            const { pageY } = e.nativeEvent;
+            const { height: screenHeight } = Dimensions.get('window');
+            const menuHeight = 170;
+            const kb = keyboardHeightRef.current || 0;
+            const usableBottom = screenHeight - kb - (insets?.bottom || 0);
+            const shouldOpenUp = pageY + menuHeight + 16 > usableBottom;
+            let topPos = shouldOpenUp ? pageY - menuHeight : pageY + 10;
+            const minTop = (insets?.top || 0) + 10;
+            const maxTop = usableBottom - menuHeight - 10;
+            topPos = Math.max(minTop, Math.min(topPos, maxTop));
+            setMenuPosition({ 
+              top: topPos, 
+              align: isMy ? 'right' : 'left' 
+            });
+            setSelectedMsg(item);
+            setMenuVisible(true);
+          }}
+          style={[styles.msgContainer, isMy ? styles.myMsgContainer : styles.otherMsgContainer]}
+        >
+          {!isMy && (
+            <View style={styles.senderRow}>
+              <Image source={{ uri: senderMap?.[item.senderId]?.photoURL }} style={styles.senderAvatar} />
+              <Text style={styles.senderName}>{senderMap?.[item.senderId]?.nickname || "사용자"}</Text>
+            </View>
+          )}
+          <View style={{ flexDirection: isMy ? "row-reverse" : "row", alignItems: "flex-end" }}>
+            <View style={[
+              styles.bubble,
+              isMy ? styles.myBubble : styles.otherBubble,
+              item.image && { backgroundColor: "transparent", padding: 0 },
+              item.isDeleted && styles.deletedBubble,
+              item.replyTo && !item.isDeleted && { minWidth: 200 }
+            ]}>
+              {item.replyTo && !item.isDeleted && (
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  onPress={() => {
+                    const targetId =
+                      item.replyTo?.id ||
+                      item.replyTo?.messageId ||
+                      item.replyTo?.msgId ||
+                      item.replyTo?.targetId ||
+                      null;
+                    scrollToMessageById(targetId);
+                  }}
+                >
+                  <View style={[
+                    styles.replyInBubble,
+                    { backgroundColor: isMy ? 'rgba(0,0,0,0.1)' : 'rgba(255,255,255,0.15)' }
+                  ]}>
+                    <View style={[styles.replyBarLine, { backgroundColor: isMy ? 'black' : theme.primary }]} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.replyInName, { color: isMy ? '#333' : '#DDD' }]}>
+                        {item.replyTo.senderName}에게 답장
+                      </Text>
+                      <Text style={[styles.replyInText, { color: isMy ? 'black' : 'white' }]}>
+                        {item.replyTo.text}
+                      </Text>
+                    </View>
+                  </View>
+                </TouchableOpacity>
+              )}
+
+              {item.isDeleted ? (
+                <Text style={[styles.msgText, isMy ? styles.myMsgText : styles.otherMsgText, styles.deletedText]}>
+                  삭제된 메시지입니다.
+                </Text>
+              ) : item.image ? (
+                <TouchableOpacity activeOpacity={0.9} onPress={() => { setSelectedImageUri(item.image); setIsImageViewerVisible(true); }}>
+                  <Image source={{ uri: item.image }} style={{ width: 200, height: 200, borderRadius: 8 }} resizeMode="cover" />
+                </TouchableOpacity>
+              ) : (
+                <Text style={[styles.msgText, isMy ? styles.myMsgText : styles.otherMsgText]}>{item.text}</Text>
+              )}
+            </View>
+            <View style={{ alignItems: isMy ? "flex-end" : "flex-start", marginHorizontal: 5 }}>
+              {isMy && !item.isDeleted && unreadCount > 0 && (
+                <Text style={styles.unreadCountText}>{unreadCount}</Text>
+              )}
+              <Text style={styles.timeText}>{timeString}</Text>
+            </View>
+          </View>
+        </TouchableOpacity>
+      </Swipeable> // ✅ 닫는 태그 확인 완료
     );
   };
 
@@ -1042,6 +1103,22 @@ export default function ChatRoomScreen({ route, navigation }) {
             </TouchableOpacity>
             
             <View style={styles.bubbleMenuDivider} />
+
+            {/* ✅ [추가] 복사하기 기능 */}
+            <TouchableOpacity style={styles.bubbleMenuItem} onPress={() => handleCopyMsg(selectedMsg)}>
+              <Ionicons name="copy-outline" size={20} color="white" />
+              <Text style={styles.bubbleMenuText}>복사</Text>
+            </TouchableOpacity>
+
+            <View style={styles.bubbleMenuDivider} />
+
+            {/* ✅ [추가] 캡쳐하기 기능 */}
+            <TouchableOpacity style={styles.bubbleMenuItem} onPress={() => handleCaptureMsg(selectedMsg)}>
+              <Ionicons name="scan-outline" size={20} color="white" />
+              <Text style={styles.bubbleMenuText}>캡쳐</Text>
+            </TouchableOpacity>
+            
+            <View style={styles.bubbleMenuDivider} />
             
             <TouchableOpacity style={styles.bubbleMenuItem} onPress={() => handleSetNotice(selectedMsg)}>
               <MaterialCommunityIcons name="bullhorn-outline" size={20} color="white" />
@@ -1192,6 +1269,15 @@ export default function ChatRoomScreen({ route, navigation }) {
           setNoticeModalVisible(false);
           setPendingNoticeMsg(null);
         }}
+      />
+
+      {/* ✅ [추가] 캡쳐 결과 표시용 커스텀 모달 */}
+      <CustomModal
+        visible={captureModalVisible}
+        title={captureModalTitle}
+        message={captureModalMessage}
+        onConfirm={() => setCaptureModalVisible(false)}
+        confirmText="확인"
       />
 
     </View>
@@ -1370,4 +1456,12 @@ const styles = StyleSheet.create({
   
   deletedBubble: { backgroundColor: '#222', borderWidth: 1, borderColor: '#333' },
   deletedText: { color: '#666', fontStyle: 'italic' },
+
+  // ✅ [추가] 스와이프 답장 아이콘 컨테이너
+  swipeReplyIconContainer: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: 60,
+    marginVertical: 6,
+  },
 });

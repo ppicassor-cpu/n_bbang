@@ -7,15 +7,15 @@ import { ROUTES } from "../../../app/navigation/routes";
 import { theme } from "../../../theme";
 import CustomModal from "../../../components/CustomModal";
 import { Ionicons } from "@expo/vector-icons";
-
+import { NAVER_CLIENT_ID, NAVER_CLIENT_SECRET } from "@env";
 // ✅ [추가] 네이티브 로그인 라이브러리 (SDK 방식)
 import { login as kakaoLogin } from "@react-native-seoul/kakao-login";
 import { GoogleSignin } from "@react-native-google-signin/google-signin";
-
+import NaverLogin from "@react-native-seoul/naver-login";
 export default function LoginScreen() {
   const navigation = useNavigation();
-  const { login, signup, resetPassword, loginWithGoogle, loginWithKakao } = useAppContext();
-
+  const { login, signup, resetPassword, loginWithGoogle, loginWithKakao, loginWithNaver } = useAppContext();
+  
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [nickname, setNickname] = useState("");
@@ -28,6 +28,38 @@ export default function LoginScreen() {
 
   // ✅ 중복 클릭 완전 방지 락 (디자인/스타일/레이아웃 변경 없음)
   const lockRef = useRef(false);
+
+  /* ============================================================
+      🟢 [네이버] 로그인 설정 & 핸들러 (추가됨)
+  ============================================================ */
+  useEffect(() => {
+    NaverLogin.initialize({
+      appName: "우리동네N빵",
+      
+      // ✅ [수정] 문자열 대신 변수를 넣습니다.
+      consumerKey: NAVER_CLIENT_ID,       
+      consumerSecret: NAVER_CLIENT_SECRET, 
+      
+      serviceUrlScheme: "com.sonsunghyun.nbbang", // 패키지명은 공개 정보라 그대로 둬도 괜찮습니다.
+    });
+  }, []);
+
+  const handleNaverLogin = async () => {
+    setLoading(true);
+    try {
+      const { successResponse, failureResponse } = await NaverLogin.login();
+      if (successResponse) {
+        await loginWithNaver(successResponse.accessToken);
+      } else {
+        console.log("Naver Login Failed", failureResponse);
+      }
+    } catch (e) {
+      console.error("Naver Login Error:", e);
+      showAlert("네이버 로그인에 실패했습니다.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   /* ============================================================
       🔵 [구글] 로그인 설정 (네이티브 SDK 방식)
@@ -145,7 +177,9 @@ export default function LoginScreen() {
 
     const done = () => { lockRef.current = false; };
 
-    if (platform === "카카오") {
+    if (platform === "네이버") { // ✅ [추가] 네이버 분기
+      handleNaverLogin().finally(done);
+    } else if (platform === "카카오") {
       handleKakaoLogin().finally(done);
     } else if (platform === "구글") {
       handleGoogleLogin().finally(done);
@@ -251,6 +285,13 @@ export default function LoginScreen() {
             </View>
 
             <View style={styles.socialButtons}>
+              {/* ✅ [추가] 네이버 로그인 버튼 (카카오 위에 배치) */}
+              <TouchableOpacity style={[styles.socialBtn, styles.naverBtn]} onPress={() => handleSocialLogin("네이버")}>
+                {/* 네이버는 N 아이콘을 텍스트로 표현하거나 이미지를 사용 */}
+                <Text style={styles.naverIcon}>N</Text> 
+                <Text style={styles.naverText}>네이버로 시작하기</Text>
+              </TouchableOpacity>
+
               {/* ✅ 카카오 로그인 버튼 */}
               <TouchableOpacity style={[styles.socialBtn, styles.kakaoBtn]} onPress={() => handleSocialLogin("카카오")}>
                 <Ionicons name="chatbubble" size={20} color="#3C1E1E" />
@@ -313,6 +354,12 @@ const styles = StyleSheet.create({
   orText: { marginHorizontal: 10, color: "#666", fontSize: 12 },
   socialButtons: { gap: 10 },
   socialBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", height: 45, borderRadius: 8, gap: 8 },
+  
+  // ✅ [추가] 네이버 버튼 스타일
+  naverBtn: { backgroundColor: "#03C75A" },
+  naverText: { color: "white", fontWeight: "bold", fontSize: 15 },
+  naverIcon: { color: "white", fontWeight: "900", fontSize: 18, marginRight: 4, marginTop: -2 },
+
   kakaoBtn: { backgroundColor: "#FEE500" },
   kakaoText: { color: "#3C1E1E", fontWeight: "bold", fontSize: 15 },
   googleBtn: { backgroundColor: "#FFF" },
