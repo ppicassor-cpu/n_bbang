@@ -3,10 +3,19 @@
 import React from 'react';
 // ✅ [필수] react-native에서 기본 텍스트와 스타일 관련 기능을 가져옵니다. 
 // 튕김(Crash) 방지를 위해 Text as RNText, StyleSheet, Platform이 반드시 포함되어야 합니다.
-import { Text as RNText, StyleSheet, Platform } from 'react-native';
+import { Text as RNText, TextInput, StyleSheet, Platform } from 'react-native';
 
 // ✅ [경로 확인] 앱의 공통 색상 설정 파일입니다. 글자 색상을 바꿀 때 참조하세요.
 import { theme } from '../theme'; 
+
+// ✅ [전역 설정] 이 파일이 import되는 순간부터 기본 Text/TextInput의 시스템 폰트 스케일을 무시합니다.
+RNText.defaultProps = RNText.defaultProps || {};
+RNText.defaultProps.allowFontScaling = false;
+RNText.defaultProps.maxFontSizeMultiplier = 1;
+
+TextInput.defaultProps = TextInput.defaultProps || {};
+TextInput.defaultProps.allowFontScaling = false;
+TextInput.defaultProps.maxFontSizeMultiplier = 1;
 
 /**
  * 시스템 글자 크기 설정을 무시하도록 고정된 커스텀 텍스트 컴포넌트
@@ -74,6 +83,25 @@ const styles = StyleSheet.create({
     fontSize: 12, // 아주 작은 캡션용 크기
     fontWeight: '700',
   },
+
+  // ✅ [추가] 채팅룸에서 쓸 수 있는 variant들 (채팅 글자 크기 여기서 컨트롤)
+  chatMessage: {
+    fontSize: 15, // 채팅 본문(메시지) 기본
+    fontWeight: '500',
+  },
+  chatName: {
+    fontSize: 13, // 발신자 이름
+    fontWeight: '700',
+  },
+  chatMeta: {
+    fontSize: 11, // 시간/읽음 등 메타 정보
+    fontWeight: '500',
+  },
+  chatSystem: {
+    fontSize: 12, // 시스템 메시지(입장/퇴장 등)
+    fontWeight: '600',
+  },
+
   bold: {
     fontWeight: 'bold',
   },

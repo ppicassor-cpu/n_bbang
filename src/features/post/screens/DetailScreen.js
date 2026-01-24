@@ -81,8 +81,8 @@ export default function DetailScreen({ route, navigation }) {
   const mapRegion = useMemo(() => ({
     latitude: post?.coords?.latitude || 37.5665,
     longitude: post?.coords?.longitude || 126.9780,
-    latitudeDelta: 0.005,
-    longitudeDelta: 0.005,
+    latitudeDelta: post?.coords?.latitudeDelta ?? 0.005,
+    longitudeDelta: post?.coords?.longitudeDelta ?? 0.005,
   }), [post]);
 
   useEffect(() => {
@@ -604,7 +604,7 @@ export default function DetailScreen({ route, navigation }) {
           <View style={{ marginTop: 30 }}>
             <Text style={styles.label}>만남 장소</Text>
             <View style={styles.mapContainer}>
-              <MapView style={styles.map} initialRegion={mapRegion} scrollEnabled={false}>
+              <MapView style={styles.map} region={mapRegion} scrollEnabled={false}>
                 <Marker coordinate={mapRegion} />
               </MapView>
             </View>

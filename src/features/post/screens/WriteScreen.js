@@ -103,7 +103,7 @@ export default function WriteScreen({ navigation, route }) {
 
   useEffect(() => {
     if (!isEditMode && myCoords) {
-      setRegion({ ...region, latitude: myCoords.latitude, longitude: myCoords.longitude });
+      setRegion((prev) => ({ ...prev, latitude: myCoords.latitude, longitude: myCoords.longitude }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [myCoords]);
@@ -431,7 +431,7 @@ export default function WriteScreen({ navigation, route }) {
         title,
         content,
         location: isEditMode ? editPostData.location : currentLocation,
-        coords: { latitude: region.latitude, longitude: region.longitude },
+        coords: { latitude: region.latitude, longitude: region.longitude, latitudeDelta: region.latitudeDelta, longitudeDelta: region.longitudeDelta },
         pickup_point: pickupPoint,
 
         // ✅ [수정] 무료나눔 vs N빵 분기 기준을 문서에 명시(통일)
@@ -696,7 +696,7 @@ export default function WriteScreen({ navigation, route }) {
 
           {/* ✅ [수정] disabled={loading} 추가하여 중복 클릭 방지 */}
           <TouchableOpacity style={styles.submitBtn} onPress={handleSubmit} disabled={loading}>
-            <Text style={{ fontSize: 18, fontWeight: "bold" }}>
+            <Text style={{ fontSize: 18, fontWeight: "bold", color: "black" }}>
                 {isEditMode ? "수정 완료" : "작성 완료"}
             </Text>
           </TouchableOpacity>

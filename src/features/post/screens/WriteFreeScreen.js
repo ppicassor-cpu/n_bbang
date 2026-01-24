@@ -3,7 +3,6 @@
 import React, { useEffect, useState, useRef } from "react";
 import {
   View,
-  Text,
   TextInput,
   TouchableOpacity,
   StyleSheet,
@@ -15,7 +14,7 @@ import MapView, { Marker } from "react-native-maps";
 import * as ImagePicker from "expo-image-picker";
 import * as ImageManipulator from "expo-image-manipulator";
 import { MaterialIcons } from "@expo/vector-icons";
-
+import { Text } from "../../../components/MyText";
 import { useAppContext } from "../../../app/providers/AppContext";
 import CustomModal from "../../../components/CustomModal";
 import CustomImagePickerModal from "../../../components/CustomImagePickerModal";
@@ -35,6 +34,16 @@ const DEFAULT_DESC = `나눔하실 물건 상태를 적어주세요.
 - 사용 기간은 어느 정도인가요?
 - 나눔 사유는 무엇인가요?`;
 
+const DEFAULT_DELTA = 0.01;
+const MIN_DELTA = 0.002;
+const MAX_DELTA = 0.05;
+
+const clampDelta = (v, fallback = DEFAULT_DELTA) => {
+  const n = typeof v === "number" ? v : parseFloat(v);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.min(Math.max(n, MIN_DELTA), MAX_DELTA);
+};
+
 export default function WriteFreeScreen({ navigation, route }) {
   const { addPost, updatePost, currentLocation, myCoords, posts } = useAppContext();
 
@@ -47,8 +56,14 @@ export default function WriteFreeScreen({ navigation, route }) {
   const [content, setContent] = useState(isEditMode ? editPostData?.content || "" : DEFAULT_DESC);
   const [coords, setCoords] = useState(
     isEditMode && editPostData?.coords
-      ? editPostData.coords
-      : myCoords || { latitude: 37.5665, longitude: 126.9780 }
+      ? {
+          ...editPostData.coords,
+          latitudeDelta: DEFAULT_DELTA,
+          longitudeDelta: DEFAULT_DELTA,
+        }
+      : myCoords
+        ? { ...myCoords, latitudeDelta: DEFAULT_DELTA, longitudeDelta: DEFAULT_DELTA }
+        : { latitude: 37.5665, longitude: 126.9780, latitudeDelta: DEFAULT_DELTA, longitudeDelta: DEFAULT_DELTA }
   );
   // ✅ 상세 위치(픽업 장소) 상태
   const [pickupPoint, setPickupPoint] = useState(isEditMode ? editPostData?.pickup_point || "" : "");
@@ -80,7 +95,12 @@ export default function WriteFreeScreen({ navigation, route }) {
   // ✅ 앱 컨텍스트 위치값이 늦게 들어오는 경우 반영
   useEffect(() => {
     if (!isEditMode && myCoords?.latitude && myCoords?.longitude) {
-      setCoords(myCoords);
+      setCoords((prev) => ({
+        ...prev,
+        ...myCoords,
+        latitudeDelta: prev?.latitudeDelta ?? DEFAULT_DELTA,
+        longitudeDelta: prev?.longitudeDelta ?? DEFAULT_DELTA,
+      }));
     }
   }, [myCoords, isEditMode]);
 
@@ -92,7 +112,11 @@ export default function WriteFreeScreen({ navigation, route }) {
   const resetForm = () => {
     setTitle("");
     setContent(DEFAULT_DESC);
-    setCoords(myCoords || { latitude: 37.5665, longitude: 126.9780 });
+    setCoords(
+      myCoords
+        ? { ...myCoords, latitudeDelta: 0.01, longitudeDelta: 0.01 }
+        : { latitude: 37.5665, longitude: 126.9780, latitudeDelta: 0.01, longitudeDelta: 0.01 }
+    );
     setPickupPoint("");
     setImages([]);
   };
@@ -278,7 +302,12 @@ export default function WriteFreeScreen({ navigation, route }) {
       const postData = {
         title: title.trim(),
         content: content.trim(),
-        coords,
+        coords: {
+          latitude: coords.latitude,
+          longitude: coords.longitude,
+          latitudeDelta: DEFAULT_DELTA,
+          longitudeDelta: DEFAULT_DELTA,
+        },
         location: currentLocation || "위치 미지정",
         // ✅ 상세 픽업 장소 저장
         pickup_point: pickupPoint,
@@ -326,7 +355,7 @@ export default function WriteFreeScreen({ navigation, route }) {
   // ✅ 지도 탭으로 위치 변경
   const handleMapPress = (e) => {
     const { latitude, longitude } = e.nativeEvent.coordinate;
-    setCoords({ latitude, longitude });
+    setCoords((prev) => ({ ...prev, latitude, longitude }));
   };
 
   return (
@@ -392,18 +421,27 @@ export default function WriteFreeScreen({ navigation, route }) {
             initialRegion={{
               latitude: coords.latitude,
               longitude: coords.longitude,
-              latitudeDelta: 0.01,
-              longitudeDelta: 0.01,
+              latitudeDelta: clampDelta(coords.latitudeDelta, 0.01),
+              longitudeDelta: clampDelta(coords.longitudeDelta, 0.01),
             }}
             region={{
               latitude: coords.latitude,
               longitude: coords.longitude,
-              latitudeDelta: 0.01,
-              longitudeDelta: 0.01,
+              latitudeDelta: clampDelta(coords.latitudeDelta, 0.01),
+              longitudeDelta: clampDelta(coords.longitudeDelta, 0.01),
+            }}
+            onRegionChangeComplete={(r) => {
+              setCoords((prev) => ({
+                ...prev,
+                latitude: r.latitude,
+                longitude: r.longitude,
+                latitudeDelta: clampDelta(r.latitudeDelta, prev?.latitudeDelta ?? 0.01),
+                longitudeDelta: clampDelta(r.longitudeDelta, prev?.longitudeDelta ?? 0.01),
+              }));
             }}
             onPress={handleMapPress}
           >
-            <Marker coordinate={coords} />
+            <Marker coordinate={{ latitude: coords.latitude, longitude: coords.longitude }} />
           </MapView>
         </View>
 

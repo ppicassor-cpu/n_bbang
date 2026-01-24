@@ -21,6 +21,18 @@ import CustomModal from "../../../components/CustomModal";
 
 const SCREEN_WIDTH = Dimensions.get("window").width;
 
+const clampDelta = (v, fallback = 0.01) => {
+  const n = typeof v === "number" ? v : parseFloat(v);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.min(Math.max(n, 0.002), 0.02);
+};
+
+const toNum = (v, fallback) => {
+  const n = typeof v === "number" ? v : parseFloat(v);
+  return Number.isFinite(n) ? n : fallback;
+};
+
+
 // ✅ 신고 사유 목록 정의
 const REPORT_REASONS = [
   "광고 / 홍보성 게시글",
@@ -179,10 +191,10 @@ export default function FreeDetailScreen({ route, navigation }) {
   };
 
   const mapRegion = useMemo(() => ({
-    latitude: post?.coords?.latitude || 37.5665,
-    longitude: post?.coords?.longitude || 126.9780,
-    latitudeDelta: 0.005,
-    longitudeDelta: 0.005,
+    latitude: toNum(post?.coords?.latitude, 37.5665),
+    longitude: toNum(post?.coords?.longitude, 126.9780),
+    latitudeDelta: clampDelta(post?.coords?.latitudeDelta, 0.01),
+    longitudeDelta: clampDelta(post?.coords?.longitudeDelta, 0.01),
   }), [post]);
 
   return (
@@ -282,7 +294,17 @@ export default function FreeDetailScreen({ route, navigation }) {
             </View>
 
             <View style={styles.mapWrap}>
-              <MapView style={styles.map} initialRegion={mapRegion} scrollEnabled={false}><Marker coordinate={mapRegion} /></MapView>
+              <MapView
+                key={`${post?.id || "free"}_${mapRegion.latitudeDelta}_${mapRegion.longitudeDelta}`}
+                style={styles.map}
+                region={mapRegion}
+                scrollEnabled={false}
+                zoomEnabled={false}
+                rotateEnabled={false}
+                pitchEnabled={false}
+              >
+                <Marker coordinate={{ latitude: mapRegion.latitude, longitude: mapRegion.longitude }} />
+              </MapView>
             </View>
             <Text style={styles.locationText}>{post.location}</Text>
           </View>

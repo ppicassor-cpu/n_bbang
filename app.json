@@ -30,6 +30,7 @@
     },
     "android": {
       "package": "com.sonsunghyun.nbbang",
+      "versionCode": 2,
       "googleServicesFile": "./google-services.json",
       "permissions": [
         "INTERNET",

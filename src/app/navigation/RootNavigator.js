@@ -6,7 +6,7 @@ import { createStackNavigator } from "@react-navigation/stack";
 import { MaterialIcons } from "@expo/vector-icons";
 import { ROUTES } from "./routes";
 import { StatusBar } from "expo-status-bar";
-
+import "../../components/MyText";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "../../firebaseConfig";
 
@@ -82,7 +82,9 @@ export default function RootNavigator() {
         screenOptions={{
           headerStyle: { backgroundColor: "black", shadowColor: "transparent" },
           headerTintColor: "white",
-          headerTitleStyle: { fontWeight: "bold" },
+          headerTitleStyle: { fontWeight: "bold", fontSize: 23 },
+          headerTitleAllowFontScaling: false,
+          headerBackTitleAllowFontScaling: false,
           headerTitleAlign: "center",
           cardStyle: { backgroundColor: "black" },
           headerBackTitleVisible: false,
@@ -91,7 +93,7 @@ export default function RootNavigator() {
           headerBackImage: ({ tintColor }) => (
             <MaterialIcons
               name="arrow-back-ios-new"
-              size={22}
+              size={21}
               color={tintColor || "white"}
               style={{ marginLeft: 10, width: 35 }}
             />

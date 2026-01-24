@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
-  View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet, Image,
+  View, TextInput, TouchableOpacity, FlatList, StyleSheet, Image,
   Platform, ActivityIndicator, Keyboard, Animated, Alert, Vibration, Dimensions
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -14,7 +14,7 @@ import { subscribeMessages, sendMessage, markAsRead, leaveRoom, leaveRoomAsOwner
 import { db, storage } from "../../../firebaseConfig";
 import { doc, getDoc, onSnapshot, collection, addDoc, query, where, getDocs, updateDoc } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-
+import { Text } from "../../../components/MyText";
 // ✅ [추가] 라이브러리 임포트
 import Swipeable from 'react-native-gesture-handler/Swipeable';
 import * as Clipboard from 'expo-clipboard';
@@ -1071,6 +1071,8 @@ export default function ChatRoomScreen({ route, navigation }) {
                 editable={!isClosed}
                 multiline={true} 
                 textAlignVertical="center"
+                allowFontScaling={false}
+                maxFontSizeMultiplier={1}
               />
               <TouchableOpacity
                 onPress={handleSend}
