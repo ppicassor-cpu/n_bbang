@@ -30,8 +30,12 @@
     },
     "android": {
       "package": "com.sonsunghyun.nbbang",
-      "versionCode": 3,
+      "versionCode": 4,
       "googleServicesFile": "./google-services.json",
+      "navigationBar": {
+        "backgroundColor": "#000000",
+        "barStyle": "light-content"
+      },
       "permissions": [
         "com.google.android.gms.permission.AD_ID",
         "INTERNET",
@@ -92,6 +96,7 @@
         {
           "android": {
             "usesCleartextTraffic": true,
+            "extraProguardRules": "-keep public class com.nhn.android.naverlogin.** { *; } -keep public class com.navercorp.nid.** { *; }",
             "extraDependencies": [
               "com.revenuecat.purchases:purchases:9.19.0",
               "com.revenuecat.purchases:purchases-ui:9.19.0"
@@ -127,6 +132,13 @@
             "READ_MEDIA_IMAGES",
             "RECORD_AUDIO"
           ]
+        }
+      ],
+      [
+        "react-native-google-mobile-ads",
+        {
+          "androidAppId": "ca-app-pub-5144004139813427~3981446640",
+          "iosAppId": "ca-app-pub-3940256099942544~1458002511"
         }
       ]
     ],

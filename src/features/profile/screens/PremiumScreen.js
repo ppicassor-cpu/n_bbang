@@ -43,10 +43,11 @@ export default function PremiumScreen({ navigation }) {
         const current = offerings?.current;
         
         if (current && mounted) {
-          const monthlyPkg = current.monthly || current.availablePackages?.find(p => p.identifier === 'nbbang_sub_monthly');
-          const annualPkg = current.annual || current.availablePackages?.find(p => p.identifier === 'nbbang_sub_yearly');
-          const boostPkg = current.availablePackages?.find(p => p.identifier === 'nbbang_consumable_boost');
-          const hotstorePkg = current.availablePackages?.find(p => p.identifier === 'nbbang_consumable_hotstore');
+          const monthlyPkg = current.monthly || current.availablePackages?.find(p => p.identifier === '$rc_monthly'); // ✅ [수정]
+const annualPkg = current.annual || current.availablePackages?.find(p => p.identifier === '$rc_annual');   // ✅ [수정]
+// 티켓은 아까 만드신 패키지 ID와 일치시켜주세요. (예: boost_ticket)
+const boostPkg = current.availablePackages?.find(p => p.identifier === 'boost_ticket');       // ✅ [수정]
+const hotstorePkg = current.availablePackages?.find(p => p.identifier === 'hotstore_ticket'); // ✅ [수정]
 
           setPrices(prev => ({
             monthly: monthlyPkg?.product?.priceString || prev.monthly,

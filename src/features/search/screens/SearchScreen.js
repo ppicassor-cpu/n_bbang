@@ -10,7 +10,8 @@ import {
   Keyboard,
   Animated,
   Easing,
-  TouchableWithoutFeedback 
+  TouchableWithoutFeedback,
+  Platform
 } from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -22,9 +23,17 @@ import { theme } from "../../../theme";
 import { ROUTES } from "../../../app/navigation/routes";
 import CustomModal from "../../../components/CustomModal"; 
 import { Text } from "../../../components/MyText";
+import { BannerAd, BannerAdSize, TestIds, useForeground } from 'react-native-google-mobile-ads';
 
 const SEARCH_HISTORY_KEY = "SEARCH_HISTORY_V1";
 const AUTO_SAVE_KEY = "SEARCH_AUTO_SAVE_V1";
+
+const adUnitId = __DEV__ 
+  ? TestIds.BANNER 
+  : Platform.select({
+      ios: 'ca-app-pub-3940256099942544/2934735716', 
+      android: 'ca-app-pub-5144004139813427/1262454971',
+    });
 
 // ✅ [수정] homeDong을 props나 전역 상태에서 받아오도록 설정
 export default function SearchScreen() {
@@ -545,16 +554,15 @@ const getDistanceText = (item) => {
         {/* ====================================
             4. 하단 레이아웃 및 모달
            ==================================== */}
-        <TouchableOpacity 
-          style={styles.adMobPlaceholder} 
-          activeOpacity={0.9}
-          onPress={() => setModalType('ADMOB')}
-        >
-          <View style={styles.adTag}>
-            <Text style={styles.adTagText}>AD</Text>
-          </View>
-          <Text style={styles.adText}>Google AdMob 배너 영역</Text>
-        </TouchableOpacity>
+        <View style={styles.adContainer}>
+          <BannerAd
+            unitId={adUnitId}
+            size={BannerAdSize.ANCHORED_ADAPTIVE_BANNER}
+            requestOptions={{
+              requestNonPersonalizedAdsOnly: true,
+            }}
+          />
+        </View>
         <View style={{ height: insets.bottom }} />
 
         <CustomModal
@@ -750,15 +758,16 @@ const styles = StyleSheet.create({
 
   emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingTop: 100 },
   emptyText: { color: "#5a5a5ad8", fontSize: 14 },
-  adMobPlaceholder: {
-    height: 60,
-    backgroundColor: "#202020",
+  
+  // ✅ [수정] 실제 배너용 컨테이너 스타일
+  adContainer: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
     borderTopWidth: 1,
     borderTopColor: "#333",
-    justifyContent: "center",
-    alignItems: "center",
+    backgroundColor: "#202020", // 광고 로드 전 배경색
+    paddingVertical: 5,
   },
-  adTag: { position: "absolute", left: 10, top: 6, backgroundColor: "#FFD700", paddingHorizontal: 3, borderRadius: 2 },
-  adTagText: { fontSize: 9, fontWeight: "bold", color: "black" },
-  adText: { color: "#666", fontSize: 12, marginTop: 4 },
+  // adTag, adTagText, adText는 더 이상 사용하지 않으므로 삭제해도 됩니다.
 });
