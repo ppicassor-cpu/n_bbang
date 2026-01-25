@@ -30,9 +30,10 @@
     },
     "android": {
       "package": "com.sonsunghyun.nbbang",
-      "versionCode": 2,
+      "versionCode": 3,
       "googleServicesFile": "./google-services.json",
       "permissions": [
+        "com.google.android.gms.permission.AD_ID",
         "INTERNET",
         "ACCESS_NETWORK_STATE",
         "POST_NOTIFICATIONS",
@@ -42,7 +43,6 @@
         "WRITE_EXTERNAL_STORAGE",
         "READ_MEDIA_AUDIO",
         "READ_MEDIA_IMAGES",
-        "READ_MEDIA_VIDEO",
         "READ_MEDIA_VISUAL_USER_SELECTED",
         "RECORD_AUDIO",
         "SYSTEM_ALERT_WINDOW",
@@ -81,6 +81,12 @@
     },
     "plugins": [
       "@react-native-google-signin/google-signin",
+      [
+        "@react-native-seoul/naver-login",
+        {
+          "serviceUrlScheme": "com.sonsunghyun.nbbang"
+        }
+      ],
       [
         "expo-build-properties",
         {

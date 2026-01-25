@@ -1636,36 +1636,30 @@ useEffect(() => {
   };
 
   // ✅ [추가] 네이버 로그인 함수 구현
-  const loginWithNaver = async (accessToken) => {
-    try {
-      console.log("네이버 토큰 받음:", accessToken);
+ const loginWithNaver = async (accessToken) => {
+  try {
+    const resp = await fetch(`${API_BASE_URL}/nbbang/auth/naver`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ accessToken }),
+    });
 
-      // ⚠️ 중요: 네이버는 구글처럼 파이어베이스에서 바로 지원하지 않습니다.
-      // 보통 아래 두 가지 방법 중 하나를 씁니다.
-      
-      // [방법 1] 백엔드(Cloud Functions)로 토큰을 보내 커스텀 토큰을 받아와서 로그인
-      /*
-      const response = await fetch('https://내-클라우드-펑션-주소/naverLogin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: accessToken }),
-      });
-      const { customToken } = await response.json();
-      await signInWithCustomToken(auth, customToken);
-      */
+    const data = await resp.json().catch(() => null);
 
-      // [방법 2] 일단 토큰이 유효하면 로그인 성공 처리 (임시)
-      // (실제 앱 출시 전에는 꼭 방법 1로 백엔드 인증을 구현하는 것을 추천합니다)
-      console.log("네이버 로그인 로직 연동 필요 (현재는 로그만 출력)");
-      
-      // 👇 일단 에러 안 나게 임시 처리 (사용자 정보 가져오기 등 구현 필요)
-      // await getUserInfoFromNaver(accessToken); 
-      
-    } catch (error) {
-      console.error("Naver Login Context Error:", error);
-      throw error;
+    if (!resp.ok || !data?.customToken) {
+      const msg = data?.error || data?.detail?.message || "NAVER_SERVER_LOGIN_FAILED";
+      throw new Error("서버 로그인 실패: " + msg);
     }
-  };
+
+    return await signInWithCustomToken(auth, data.customToken);
+
+  } catch (e) {
+    showAlert(`로그인 실패\n${String(e?.message ?? e)}`);
+    throw e;
+  }
+};
 
   const signup = async (email, password, nickname) => {
     // 1. 혹시 남아있을지 모를 이전 인증 기록 삭제

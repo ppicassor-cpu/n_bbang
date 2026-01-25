@@ -1119,6 +1119,7 @@ const handleSaveNickname = async () => {
             onChangeText={setNewNickname}
             maxLength={10}
             autoCapitalize="none"
+            allowFontScaling={false}
           />
           
           <TouchableOpacity 

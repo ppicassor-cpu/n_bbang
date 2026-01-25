@@ -1,17 +1,18 @@
 ﻿import React, { useState, useEffect, useRef } from "react";
-import { View, StyleSheet, TouchableOpacity, TextInput, KeyboardAvoidingView, Platform, ActivityIndicator, Image  } from "react-native";
+import { View, StyleSheet, TouchableOpacity, TextInput, KeyboardAvoidingView, Platform, ActivityIndicator, Image, Modal  } from "react-native";
 import { Text } from "../../../components/MyText";
 import { useNavigation } from "@react-navigation/native";
 import { useAppContext } from "../../../app/providers/AppContext"; 
 import { ROUTES } from "../../../app/navigation/routes";
 import { theme } from "../../../theme";
 import CustomModal from "../../../components/CustomModal";
-import { Ionicons } from "@expo/vector-icons";
-import { NAVER_CLIENT_ID, NAVER_CLIENT_SECRET } from "@env";
-// ✅ [추가] 네이티브 로그인 라이브러리 (SDK 방식)
+import { Ionicons } from "@expo/vector-icons";import { NAVER_CLIENT_ID, NAVER_CLIENT_SECRET } from "@env";
 import { login as kakaoLogin } from "@react-native-seoul/kakao-login";
 import { GoogleSignin } from "@react-native-google-signin/google-signin";
 import NaverLogin from "@react-native-seoul/naver-login";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+
+
 export default function LoginScreen() {
   const navigation = useNavigation();
   const { login, signup, resetPassword, loginWithGoogle, loginWithKakao, loginWithNaver } = useAppContext();
@@ -26,40 +27,100 @@ export default function LoginScreen() {
   const [modalVisible, setModalVisible] = useState(false);
   const [modalMsg, setModalMsg] = useState("");
 
+  // ✅ 로그인 중 팝업(확인 버튼 없음) + 이중클릭 방지용
+  const [loginBusyVisible, setLoginBusyVisible] = useState(false);
+
   // ✅ 중복 클릭 완전 방지 락 (디자인/스타일/레이아웃 변경 없음)
   const lockRef = useRef(false);
 
   /* ============================================================
       🟢 [네이버] 로그인 설정 & 핸들러 (추가됨)
   ============================================================ */
+  // ✅ 수정 후 (네이버 initialize 1회 고정: OTA로 JS가 바뀌어도 재초기화 방지)
+  const NAVER_SDK_INIT_KEY = "NAVER_SDK_INIT_DONE_v1";
+
   useEffect(() => {
-    NaverLogin.initialize({
-      appName: "우리동네N빵",
-      
-      // ✅ [수정] 문자열 대신 변수를 넣습니다.
-      consumerKey: NAVER_CLIENT_ID,       
-      consumerSecret: NAVER_CLIENT_SECRET, 
-      
-      serviceUrlScheme: "com.sonsunghyun.nbbang", // 패키지명은 공개 정보라 그대로 둬도 괜찮습니다.
-    });
+    (async () => {
+      try {
+        // ✅ 이미 초기화 완료면(앱 재시작/OTA 포함) 재초기화 금지
+        const done = await AsyncStorage.getItem(NAVER_SDK_INIT_KEY);
+        if (done === "1") return;
+
+        // ✅ 환경변수 공백/개행(trim)까지 제거해서 오염 방지
+        const clientId = String(process.env.EXPO_PUBLIC_NAVER_CLIENT_ID || "").trim();
+        const clientSecret = String(process.env.EXPO_PUBLIC_NAVER_CLIENT_SECRET || "").trim();
+        if (!clientId || !clientSecret) return;
+
+        NaverLogin.initialize({
+          appName: "우리동네N빵",
+          consumerKey: clientId,
+          consumerSecret: clientSecret,
+          serviceUrlSchemeIOS: "com.sonsunghyun.nbbang",
+        });
+
+        // ✅ initialize 호출 성공 시에만 1회 고정 플래그 저장
+        await AsyncStorage.setItem(NAVER_SDK_INIT_KEY, "1");
+      } catch (e) {
+        // ✅ 여기서 불필요 팝업/로그 없음
+      }
+    })();
   }, []);
 
-  const handleNaverLogin = async () => {
-    setLoading(true);
-    try {
-      const { successResponse, failureResponse } = await NaverLogin.login();
-      if (successResponse) {
-        await loginWithNaver(successResponse.accessToken);
-      } else {
-        console.log("Naver Login Failed", failureResponse);
-      }
-    } catch (e) {
-      console.error("Naver Login Error:", e);
-      showAlert("네이버 로그인에 실패했습니다.");
-    } finally {
-      setLoading(false);
+
+const handleNaverLogin = async () => {
+  // ✅ 중복 탭 방지(불필요 팝업/레이스 방지)
+  if (loading) return;
+
+  setLoading(true);
+
+  try {
+    const result = await Promise.race([
+      NaverLogin.login().then((r) => ({ type: "RESULT", r })),
+      new Promise((resolve) => setTimeout(() => resolve({ type: "TIMEOUT" }), 8000)),
+    ]);
+
+    if (result.type === "TIMEOUT") {
+      showAlert("네이버 로그인 응답이 지연되었습니다.\n잠시 후 다시 시도해주세요.");
+      return;
     }
-  };
+
+    const { successResponse, failureResponse } = result.r || {};
+
+    // ✅ 성공: 토큰 팝업 없이 바로 서버 로그인
+    if (successResponse?.accessToken) {
+      await loginWithNaver(successResponse.accessToken);
+      return;
+    }
+
+    // ✅ 실패: JSON 덤프 팝업 제거(핵심 메시지만)
+    const fail = failureResponse || {};
+    const rawMsg =
+      fail?.lastErrorDescriptionFromNaverSdk ||
+      fail?.lastErrorDescription ||
+      fail?.message ||
+      fail?.error ||
+      fail?.resultMessage ||
+      fail?.code ||
+      "NO_SUCCESS_RESPONSE";
+
+    const msg = String(rawMsg);
+
+    // ✅ 사용자 취소는 조용히 종료(불필요 팝업 제거)
+    if (/cancel|canceled|cancelled|user cancelled|취소/i.test(msg)) return;
+
+    showAlert(`네이버 로그인에 실패했습니다.\n${msg}`);
+  } catch (e) {
+    const msg = String(e?.message ?? e);
+
+    // ✅ 사용자 취소는 조용히 종료(불필요 팝업 제거)
+    if (/cancel|canceled|cancelled|user cancelled|취소/i.test(msg)) return;
+
+    showAlert(`네이버 로그인 중 오류가 발생했습니다.\n${msg}`);
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   /* ============================================================
       🔵 [구글] 로그인 설정 (네이티브 SDK 방식)
@@ -102,8 +163,7 @@ export default function LoginScreen() {
     setLoading(true);
     try {
       const token = await kakaoLogin();
-      // console.log("카카오 로그인 성공, 토큰:", token.accessToken); // 확인용
-
+      
       // ✅ 수정 포인트: idToken이 아니라 accessToken을 넘겨야 합니다!
       if (token.accessToken) {
         await loginWithKakao(token.accessToken); 
@@ -131,12 +191,17 @@ export default function LoginScreen() {
   };
 
   const handleAuthAction = async () => {
+    if (loading || loginBusyVisible) return;
+
     if (!email) { showAlert("이메일을 입력해주세요."); return; }
     
+    // ✅ 로그인일 때만 “로그인 중” 팝업 (회원가입/재설정은 제외)
+    if (mode === "login") setLoginBusyVisible(true);
+
     setLoading(true);
     try {
       if (mode === "login") {
-        if (!password) { showAlert("비밀번호를 입력해주세요."); setLoading(false); return; }
+        if (!password) { showAlert("비밀번호를 입력해주세요."); setLoginBusyVisible(false); setLoading(false); return; }
         await login(email, password);
         // ✅ RootNavigator(user 상태 기반 분기)가 화면 전환을 담당하므로 reset 호출 제거
 
@@ -166,16 +231,24 @@ export default function LoginScreen() {
 
       showAlert(msg);
     } finally {
+      setLoginBusyVisible(false);
       setLoading(false);
     }
   };
 
   // ✅ 소셜 로그인 버튼 연결 (네이티브 함수로 연결)
   const handleSocialLogin = (platform) => {
+    if (loading || loginBusyVisible) return;
     if (lockRef.current) return; // ✅ 즉시 차단
     lockRef.current = true;
 
-    const done = () => { lockRef.current = false; };
+    // ✅ “로그인 중입니다…” 팝업을 먼저 띄워서 이중클릭/레이스 차단
+    setLoginBusyVisible(true);
+
+    const done = () => {
+      lockRef.current = false;
+      setLoginBusyVisible(false);
+    };
 
     if (platform === "네이버") { // ✅ [추가] 네이버 분기
       handleNaverLogin().finally(done);
@@ -312,6 +385,21 @@ export default function LoginScreen() {
         )}
       </View>
 
+      <Modal
+        transparent
+        visible={loginBusyVisible}
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={() => {}}
+      >
+        <View style={styles.loginBusyOverlay}>
+          <View style={styles.loginBusyBox}>
+            <ActivityIndicator color="black" />
+            <Text style={styles.loginBusyText}>로그인 중입니다...</Text>
+          </View>
+        </View>
+      </Modal>
+
       <CustomModal 
         visible={modalVisible} 
         message={modalMsg} 
@@ -363,5 +451,27 @@ const styles = StyleSheet.create({
   kakaoBtn: { backgroundColor: "#FEE500" },
   kakaoText: { color: "#3C1E1E", fontWeight: "bold", fontSize: 15 },
   googleBtn: { backgroundColor: "#FFF" },
-  googleText: { color: "#555", fontWeight: "bold", fontSize: 15 }
+  googleText: { color: "#555", fontWeight: "bold", fontSize: 15 },
+
+  // ✅ 로그인 중 팝업(확인 버튼 없음)
+  loginBusyOverlay: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "rgba(0,0,0,0.55)",
+  },
+  loginBusyBox: {
+    width: "78%",
+    paddingVertical: 18,
+    paddingHorizontal: 16,
+    borderRadius: 14,
+    backgroundColor: "rgba(30, 30, 30, 0.88)",
+    alignItems: "center",
+    gap: 10,
+  },
+  loginBusyText: {
+    color: "white",
+    fontSize: 16,
+    fontWeight: "900",
+  },
 });
