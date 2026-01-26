@@ -23,12 +23,14 @@ const IMAGE_CACHE_SECONDS = 60 * 60 * 24 * 30; // 30일
 const WRITABLE_CATEGORIES = ["마트/식품", "생활용품"];
 
 export default function WriteScreen({ navigation, route }) {
-  const {
+   const {
     addPost,
     updatePost,
     currentLocation,
     myCoords,
     posts,
+    // ✅ [추가] 내동네 일치 검증(최신 GPS + 폴리곤 inside/outside 판정)
+    ensureHomeDongMatchForWrite,
     // ✅ 프리미엄 제한 로직용 (AppContext에서 제공한다고 가정)
     isPremium,
     dailyPostCount,
@@ -38,6 +40,8 @@ export default function WriteScreen({ navigation, route }) {
   
   const editPostData = route.params?.post;
   const isEditMode = !!editPostData;
+  const HOME_DONG_MISMATCH_COOLDOWN_MS = 3 * 60 * 1000; // 3분
+  const lastHomeDongMismatchShownAtRef = useRef(0);
 
   const [category, setCategory] = useState("마트/식품");
   const [title, setTitle] = useState("");
@@ -401,6 +405,35 @@ export default function WriteScreen({ navigation, route }) {
 
     // ✅ [수정] 무료나눔은 buyPrice 필수 아님 (저장은 0으로 통일)
     if (!isFreeShare && !buyPrice) { showAlert("구매 금액을 입력해주세요."); return; }
+
+    // ✅ 로딩 시작: 버튼 비활성화 & 모달 띄우기
+    if (typeof ensureHomeDongMatchForWrite === "function") {
+      const now = Date.now();
+      try {
+        const res = await ensureHomeDongMatchForWrite({ forceFresh: true });
+        const ok = typeof res === "boolean" ? res : !!res?.ok;
+
+        if (!ok) {
+          const msg = typeof res === "object" && res?.message
+            ? String(res.message)
+            : "내 동네 인증 지역과 현재 위치가 일치하지 않아 등록할 수 없습니다.";
+
+          // ✅ 쿨다운: 방금 불일치 모달을 띄웠다면 일정 시간 재표시 생략(등록은 계속 막음)
+          if (now - lastHomeDongMismatchShownAtRef.current >= HOME_DONG_MISMATCH_COOLDOWN_MS) {
+            showAlert(msg);
+            lastHomeDongMismatchShownAtRef.current = now;
+          }
+          return;
+        }
+      } catch (e) {
+        const msg = "현재 위치 확인 중 오류가 발생했습니다.\n잠시 후 다시 시도해주세요.";
+        if (now - lastHomeDongMismatchShownAtRef.current >= HOME_DONG_MISMATCH_COOLDOWN_MS) {
+          showAlert(msg);
+          lastHomeDongMismatchShownAtRef.current = now;
+        }
+        return;
+      }
+    }
 
     // ✅ 로딩 시작: 버튼 비활성화 & 모달 띄우기
     setLoading(true);

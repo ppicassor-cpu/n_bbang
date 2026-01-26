@@ -767,7 +767,8 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: "#333",
     backgroundColor: "#202020", // 광고 로드 전 배경색
-    paddingVertical: 5,
+    paddingTop: 5,
+    paddingBottom: 0,
   },
   // adTag, adTagText, adText는 더 이상 사용하지 않으므로 삭제해도 됩니다.
 });

@@ -81,6 +81,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function getBestCoordsWithShortWatch() {
   let best = null;
   let watcher = null;
+  let isMocked = false;
+
+  let totalSamples = 0;
+  let mockHit = 0;
 
   try {
     watcher = await Location.watchPositionAsync(
@@ -90,19 +94,27 @@ async function getBestCoordsWithShortWatch() {
         distanceInterval: 0,
       },
       (loc) => {
+        totalSamples++;
+
+        if (loc?.mocked) {
+          mockHit++;
+          isMocked = true; // ✅ mocked 1회라도 섞이면 즉시 가짜로 간주(하드)
+        }
+
         const c = loc?.coords;
         if (!c?.latitude || !c?.longitude) return;
+
         const acc = Number(c.accuracy ?? 9999);
         if (!best) {
-          best = c;
+          best = { ...c, timestamp: loc?.timestamp };
           return;
         }
+
         const bestAcc = Number(best.accuracy ?? 9999);
-        if (acc < bestAcc) best = c;
+        if (acc < bestAcc) best = { ...c, timestamp: loc?.timestamp };
       }
     );
 
-    // 1.6초만 모아서 best 선택
     await sleep(1600);
   } catch {
     // watch 실패 시 아래 getCurrentPosition로 처리
@@ -113,26 +125,32 @@ async function getBestCoordsWithShortWatch() {
   }
 
   if (!best) {
-    const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-    best = loc?.coords || null;
+    try {
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      if (loc?.mocked) isMocked = true;
+      best = loc?.coords ? { ...loc.coords, timestamp: loc?.timestamp } : null;
+    } catch {
+      best = null;
+    }
   }
 
-  // 정확도가 너무 크면 Highest로 1회만 보강
   const bestAcc = Number(best?.accuracy ?? 9999);
   if (best && bestAcc > 30) {
     try {
       const loc2 = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Highest });
+      if (loc2?.mocked) isMocked = true;
+
       const c2 = loc2?.coords;
       if (c2?.latitude && c2?.longitude) {
         const acc2 = Number(c2.accuracy ?? 9999);
-        if (acc2 < bestAcc) best = c2;
+        if (acc2 < bestAcc) best = { ...c2, timestamp: loc2?.timestamp };
       }
     } catch {}
   }
 
-  return best;
+  return { coords: best, isMocked: !!isMocked };
 }
-
+  
 // ✅ [추가] Point-in-Polygon (GeoJSON)
 function pointInRing(lon, lat, ring) {
   if (!Array.isArray(ring) || ring.length < 4) return false;
@@ -218,6 +236,8 @@ export const AppProvider = ({ children }) => {
   // ✅ [추가] HOME_DONG_* 변경 감지/동기화용 ref
   const homeDongLastNameRef = useRef(null);
   const homeDongSyncTimerRef = useRef(null);
+
+  const homeDongMismatchAtRef = useRef(0);
 
   // ✅ [추가] 초기 로딩 게이팅용 상태(홈 모달에서 사용)
   const [authChecked, setAuthChecked] = useState(false);
@@ -316,22 +336,18 @@ const isBooting = !initialReady;
     setModalVisible(true);
   };
 
-  // ✅ [점검 1] 프리미엄 판별은 "entitlements.active"로만 통일
-  // ✅ [확정] RevenueCat Entitlement Identifier: "Nbbang Premium"
-  const ENTITLEMENT_IDS = ["Nbbang Premium"];
+  const ENTITLEMENT_IDS = ["nbbang_premium"];
 
-  // ✅ (통일) Public SDK Key는 EXPO_PUBLIC 하나만 사용
   const REVENUECAT_PUBLIC_SDK_KEY = process.env.EXPO_PUBLIC_REVENUECAT_PUBLIC_SDK_KEY || "";
 
   const getRevenueCatApiKey = () => {
-    // 공용 키만 사용 (App.js에서 configure에 사용)
     return REVENUECAT_PUBLIC_SDK_KEY || "";
   };
 
-  // ✅ [추가] $0.99 단건(Consumable) 식별자 (RevenueCat 상품/패키지 ID)
   const HOTPLACE_CONSUMABLE_PACKAGE_ID = process.env.EXPO_PUBLIC_HOTPLACE_CONSUMABLE_PACKAGE_ID || "";
   const HOTPLACE_CONSUMABLE_PRODUCT_ID = process.env.EXPO_PUBLIC_HOTPLACE_CONSUMABLE_PRODUCT_ID || "";
   const HOTPLACE_CONSUMABLE_FALLBACK_IDS = [
+    "hotstore_ticket",
     "hotplace_single_099",
     "hotplace_099",
     "hotplace_single",
@@ -341,6 +357,7 @@ const isBooting = !initialReady;
   const BOOST_CONSUMABLE_PACKAGE_ID = process.env.EXPO_PUBLIC_BOOST_CONSUMABLE_PACKAGE_ID || "";
   const BOOST_CONSUMABLE_PRODUCT_ID = process.env.EXPO_PUBLIC_BOOST_CONSUMABLE_PRODUCT_ID || "";
   const BOOST_CONSUMABLE_FALLBACK_IDS = [
+    "boost_ticket",
     "boost_single_099",
     "boost_099",
     "boost_single",
@@ -820,12 +837,36 @@ const isBooting = !initialReady;
     try {
       const perm = await Location.requestForegroundPermissionsAsync();
       if (perm?.status !== "granted") {
+        setCurrentLocation("위치 권한 필요");
         setLocationChecked(true);
         return null;
       }
 
-      const c = await getBestCoordsWithShortWatch();
+      const res = await getBestCoordsWithShortWatch();
+      const c = res?.coords || null;
+      const isMocked = !!res?.isMocked;
+
+      // ✅ mocked 감지 시: 차단 + 상태 기록(부팅 고정 방지)
+      if (isMocked) {
+        openModal("가짜 GPS 감지", `가짜 GPS(모의 위치)가 감지되었습니다.\n설정에서 모의 위치를 끄고 다시 시도해 주세요.`);
+        setCurrentLocation("위치 확인 불가");
+        setLocationChecked(true);
+        return null;
+      }
+
+      // ✅ [추가] Time Drift(소프트) — loc.timestamp 기반(차단은 하지 않음)
+      if (c?.timestamp != null) {
+        const ts = Number(c.timestamp);
+        if (Number.isFinite(ts)) {
+          const diff = Math.abs(Date.now() - ts);
+          if (diff > 30000) {
+            console.warn("Time drift detected:", diff);
+          }
+        }
+      }
+
       if (!c?.latitude || !c?.longitude) {
+        setCurrentLocation("위치 확인 불가");
         setLocationChecked(true);
         return null;
       }
@@ -838,11 +879,12 @@ const isBooting = !initialReady;
 
       setMyCoords(coords);
 
-      // ✅ [추가] 성공 케이스도 체크 완료 처리 (부팅 조건 꼬임 방지)
+      // ✅ 성공/실패/차단 모두 locationChecked 기록(무한 로딩 방지)
       setLocationChecked(true);
 
       return coords;
     } catch {
+      setCurrentLocation("위치 확인 불가");
       setLocationChecked(true);
       return null;
     }
@@ -898,6 +940,72 @@ const isBooting = !initialReady;
     return false;
   }
 };
+  const ensureHomeDongMatchForWrite = async ({
+    polygon,
+    forceFresh = true,
+    coordsOverride = null,
+    cooldownMs = 180000, // 기본 3분
+  } = {}) => {
+    try {
+      const now = Date.now();
+      const last = Number(homeDongMismatchAtRef.current || 0);
+      const inCooldown = cooldownMs > 0 && last > 0 && (now - last) < Number(cooldownMs);
+
+      const openOnce = (title, message) => {
+        if (!inCooldown) {
+          homeDongMismatchAtRef.current = now;
+          openModal(title, message);
+        }
+      };
+
+      if (!homeDong) {
+        openOnce("내 동네 설정 필요", "내 동네가 설정되어 있지 않습니다.\n내 동네 설정/인증을 먼저 진행해 주세요.");
+        return { ok: false, status: "NO_HOME_DONG" };
+      }
+
+      if (!homeDongVerified) {
+        openOnce("동네 인증 필요", "내 동네 인증이 완료되지 않았습니다.\n내 동네 인증을 진행해 주세요.");
+        return { ok: false, status: "NOT_VERIFIED" };
+      }
+
+      if (!polygon || typeof polygon !== "object") {
+        openOnce("동네 인증 필요", "동네 경계 정보를 찾을 수 없습니다.\n내 동네 인증을 다시 진행해 주세요.");
+        return { ok: false, status: "NO_POLYGON" };
+      }
+
+      let coords = null;
+
+      if (coordsOverride?.latitude && coordsOverride?.longitude) {
+        coords = coordsOverride;
+      } else if (forceFresh) {
+        coords = await refreshMyCoords();
+      } else {
+        coords = myCoords?.latitude && myCoords?.longitude ? myCoords : await refreshMyCoords();
+      }
+
+      if (!coords?.latitude || !coords?.longitude) {
+        // refreshMyCoords 내부에서 권한/가짜GPS 등은 자체 처리(모달) 가능
+        openOnce("위치 확인 불가", "현재 위치를 확인할 수 없습니다.\nGPS를 켜고 다시 시도해 주세요.");
+        return { ok: false, status: "NO_COORDS" };
+      }
+
+      const ok = pointInPolygonGeometry(Number(coords.longitude), Number(coords.latitude), polygon);
+
+      if (!ok) {
+        openOnce("동네 인증 필요", "현재 위치가 설정한 내 동네와 다릅니다.\n내 동네 인증을 다시 진행해 주세요.");
+        return { ok: false, status: inCooldown ? "MISMATCH_COOLDOWN" : "MISMATCH", coords };
+      }
+
+      // ✅ 매치되면 쿨다운 해제
+      homeDongMismatchAtRef.current = 0;
+
+      return { ok: true, status: "MATCH", coords };
+    } catch (e) {
+      openModal("오류", "위치 확인 중 문제가 발생했습니다.");
+      return { ok: false, status: "ERROR", error: e };
+    }
+  };
+
   const checkBanStatus = async (uid) => {
     try {
       const userRef = doc(db, "users", uid);
@@ -1656,7 +1764,7 @@ useEffect(() => {
     return await signInWithCustomToken(auth, data.customToken);
 
   } catch (e) {
-    showAlert(`로그인 실패\n${String(e?.message ?? e)}`);
+    openModal("로그인 실패", `로그인 실패\n${String(e?.message ?? e)}`);
     throw e;
   }
 };
@@ -2339,6 +2447,7 @@ const applyBoostToContent = async ({ contentType = "post", contentId, mode = "fr
         clearHomeDong,
         refreshMyCoords,
         verifyHomeDongByGps,
+        ensureHomeDongMatchForWrite,
 
         posts,
         stores,

@@ -30,12 +30,8 @@
     },
     "android": {
       "package": "com.sonsunghyun.nbbang",
-      "versionCode": 4,
+      "versionCode": 5,
       "googleServicesFile": "./google-services.json",
-      "navigationBar": {
-        "backgroundColor": "#000000",
-        "barStyle": "light-content"
-      },
       "permissions": [
         "com.google.android.gms.permission.AD_ID",
         "INTERNET",
@@ -51,6 +47,17 @@
         "RECORD_AUDIO",
         "SYSTEM_ALERT_WINDOW",
         "VIBRATE"
+      ],
+      "queries": [
+        {
+          "package": "com.kakao.talk"
+        },
+        {
+          "package": "com.nhn.android.search"
+        },
+        {
+          "package": "com.nhn.android.naverlogin"
+        }
       ],
       "intentFilters": [
         {
@@ -83,6 +90,10 @@
       },
       "runtimeVersion": "1.0.0"
     },
+    "androidNavigationBar": {
+      "backgroundColor": "#000000",
+      "barStyle": "light-content"
+    },
     "plugins": [
       "@react-native-google-signin/google-signin",
       [
@@ -96,8 +107,8 @@
         {
           "android": {
             "usesCleartextTraffic": true,
-            "extraProguardRules": "-keep public class com.nhn.android.naverlogin.** { *; } -keep public class com.navercorp.nid.** { *; }",
-            "extraDependencies": [
+             "extraProguardRules": "-keep public class com.nhn.android.naverlogin.** { *; } -keep public class com.navercorp.nid.** { *; } -keep class com.naver.nid.** { *; } -keep interface com.naver.nid.** { *; } -keep class com.kakao.sdk.**.model.* { <fields>; } -keep class * extends com.google.gson.TypeAdapter -dontwarn org.bouncycastle.jsse.** -dontwarn org.conscrypt.* -dontwarn org.openjsse.**",
+              "extraDependencies": [
               "com.revenuecat.purchases:purchases:9.19.0",
               "com.revenuecat.purchases:purchases-ui:9.19.0"
             ]

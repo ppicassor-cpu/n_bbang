@@ -10,9 +10,17 @@ import Purchases from "react-native-purchases";
 import CustomModal from "../../../components/CustomModal";
 
 export default function PremiumScreen({ navigation }) {
-  const { activatePremium, refreshPremiumFromRevenueCat, isPremium, restorePurchases, addBoostTicket, incrementHotplaceCount } = useAppContext();
-
-  const [selectedPlan, setSelectedPlan] = useState("monthly"); // monthly | yearly
+  const { 
+    activatePremium, 
+    refreshPremiumFromRevenueCat, 
+    isPremium, 
+    restorePurchases, 
+    addBoostTicket, 
+    incrementHotplaceCount,
+    purchaseBoostConsumable,
+    purchaseHotplaceConsumable
+  } = useAppContext();
+  const [selectedPlan, setSelectedPlan] = useState("$rc_monthly"); // monthly | yearly
   const [loading, setLoading] = useState(false);
 
   // ✅ 가격 설정 (핫스토어 2,000원 반영)
@@ -43,11 +51,20 @@ export default function PremiumScreen({ navigation }) {
         const current = offerings?.current;
         
         if (current && mounted) {
-          const monthlyPkg = current.monthly || current.availablePackages?.find(p => p.identifier === '$rc_monthly'); // ✅ [수정]
-const annualPkg = current.annual || current.availablePackages?.find(p => p.identifier === '$rc_annual');   // ✅ [수정]
-// 티켓은 아까 만드신 패키지 ID와 일치시켜주세요. (예: boost_ticket)
-const boostPkg = current.availablePackages?.find(p => p.identifier === 'boost_ticket');       // ✅ [수정]
-const hotstorePkg = current.availablePackages?.find(p => p.identifier === 'hotstore_ticket'); // ✅ [수정]
+          const monthlyPkg =
+            current.monthly ||
+            current.availablePackages?.find((p) => p.identifier === "$rc_monthly" || p.identifier === "rc_monthly");
+
+          const annualPkg =
+            current.annual ||
+            current.availablePackages?.find((p) => p.identifier === "$rc_annual" || p.identifier === "rc_annual");
+
+          const findPkg = (id) =>
+            current.availablePackages?.find((p) => p?.identifier === id || p?.product?.identifier === id);
+
+          const boostPkg = findPkg("boost_ticket_1");
+          const hotstorePkg = findPkg("hotstore_ticket_1");
+
 
           setPrices(prev => ({
             monthly: monthlyPkg?.product?.priceString || prev.monthly,
@@ -124,54 +141,38 @@ const hotstorePkg = current.availablePackages?.find(p => p.identifier === 'hotst
   const handleConsumablePurchase = async (type) => {
     setLoading(true);
     try {
-      const offerings = await Purchases.getOfferings();
-      const current = offerings?.current;
-      
-      let packageToBuy;
-      if (type === 'boost') {
-        packageToBuy = current?.availablePackages?.find(p => p.identifier === 'nbbang_consumable_boost');
-      } else if (type === 'hotstore') {
-        packageToBuy = current?.availablePackages?.find(p => p.identifier === 'nbbang_consumable_hotstore');
-      }
+      if (type === "boost") {
+        const res = await purchaseBoostConsumable();
 
-      // 1. 상품이 없을 때 (테스트용 가짜 지급)
-      if (!packageToBuy) {
-        if (type === 'boost') {
-           // ✅ 부스트 티켓 지급 (가짜)
-           await addBoostTicket({ test: true }); 
-           showModal("테스트 성공", "부스트 티켓 1개가 지급되었습니다. (테스트)");
-        } else {
-           // ✅ 핫스토어 등록권 지급 (가짜)
-           await incrementHotplaceCount({ usageType: 'paid_extra', purchaseInfo: { test: true } }); 
-           showModal("테스트 성공", "핫스토어 등록권 1개가 지급되었습니다. (테스트)");
+        if (res?.status === "CANCELLED") return;
+        if (res?.status !== "PURCHASED") {
+          showModal("결제 실패", "결제를 완료하지 못했습니다.");
+          return;
         }
-        setLoading(false);
-        return; 
-      }
 
-      // 2. 실제 결제 진행
-      const { customerInfo, productIdentifier } = await Purchases.purchasePackage(packageToBuy);
-      
-      // 3. 결제 성공 시 DB 아이템 지급
-      const purchaseInfo = {
-        productIdentifier,
-        purchasedAt: new Date().toISOString(),
-        transactionId: customerInfo?.originalAppUserId // 또는 트랜잭션 ID
-      };
-
-      if (type === 'boost') {
-        // ✅ 부스트 티켓 지급 (실제)
-        await addBoostTicket(purchaseInfo);
+        await addBoostTicket(res?.purchaseInfo || null);
         showModal("구매 완료", "부스트업 티켓이 지급되었습니다.\n글 작성/수정 시 사용할 수 있습니다.");
-      } else {
-        // ✅ 핫스토어 등록권 지급 (실제)
-        await incrementHotplaceCount({ usageType: 'paid_extra', purchaseInfo });
-        showModal("구매 완료", "핫스토어 등록권이 지급되었습니다.");
+        return;
       }
 
+      if (type === "hotstore") {
+        const res = await purchaseHotplaceConsumable();
+
+        if (res?.status === "CANCELLED") return;
+        if (res?.status !== "PURCHASED") {
+          showModal("결제 실패", "결제를 완료하지 못했습니다.");
+          return;
+        }
+
+        await incrementHotplaceCount({ usageType: "paid_extra", purchaseInfo: res?.purchaseInfo || null });
+        showModal("구매 완료", "핫스토어 등록권이 지급되었습니다.");
+        return;
+      }
+
+      showModal("오류", "알 수 없는 상품 타입입니다.");
     } catch (e) {
       if (!e?.userCancelled) {
-        showModal("결제 실패", "결제를 완료하지 못했습니다.\n" + (e.message || ""));
+        showModal("결제 실패", "결제를 완료하지 못했습니다.\n" + (e?.message || ""));
       }
     } finally {
       setLoading(false);
@@ -227,19 +228,19 @@ const hotstorePkg = current.availablePackages?.find(p => p.identifier === 'hotst
         <Text style={styles.sectionLabel}>멤버십 선택</Text>
         <View style={styles.planBox}>
           <TouchableOpacity
-            style={[styles.planCard, selectedPlan === "monthly" && styles.planCardActive]}
-            onPress={() => setSelectedPlan("monthly")}
-          >
-            <Text style={[styles.planTitle, selectedPlan === "monthly" && styles.textActive]}>월간</Text>
+            style={[styles.planCard, selectedPlan === "$rc_monthly" && styles.planCardActive]}
+            onPress={() => setSelectedPlan("$rc_monthly")}
+          >            
+            <Text style={[styles.planTitle, selectedPlan === "$rc_monthly" && styles.textActive]}>월간</Text>
             <Text style={styles.planPrice}>{prices.monthly} / 월</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.planCard, selectedPlan === "yearly" && styles.planCardActive]}
-            onPress={() => setSelectedPlan("yearly")}
+            style={[styles.planCard, selectedPlan === "$rc_annual" && styles.planCardActive]}
+            onPress={() => setSelectedPlan("$rc_annual")}
           >
             <View style={styles.badgeContainer}>
-               <Text style={[styles.planTitle, selectedPlan === "yearly" && styles.textActive]}>연간</Text>
+               <Text style={[styles.planTitle, selectedPlan === "$rc_annual" && styles.textActive]}>연간</Text>
                <View style={styles.discountBadge}>
                  <Text style={styles.discountText}>{discountText}</Text>
                </View>

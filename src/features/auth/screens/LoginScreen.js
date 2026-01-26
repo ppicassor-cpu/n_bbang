@@ -377,13 +377,19 @@ const handleNaverLogin = async () => {
                 onPress={() => handleSocialLogin("구글")}
                 disabled={loading} // 로딩 중에만 비활성화
               >
-                <Ionicons name="logo-google" size={20} color="#4285F4" />
+                {/* ✅ [수정] 4색 구글 공식 로고 이미지로 교체 */}
+                <Image 
+                  source={{ uri: "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c1/Google_\"G\"_Logo.svg/1024px-Google_\"G\"_Logo.svg.png" }} 
+                  style={styles.googleIconImage} 
+                />
                 <Text style={styles.googleText}>구글로 시작하기</Text>
               </TouchableOpacity>
             </View>
           </View>
         )}
       </View>
+
+      <Text style={styles.copyrightText}>© 2026 N_bbang All rights reserved.</Text>
 
       <Modal
         transparent
@@ -413,10 +419,10 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.background, justifyContent: "center", alignItems: "center" },
   overlay: { width: "90%", padding: 25, backgroundColor: "rgba(30, 30, 30, 0.95)", borderRadius: 20, alignItems: "center", borderWidth: 1, borderColor: "#333", elevation: 10 },
   
-  logoContainer: { alignItems: "center", marginBottom: 5 },
-  logoImage: { width: 120, height: 120 },
+  logoContainer: { alignItems: "center", marginBottom: 0 },
+  logoImage: { width: 110, height: 110 },
 
-  subtitle: { fontSize: 16, color: "#AAA", marginBottom: 25, fontWeight: "600" },
+  subtitle: { fontSize: 16, color: "#AAA", marginBottom: 15, fontWeight: "600" },
   
   inputContainer: { width: "100%", gap: 12 },
   input: { 
@@ -436,7 +442,7 @@ const styles = StyleSheet.create({
   linkTextBold: { color: theme.primary, fontSize: 15, fontWeight: "bold" },
   bar: { marginHorizontal: 10, color: "#555" },
 
-  socialContainer: { width: "100%", marginTop: 30 },
+  socialContainer: { width: "100%", marginTop: 20 },
   divider: { flexDirection: "row", alignItems: "center", marginBottom: 15 },
   line: { flex: 1, height: 1, backgroundColor: "#444" },
   orText: { marginHorizontal: 10, color: "#666", fontSize: 12 },
@@ -453,6 +459,14 @@ const styles = StyleSheet.create({
   googleBtn: { backgroundColor: "#FFF" },
   googleText: { color: "#555", fontWeight: "bold", fontSize: 15 },
 
+  copyrightText: {
+    position: 'absolute',
+    bottom: Platform.OS === 'ios' ? 40 : 20, // 아이폰 하단 바 고려
+    color: "#666",
+    fontSize: 11,
+    fontWeight: "400",
+  },
+  
   // ✅ 로그인 중 팝업(확인 버튼 없음)
   loginBusyOverlay: {
     flex: 1,

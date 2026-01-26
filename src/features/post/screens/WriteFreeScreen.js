@@ -45,11 +45,13 @@ const clampDelta = (v, fallback = DEFAULT_DELTA) => {
 };
 
 export default function WriteFreeScreen({ navigation, route }) {
-  const { addPost, updatePost, currentLocation, myCoords, posts } = useAppContext();
+  const { addPost, updatePost, currentLocation, myCoords, posts, ensureHomeDongMatchForWrite } = useAppContext();
 
   // ✅ 수정 모드 데이터
   const editPostData = route?.params?.post;
   const isEditMode = !!editPostData;
+  const HOME_DONG_MISMATCH_COOLDOWN_MS = 3 * 60 * 1000; // 3분
+  const lastHomeDongMismatchShownAtRef = useRef(0);
 
   // ✅ 상태
   const [title, setTitle] = useState(isEditMode ? editPostData?.title || "" : "");
@@ -287,6 +289,36 @@ export default function WriteFreeScreen({ navigation, route }) {
     if (hasBadWord(title) || hasBadWord(content) || hasBadWord(pickupPoint)) {
       showAlert("부적절한 단어(욕설, 관리자 사칭 등)가 포함되어 있습니다.\n바른 말을 사용해주세요.");
       return;
+    }
+
+    if (typeof ensureHomeDongMatchForWrite === "function") {
+      const now = Date.now();
+      try {
+        const res = await ensureHomeDongMatchForWrite({ forceFresh: true });
+        const ok = typeof res === "boolean" ? res : !!res?.ok;
+
+        if (!ok) {
+          const msg =
+            typeof res === "object" && res?.message
+              ? String(res.message)
+              : "내 동네 인증 지역과 현재 위치가 일치하지 않아 등록할 수 없습니다.";
+
+          // ✅ 쿨다운: 방금 불일치 모달을 띄웠다면 일정 시간 재표시 생략(등록은 계속 막음)
+          if (now - lastHomeDongMismatchShownAtRef.current >= HOME_DONG_MISMATCH_COOLDOWN_MS) {
+            showAlert(msg);
+            lastHomeDongMismatchShownAtRef.current = now;
+          }
+          return;
+        }
+      } catch (e) {
+        const msg = "현재 위치 확인 중 오류가 발생했습니다.\n잠시 후 다시 시도해주세요.";
+
+        if (now - lastHomeDongMismatchShownAtRef.current >= HOME_DONG_MISMATCH_COOLDOWN_MS) {
+          showAlert(msg);
+          lastHomeDongMismatchShownAtRef.current = now;
+        }
+        return;
+      }
     }
 
     setLoading(true);

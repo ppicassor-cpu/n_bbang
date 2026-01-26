@@ -533,10 +533,12 @@ const MyTownScreen = ({ navigation }) => {
     }
 
     let coords = null;
+    let currentLoc = null;
 
       // ✅ 1) 최신 GPS 우선 (캐시(lastKnown)보다 현재값 먼저 시도)
       try {
         const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Highest });
+        currentLoc = loc;
         coords = loc?.coords;
       } catch {}
 
@@ -544,12 +546,54 @@ const MyTownScreen = ({ navigation }) => {
       if (!coords) {
         try {
           const last = await Location.getLastKnownPositionAsync({});
-          if (last?.coords) coords = last.coords;
+          if (last?.coords) {
+            currentLoc = last;
+            coords = last.coords;
+          }
         } catch {}
       }
 
     if (!coords) {
       _showModal("오류", "위치를 가져올 수 없습니다.");
+      return;
+    }
+
+    // ✅ [보완] 가짜 GPS(모의 위치) 탐지 로직 강화
+    const _detectFakeGps = (locObj) => {
+      try {
+        if (!locObj) return { isFake: false, reason: "" };
+
+        const c = locObj?.coords || {};
+        const lat = typeof c.latitude === "number" ? c.latitude : null;
+        const lon = typeof c.longitude === "number" ? c.longitude : null;
+
+        // Android에서 주로 제공되는 mocked 플래그(환경/버전에 따라 없을 수 있음)
+        const mockedFlag = Boolean(locObj?.mocked || c?.mocked);
+
+        // (0,0) 좌표는 정상 GPS로 보기 어려움(모의/오류 값 방어)
+        const zeroZero = lat === 0 && lon === 0;
+
+        // timestamp가 미래로 튀는 경우(일부 모의 위치/비정상 provider에서 발생)
+        const tsRaw = locObj?.timestamp;
+        const ts = typeof tsRaw === "number" ? tsRaw : (typeof tsRaw === "string" ? Number(tsRaw) : null);
+        const futureTs = typeof ts === "number" && isFinite(ts) && ts > Date.now() + 5000;
+
+        if (Platform.OS === "android" && mockedFlag) return { isFake: true, reason: "MOCKED_FLAG" };
+        if (zeroZero) return { isFake: true, reason: "ZERO_COORDS" };
+        if (futureTs) return { isFake: true, reason: "FUTURE_TIMESTAMP" };
+
+        return { isFake: false, reason: "" };
+      } catch {
+        return { isFake: false, reason: "" };
+      }
+    };
+
+    const fake = _detectFakeGps(currentLoc);
+    if (fake?.isFake) {
+      _showModal(
+        "가짜 GPS 감지",
+        "가짜 GPS(모의 위치)가 감지되었습니다. 개발자 옵션에서 '모의 위치 앱'을 해제한 뒤 다시 시도해주세요."
+      );
       return;
     }
 
@@ -595,11 +639,11 @@ const MyTownScreen = ({ navigation }) => {
         const legalDongs = ADM_TO_LEGAL_MAP[admCd];
 
         if (legalDongs && legalDongs.length > 0) {
-          // 우선 첫 번째 법정동을 기본값으로 사용하며 기존 adm_nm, adm_cd를 교체합니다.
+          const legal = legalDongs[0];
           found.properties = {
             ...found.properties,
-            adm_nm: legalDongs[0].adm_nm, // 행정동 명칭 -> 법정동 명칭 교체 // ✅ [수정]
-            adm_cd: legalDongs[0].adm_cd  // 행정동 코드 -> 법정동 코드 교체 // ✅ [수정]
+            display_name: legal.adm_nm, // ✅ 법정동 명칭(표시용)
+            legal_cd: legal.adm_cd      // ✅ 법정동 코드(저장용)
           };
         }
 
@@ -784,7 +828,13 @@ const MyTownScreen = ({ navigation }) => {
       // CASE A: feature가 이미 있으면 그대로 사용 (폴리곤 + 중심점 이동)
       // =========================================================
       if (opt?.feature) {
-        const feature = opt.feature;
+        const rawFeature = opt.feature;
+
+        const parentAdmCd = opt?.adm_cd ? LEGAL_TO_ADM_MAP[opt.adm_cd] : null;
+        const feature = parentAdmCd
+          ? (featureByAdmCd.get(parentAdmCd) || rawFeature)
+          : rawFeature;
+
         const center = opt?.coords || _calcFeatureCenter(feature);
 
         if (center) {
@@ -792,7 +842,18 @@ const MyTownScreen = ({ navigation }) => {
           _focusMap(center);
         }
 
-        setSelectedDong(feature);
+        const finalFeature = opt?.adm_cd
+          ? {
+              ...feature,
+              properties: {
+                ...feature.properties,
+                display_name: opt?.adm_nm || opt?.label,
+                legal_cd: opt.adm_cd,
+              },
+            }
+          : feature;
+
+        setSelectedDong(finalFeature);
 
         if (myCoords) {
           _checkVerification(
@@ -821,13 +882,13 @@ const MyTownScreen = ({ navigation }) => {
             _focusMap(center);
           }
 
-          // ✅ [수정] 선택한 법정동 정보(이름, 코드)로 폴리곤 속성을 완전히 교체합니다.
+          // ✅ [수정] 행정동 폴리곤 키(adm_cd)는 유지하고, 법정동 정보는 별도 필드로 주입
           const finalFeature = {
             ...feature,
             properties: {
               ...feature.properties,
-              adm_nm: opt.adm_nm || opt.label, // 법정동 명칭 주입 // ✅ [수정]
-              adm_cd: opt.adm_cd               // 법정동 코드 주입 // ✅ [수정]
+              display_name: opt.adm_nm || opt.label, // ✅ 법정동 명칭(표시용)
+              legal_cd: opt.adm_cd                   // ✅ 법정동 코드(저장용)
             }
           };
 
@@ -934,8 +995,9 @@ const MyTownScreen = ({ navigation }) => {
     }
 
     // ✅ 2) 압축 구조({v,labels,keys}) 지원: keys[key] = [[adm_cd,labelId,bjd_cd], ...]
-    if (
+     if (
       !entries.length &&
+      typeof DONG_INDEX !== "undefined" &&
       DONG_INDEX &&
       typeof DONG_INDEX === "object" &&
       Array.isArray(DONG_INDEX.labels) &&
@@ -1020,7 +1082,9 @@ const MyTownScreen = ({ navigation }) => {
       // CASE A: adm_cd 존재 -> GeoJSON 폴리곤 + 중심점 좌표로 옵션 생성
       // =========================================================
       if (admCd) {
-        const feature = featureByAdmCd.get(admCd);
+        // ✅ [핵심] admCd는 "법정동 코드"일 수 있으므로, 실제 폴리곤은 부모 행정동으로 연결
+        const parentAdmCd = LEGAL_TO_ADM_MAP[admCd] || admCd;
+        const feature = featureByAdmCd.get(parentAdmCd);
         if (!feature) continue;
 
         if (seenAdmCd.has(admCd)) continue;
@@ -1031,10 +1095,11 @@ const MyTownScreen = ({ navigation }) => {
 
         out.push({
           id: `${admCd}_${i}`,
-          label: it.adm_nm, // ✅ [수정] it.label 대신 it.adm_nm 사용
+          label: it.adm_nm,
+          adm_nm: it.adm_nm,
           coords: center,
           feature,
-          adm_cd: admCd,
+          adm_cd: admCd,   // ✅ 법정동 코드(저장용)
           bjd_cd: bjdCd,
         });
         continue;
@@ -1112,39 +1177,8 @@ const MyTownScreen = ({ navigation }) => {
           const only = optionList[0] || null;
           setSelectedSearchOption(only);
 
-          if (only?.adm_cd && only?.feature) {
-            const center = only?.coords || _calcFeatureCenter(only.feature);
-
-            if (center) {
-              setSearchCoords(center);
-              _focusMap(center);
-            }
-
-            setSelectedDong(only.feature);
-
-            if (myCoords) {
-              _checkVerification(
-                { latitude: myCoords.latitude, longitude: myCoords.longitude },
-                only.feature
-              );
-            } else {
-              setIsVerified(false);
-            }
-          } else {
-            // ✅ adm_cd가 없으면 지오코딩으로 센터링만
-            const coords = await _geocodeToCoords(only?.label);
-            if (coords) {
-              setSearchCoords(coords);
-              _focusMap(coords);
-
-              setSelectedDong(null);
-              setIsVerified(false);
-            } else {
-              setSelectedDong(null);
-              setIsVerified(false);
-              _showModal("검색 실패", "위치를 검색할 수 없습니다.");
-            }
-          }
+          // ✅ [핵심] 선택 처리 로직을 한 곳(_handleSelectSearchOption)으로 통일
+          await _handleSelectSearchOption(only);
         } else {
           setSelectedSearchOption(null);
 
@@ -1192,15 +1226,34 @@ const MyTownScreen = ({ navigation }) => {
     setSavingModalVisible(true);
 
     try {
-      const fullName = selectedDong?.properties?.adm_nm || "";
+      const fullName = selectedDong?.properties?.display_name || selectedDong?.properties?.adm_nm || "";
       const dongName = fullName ? fullName.split(" ").pop() : "";
-      const dongCode = selectedDong?.properties?.adm_cd ? String(selectedDong.properties.adm_cd) : "";
+      const dongCode = selectedDong?.properties?.legal_cd
+        ? String(selectedDong.properties.legal_cd)
+        : (selectedDong?.properties?.adm_cd ? String(selectedDong.properties.adm_cd) : "");
 
       // ✅ 1) 확정할 때 "미인증으로 리셋" 금지 (AppContext에서 리셋 제거됨)
       await saveHomeDong({ dongName, dongCode, featureId: null });
 
       // ✅ 2) 확정 직후 인증은 "최신 GPS"로 강제 갱신해서 같은 기준으로 즉시 저장/반영
-      await verifyHomeDongByGps({ polygon: selectedDong?.geometry, forceFresh: true });
+      const ok = await verifyHomeDongByGps({ polygon: selectedDong?.geometry, forceFresh: true });
+
+      // ✅ [추가] 인증 시도 중 가짜 GPS가 감지되면 즉시 중단
+      if (!ok) {
+        // refreshMyCoords 내부에서 이미 가짜 GPS 팝업을 띄웠으므로 여기서는 false만 반환
+        setSavingModalVisible(false);
+        setIsSavingHomeTown(false);
+        return;
+      }
+
+      // ✅ [추가] 요구사항: AsyncStorage 4개 키 각각 저장
+      const verifiedAt = new Date().toISOString();
+      await AsyncStorage.multiSet([
+        [HOME_DONG_NAME, String(dongName || "")],
+        [HOME_DONG_CODE, String(dongCode || "")],
+        [HOME_DONG_VERIFIED, JSON.stringify(true)],
+        [HOME_DONG_VERIFIED_AT, String(verifiedAt)],
+      ]);
 
       // ✅ 저장 완료 → 모달 자동 닫기 + 자동 뒤로가기
       setSavingModalVisible(false);
