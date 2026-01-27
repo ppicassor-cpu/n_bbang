@@ -21,7 +21,9 @@ import { checkAndGenerateSamples } from "../../../utils/autoSampleGenerator";
 import { hasBadWord } from "../../../utils/badWordFilter";
 
 // ✅ [추가] 닉네임 로직을 위한 Firebase 임포트
-import { doc, getDoc, updateDoc, collection, query, where, getDocs, onSnapshot } from "firebase/firestore";
+import { doc, getDoc, updateDoc, collection, query, where, getDocs, onSnapshot, limit, orderBy } from "firebase/firestore";
+// ✅ [추가] AsyncStorage 추가
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { db } from "../../../firebaseConfig";
 
 const CATEGORIES = ["전체", "마트/식품", "생활용품", "핫플레이스", "무료나눔"];
@@ -203,26 +205,75 @@ export default function HomeScreen({ navigation }) {
   const [nicknameModalVisible, setNicknameModalVisible] = useState(false);
   const [newNickname, setNewNickname] = useState("");
   const [hasNickname, setHasNickname] = useState(false);
-  const [unreadNotiCount, setUnreadNotiCount] = useState(0);
+  
+  // ✅ [수정] 알림 상태 분리 (개인 알림 개수 + 안 읽은 공지 여부)
+  const [unreadPersonalCount, setUnreadPersonalCount] = useState(0);
+  const [hasUnreadNotice, setHasUnreadNotice] = useState(false);
 
   // ✅ [추가] 내 알림 실시간 구독
+  // ✅ [수정] 통합 알림 구독 (개인 알림 + 전체 공지)
   useEffect(() => {
-    if (!user?.uid) {
-      setUnreadNotiCount(0);
-      return;
-    }
-    // 내 알림 중 '안 읽은 것(isRead == false)'만 가져오기
-    const q = query(
+    if (!user?.uid) return;
+
+    // 1. 개인 알림 개수 실시간 구독
+    const qPersonal = query(
       collection(db, "users", user.uid, "notifications"),
       where("isRead", "==", false)
     );
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      setUnreadNotiCount(snapshot.size); // 개수 저장
+    const unsubPersonal = onSnapshot(qPersonal, (snap) => {
+      setUnreadPersonalCount(snap.size);
     });
 
-    return () => unsubscribe();
+    // 2. 전체 공지(최신 1개) 실시간 구독
+    const qSystem = query(
+      collection(db, "system_notices"),
+      where("isShow", "==", true),
+      orderBy("createdAt", "desc"),
+      limit(1)
+    );
+    
+    const unsubSystem = onSnapshot(qSystem, async (snap) => {
+      if (!snap.empty) {
+        const latestId = snap.docs[0].id;
+        // 로컬 저장소(AsyncStorage) 확인하여 읽은 글인지 체크
+        const readJson = await AsyncStorage.getItem("READ_SYSTEM_NOTICES");
+        const readIds = readJson ? JSON.parse(readJson) : [];
+        setHasUnreadNotice(!readIds.includes(latestId));
+      } else {
+        setHasUnreadNotice(false);
+      }
+    });
+
+    return () => {
+      unsubPersonal();
+      unsubSystem();
+    };
   }, [user?.uid]);
+  useFocusEffect(
+    useCallback(() => {
+      const checkNoticeReadStatus = async () => {
+        try {
+          const qSystem = query(
+            collection(db, "system_notices"),
+            where("isShow", "==", true),
+            orderBy("createdAt", "desc"),
+            limit(1)
+          );
+          const snap = await getDocs(qSystem);
+          if (!snap.empty) {
+            const latestId = snap.docs[0].id;
+            const readJson = await AsyncStorage.getItem("READ_SYSTEM_NOTICES");
+            const readIds = readJson ? JSON.parse(readJson) : [];
+            // 저장된 ID 목록에 없으면(안 읽었으면) true, 있으면 false
+            setHasUnreadNotice(!readIds.includes(latestId));
+          }
+        } catch (e) {
+          console.log("공지 체크 실패:", e);
+        }
+      };
+      checkNoticeReadStatus();
+    }, [])
+  );
 
   // ✅ [추가] 커스텀 알림 모달 상태 (Alert 대체용)
    const [alertModalVisible, setAlertModalVisible] = useState(false);
@@ -878,8 +929,8 @@ const handleSaveNickname = async () => {
           >
             <View>
               <Ionicons name="person-circle-outline" size={28} color="white" />
-              {/* ✅ [추가] 안 읽은 알림이 있으면 빨간 점 표시 */}
-              {unreadNotiCount > 0 && <View style={styles.profileRedDot} />}
+              {/* ✅ [수정] 개인 알림이 있거나 OR 안 읽은 공지가 있으면 빨간 점 표시 */}
+              {(unreadPersonalCount > 0 || hasUnreadNotice) && <View style={styles.profileRedDot} />}
             </View>
           </TouchableOpacity>
         </View>

@@ -26,7 +26,7 @@ import { Text } from "../../../components/MyText";
 // ✅ [수정] 탈퇴 처리를 위해 writeBatch, getDocs 추가됨
 import { 
   collection, query, where, onSnapshot, doc, getDoc, updateDoc, 
-  arrayRemove, deleteDoc, getDocs, writeBatch 
+  arrayRemove, deleteDoc, getDocs, writeBatch, limit, orderBy // ✅ limit, orderBy 추가
 } from "firebase/firestore";
 import { deleteUser } from "firebase/auth"; 
 import Purchases from "react-native-purchases";
@@ -150,10 +150,9 @@ export default function ProfileScreen() {
       setLoading(false);
     }
   };
-
-
-  const [unreadNotiCount, setUnreadNotiCount] = useState(0);
-
+  const [unreadPersonalCount, setUnreadPersonalCount] = useState(0);
+  const [hasUnreadNotice, setHasUnreadNotice] = useState(false);
+  
   // ✅ [추가] DB에서 내 정보 직접 불러오기 (닉네임 표시 확실하게)
   const [userProfile, setUserProfile] = useState(null);
 
@@ -333,7 +332,7 @@ export default function ProfileScreen() {
     };
   }, [nicknameModalTranslateY]);
 
-  // 1. 내 DB 정보 실시간 구독 (닉네임 '사용자'로 뜨는 문제 해결)
+    // 1. 내 DB 정보 실시간 구독 (닉네임 '사용자'로 뜨는 문제 해결)
   useEffect(() => {
     if (!user?.uid) {
       setUserProfile(null);
@@ -354,29 +353,88 @@ export default function ProfileScreen() {
   }, [user?.uid]);
 
   // 2. 알림 개수 구독
-  useEffect(() => {
+ useEffect(() => {
     if (!user?.uid) {
-      setUnreadNotiCount(0);
+      setUnreadPersonalCount(0);
+      setHasUnreadNotice(false);
       return;
     }
 
-    const q = query(
+    // (1) 개인 알림 개수 구독
+    const qPersonal = query(
       collection(db, "users", user.uid, "notifications"),
       where("isRead", "==", false)
     );
+    const unsubPersonal = onSnapshot(qPersonal, (snap) => {
+      setUnreadPersonalCount(snap.size || 0);
+    });
 
-    const unsub = onSnapshot(
-      q,
-      (snap) => {
-        setUnreadNotiCount(snap.size || 0);
-      },
-      () => {
-        setUnreadNotiCount(0);
-      }
+    // (2) 최신 공지 1개 구독
+    const qSystem = query(
+      collection(db, "system_notices"),
+      where("isShow", "==", true),
+      orderBy("createdAt", "desc"),
+      limit(1)
     );
+    const unsubSystem = onSnapshot(qSystem, async (snap) => {
+  try {
+    if (!snap.empty) {
+      const latestId = snap.docs[0].id;
 
-    return () => unsub();
+      const readJson = await AsyncStorage.getItem("READ_SYSTEM_NOTICES");
+
+      let readIds = [];
+      if (readJson) {
+        try {
+          const parsed = JSON.parse(readJson);
+          readIds = Array.isArray(parsed) ? parsed : [];
+        } catch {
+          readIds = [];
+        }
+      }
+
+      setHasUnreadNotice(!readIds.includes(latestId));
+    } else {
+      setHasUnreadNotice(false);
+    }
+  } catch {
+    // ✅ onSnapshot 콜백 내부에서 어떤 예외가 나도 화면 크래쉬 방지
+    setHasUnreadNotice(false);
+  }
+});
+
+    return () => {
+      unsubPersonal();
+      unsubSystem();
+    };
   }, [user?.uid]);
+
+  // ✅ [추가] 화면 포커스 시 공지 읽음 여부 재확인 (알림센터 다녀온 후 갱신용)
+  useFocusEffect(
+    React.useCallback(() => {
+      const checkNoticeReadStatus = async () => {
+        try {
+          const qSystem = query(
+            collection(db, "system_notices"),
+            where("isShow", "==", true),
+            orderBy("createdAt", "desc"),
+            limit(1)
+          );
+          const snap = await getDocs(qSystem);
+          if (!snap.empty) {
+            const latestId = snap.docs[0].id;
+            const readJson = await AsyncStorage.getItem("READ_SYSTEM_NOTICES");
+            const readIds = readJson ? JSON.parse(readJson) : [];
+            setHasUnreadNotice(!readIds.includes(latestId));
+          }
+        } catch (e) {}
+      };
+      checkNoticeReadStatus();
+    }, [])
+  );
+
+  // ✅ [추가] 뱃지에 표시할 총 알림 개수 계산
+  const totalUnreadCount = unreadPersonalCount + (hasUnreadNotice ? 1 : 0);
 
   // ✅ 내가 쓴 글 개수 계산
   const myPosts = Array.isArray(posts) ? posts.filter(p => p.ownerId === user?.uid) : [];
@@ -779,10 +837,11 @@ export default function ProfileScreen() {
                   style={styles.notiBtn}
                 >
                   <Ionicons name="notifications-outline" size={20} color="#CCC" />
-                  {unreadNotiCount > 0 && (
+                  {/* ✅ [수정] 계산된 전체 알림 수(totalUnreadCount)로 변경 */}
+                  {totalUnreadCount > 0 && (
                     <View style={styles.notiBadge}>
                       <Text style={styles.notiBadgeText} numberOfLines={1}>
-                        {unreadNotiCount > 99 ? "99+" : String(unreadNotiCount)}
+                        {totalUnreadCount > 99 ? "99+" : String(totalUnreadCount)}
                       </Text>
                     </View>
                   )}

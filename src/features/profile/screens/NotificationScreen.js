@@ -311,6 +311,17 @@ const onPressNoti = async (item) => {
     // ✅ 클릭 시 그룹 읽음 처리 실행
     await handleRead(item);
 
+    // ✅ [추가] 공지사항(isSystem)이면 내용 모달 띄우기
+    if (item.isSystem) {
+      openModal(
+        item.title || "공지사항", 
+        item.message || item.body || "내용이 없습니다.", 
+        "alert", 
+        () => setModalVisible(false) // 확인 버튼 누르면 닫기
+      );
+      return;
+    }
+
     // 채팅(또는 게시글 연동 채팅) 알림일 경우
     if (item?.type === "chat" && item?.roomId) {
       try {
