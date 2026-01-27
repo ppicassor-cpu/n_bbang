@@ -15,6 +15,7 @@ import {
   Keyboard,
   Modal,
   Animated,
+  Switch,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -37,7 +38,7 @@ import { useAppContext } from '../../../app/providers/AppContext';
 import CustomModal from '../../../components/CustomModal';
 import CustomImagePickerModal from '../../../components/CustomImagePickerModal';
 import { hasBadWord } from "../../../utils/badWordFilter";
-
+import * as Haptics from 'expo-haptics';
 // ✅ [추가] 이미지 압축/캐시
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as ImageManipulator from "expo-image-manipulator";
@@ -79,8 +80,77 @@ export default function ProfileScreen() {
     dailyPostCount = 0,
     posts = [],
     isAdmin, // ✅ 관리자 여부
-    blockedUsers = [] // ✅ 차단된 사용자 목록 (ID 배열)
+    blockedUsers = [], // ✅ 차단된 사용자 목록 (ID 배열)
+    // ✅ [추가] 결제 및 복원 관련 함수 가져오기
+    purchaseBoostConsumable,
+    purchaseHotplaceConsumable,
+    addBoostTicket,
+    incrementHotplaceCount,
+    restorePurchases
   } = useAppContext();
+  
+  // ✅ [추가] 로딩 상태 (결제 중복 방지)
+  const [loading, setLoading] = useState(false);
+
+  // ✅ [추가] 단건 아이템(부스트/핫스토어) 빠른 결제 핸들러
+  const handleQuickPurchase = async (type) => {
+    if (loading) return;
+    setLoading(true);
+    try {
+      if (type === "boost") {
+        const res = await purchaseBoostConsumable();
+        if (res?.status === "PURCHASED") {
+          await addBoostTicket(res?.purchaseInfo);
+          // ✅ 수정됨
+          openModal("구매 완료", "부스트업 티켓이 충전되었습니다.", "alert", () => setModalVisible(false));
+        }
+      } else if (type === "hotstore") {
+        const res = await purchaseHotplaceConsumable();
+        if (res?.status === "PURCHASED") {
+          await incrementHotplaceCount({ usageType: "paid_extra", purchaseInfo: res?.purchaseInfo });
+          // ✅ 수정됨
+          openModal("구매 완료", "핫스토어 등록권이 충전되었습니다.", "alert", () => setModalVisible(false));
+        }
+      }
+    } catch (e) {
+      if (!e?.userCancelled) {
+        // ✅ 수정됨
+        openModal("결제 실패", e.message || "결제를 완료하지 못했습니다.", "alert", () => setModalVisible(false));
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ✅ [추가] 구매 복원 핸들러
+    const handleRestore = async () => {
+    if (loading) return;
+    setLoading(true);
+    try {
+      console.log("구매 복원 시작...");
+      // 1. AppContext에 함수가 없으면 직접 Purchases 라이브러리 호출
+      let customerInfo;
+      if (restorePurchases) {
+        customerInfo = await restorePurchases();
+      } else {
+        customerInfo = await Purchases.restorePurchases();
+      }
+      console.log("구매 복원 결과:", customerInfo);
+      
+      openModal(
+        "복원 완료",
+        "구매 내역이 복원되었습니다.\n(프리미엄 상태가 갱신됩니다.)",
+        "alert",
+        () => setModalVisible(false)
+      );
+    } catch (e) {
+      console.error("복원 에러:", e);
+      openModal("오류", "구매 복원 중 문제가 발생했습니다.\n" + (e.message || ""), "alert", () => setModalVisible(false));
+    } finally {
+      setLoading(false);
+    }
+  };
+
 
   const [unreadNotiCount, setUnreadNotiCount] = useState(0);
 
@@ -565,91 +635,72 @@ export default function ProfileScreen() {
     navigation.navigate(ROUTES.MY_LISTINGS);
   };
 
-  const requestNotiPermission = async () => {
-    try {
-      const res = await requestNotifications(['alert', 'sound', 'badge']);
-      const nextStatus = res?.status || null;
+  const [isNotiEnabled, setIsNotiEnabled] = useState(false);
+  // ✅ [추가] 묵직한 손맛을 위한 연타 방지 락
+  const [switchLock, setSwitchLock] = useState(false);
 
-      if (nextStatus === "granted") {
+  useFocusEffect(
+    React.useCallback(() => {
+      checkNotifications()
+        .then(({ status }) => setIsNotiEnabled(status === 'granted'))
+        .catch(() => setIsNotiEnabled(false));
+    }, [])
+  );
+
+  const toggleNotificationSwitch = async () => {
+    // 1. 연타 방지 (촐랑거림 원천 차단)
+    if (switchLock) return;
+
+    // 2. 락 걸기 (0.5초 동안 조작 금지 -> 묵직함)
+    setSwitchLock(true);
+    setTimeout(() => setSwitchLock(false), 500);
+
+    // 3. 햅틱 진동 (손맛 추가) - 에러 방지 처리 포함
+    try {
+      if (Platform.OS !== 'web') {
+        await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+      }
+    } catch (e) {
+      // 햅틱이 없는 기기여도 앱이 죽지 않게 조용히 넘어감
+    }
+
+    // 4. [핵심] 선조치: 일단 스위치 모양부터 즉시 바꿈 (기다리지 않음!)
+    const nextState = !isNotiEnabled;
+    setIsNotiEnabled(nextState);
+
+    // 5. 후보고: 켜는 상황이라면, 진짜 권한이 있는지 뒤에서 체크
+    if (nextState === true) {
+      try {
+        const { status } = await checkNotifications();
+
+        // 이미 권한 있으면 OK (아무것도 안 해도 됨)
+        if (status === 'granted') return;
+
+        // 권한 없으면 요청
+        if (status === 'denied') {
+          const res = await requestNotifications(['alert', 'sound', 'badge']);
+          if (res.status === 'granted') return; // 승인하면 그대로 유지
+        }
+
+        // 여기까지 왔다면 권한 획득 실패 -> 강제 원상복구 (Rollback)
+        throw new Error("Permission denied");
+
+      } catch (e) {
+        // 권한이 없으므로 스위치를 다시 끔 (Rollback)
+        setIsNotiEnabled(false);
+        
         openModal(
-          "알림 설정",
-          "알림이 허용되었습니다.\n이제 새로운 채팅 알림이나 소식을 받을 수 있습니다.",
-          "alert",
-          () => setModalVisible(false)
+          "알림 설정 필요",
+          "알림을 받으려면 휴대폰 설정에서\n알림을 켜주셔야 합니다.",
+          "confirm",
+          () => {
+            setModalVisible(false);
+            Linking.openSettings();
+          }
         );
-        return;
       }
-
-      openModal(
-        "알림 설정",
-        "알림 허용이 필요합니다.\n기기 설정 화면으로 이동하시겠습니까?",
-        "confirm",
-        () => {
-          setModalVisible(false);
-          Linking.openSettings();
-        }
-      );
-    } catch {
-      openModal(
-        "알림 설정",
-        "알림 권한 요청 중 문제가 발생했습니다.\n기기 설정 화면으로 이동하시겠습니까?",
-        "confirm",
-        () => {
-          setModalVisible(false);
-          Linking.openSettings();
-        }
-      );
     }
   };
-
-  const handleNotificationSettings = async () => {
-    let status = null;
-
-    try {
-      const res = await checkNotifications();
-      status = res?.status || null;
-    } catch {
-      status = null;
-    }
-
-    if (status === "granted") {
-      openModal(
-        "알림 설정",
-        "현재 알림이 허용되어 있습니다.\n새로운 채팅 알림이나 소식을 받으시겠습니까?",
-        "confirm",
-        () => {
-          setModalVisible(false);
-        }
-      );
-      return;
-    }
-
-    if (status === "denied") {
-      openModal(
-        "알림 설정",
-        Platform.OS === "android"
-          ? "현재 알림이 허용되지 않았습니다.\n지금 알림을 허용하시겠습니까?"
-          : "현재 알림이 허용되지 않았습니다.\n지금 알림을 허용하시겠습니까?",
-        "confirm",
-        async () => {
-          setModalVisible(false);
-          await requestNotiPermission();
-        }
-      );
-      return;
-    }
-
-    openModal(
-      "알림 설정",
-      "알림이 꺼져 있거나(또는 차단됨)\n설정에서 변경이 필요합니다.\n기기 설정 화면으로 이동하시겠습니까?",
-      "confirm",
-      () => {
-        setModalVisible(false);
-        Linking.openSettings();
-      }
-    );
-  };
-
   const appVersion = Constants.expoConfig?.version || '1.0.0';
 
   // ✅ [추가] Profile 화면 표시용(컨텍스트 갱신 지연 대비)
@@ -762,19 +813,50 @@ export default function ProfileScreen() {
           </View>
         </View>
 
-        {/* 2. 프리미엄 배너 */}
-        {!isPremium && (
+        {/* 2. 프리미엄 배너 OR 아이템 충전 버튼 */}
+        {!isPremium ? (
           <TouchableOpacity
             style={styles.premiumOutlineBanner}
             onPress={() => navigation.navigate(ROUTES.PREMIUM)}
             activeOpacity={0.7}
           >
             <View>
-              <Text style={styles.outlineBannerTitle}>무제한으로 N빵하기</Text>
-              <Text style={styles.outlineBannerSub}>프리미엄 신청하기</Text>
+              <Text style={styles.outlineBannerTitle}>프리미엄 신청하기</Text>
+              <Text style={styles.outlineBannerSub}>무제한으로 N빵하기|부스트업,핫스토어 충전하기</Text>
             </View>
             <MaterialIcons name="arrow-forward" size={20} color={theme.primary} />
           </TouchableOpacity>
+        ) : (
+          // ✅ [추가] 프리미엄일 때는 부스트/핫스토어 충전 버튼 표시
+          <View style={styles.quickChargeContainer}>
+            <TouchableOpacity 
+              style={styles.quickChargeBtn} 
+              onPress={() => handleQuickPurchase("boost")}
+              disabled={loading}
+            >
+              <View style={styles.quickIconCircle}>
+                 <Ionicons name="flash" size={18} color="#FFD700" />
+              </View>
+              <View>
+                <Text style={styles.quickChargeTitle}>부스트업 1회</Text>
+                <Text style={styles.quickChargeSub}>즉시 충전</Text>
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              style={styles.quickChargeBtn} 
+              onPress={() => handleQuickPurchase("hotstore")}
+              disabled={loading}
+            >
+              <View style={[styles.quickIconCircle, { backgroundColor: "rgba(255, 87, 87, 0.15)" }]}>
+                 <Ionicons name="storefront" size={16} color="#FF5757" />
+              </View>
+              <View>
+                <Text style={styles.quickChargeTitle}>핫스토어 1회</Text>
+                <Text style={styles.quickChargeSub}>즉시 충전</Text>
+              </View>
+            </TouchableOpacity>
+          </View>
         )}
 
         {/* 3. 메뉴 리스트 */}
@@ -815,12 +897,19 @@ export default function ProfileScreen() {
           )}
 
           <Text style={[styles.sectionTitle, { marginTop: 24 }]}>설정</Text>
-          <MenuLink
-            IconComponent={Ionicons}
-            icon="settings-outline"
-            label="알림 설정"
-            onPress={handleNotificationSettings}
-          />
+          
+          <View style={styles.menuItem}>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <Ionicons name="settings-outline" size={20} color="#CCC" style={{ marginRight: 12 }} />
+              <Text style={{ color: "#CCC", fontSize: 15 }}>알림 설정</Text>
+            </View>
+            <Switch
+              value={isNotiEnabled}
+              onValueChange={toggleNotificationSwitch}
+              trackColor={{ false: "#444", true: theme.primary }}
+              thumbColor={isNotiEnabled ? "#FFF" : "#f4f3f4"}
+            />
+          </View>
           <MenuLink
             IconComponent={Ionicons}
             icon="person-remove-outline"
@@ -845,6 +934,16 @@ export default function ProfileScreen() {
             color="white"
             onPress={handleLogoutPress}
           />
+
+          {/* ✅ [추가] 로그아웃 밑에 구매 복원 버튼 */}
+          <MenuLink
+            IconComponent={Ionicons}
+            icon="refresh-circle-outline"
+            label="구매 내역 복원"
+            color="#AAA"
+            onPress={handleRestore}
+          />
+
         {/* 👇 [여기] 아래 코드를 추가하세요 (회원 탈퇴 버튼) */}
           {/* ================================================= */}
           <View style={{ marginTop: 20, marginBottom: 10 }}>
@@ -1056,11 +1155,26 @@ export default function ProfileScreen() {
         onConfirm={handleDeleteAccount} // 확인 버튼 (기본 테마색, 빨간색 아님)
         onCancel={() => setDeleteAccountModalVisible(false)} // 취소 버튼
         confirmText="탈퇴하기" // 버튼 텍스트 변경
-      />
-      {/* ================================================= */}
+      />
+      {/* ================================================= */}
 
-    </SafeAreaView>
-  );
+      {/* ✅ [추가] 로딩 인디케이터 모달 (결제/복원 시 반응용) */}
+      <Modal
+        transparent={true}
+        animationType="none"
+        visible={loading}
+        onRequestClose={() => {}}
+      >
+        <View style={styles.loadingOverlay}>
+          <View style={styles.loadingBox}>
+            <ActivityIndicator size="large" color={theme.primary} />
+            <Text style={styles.loadingText}>처리 중입니다...</Text>
+          </View>
+        </View>
+      </Modal>
+
+    </SafeAreaView>
+  );
 }
 
 // 메뉴 아이템 컴포넌트
@@ -1393,5 +1507,63 @@ const styles = StyleSheet.create({
     color: theme.danger,
     fontSize: 12,
     fontWeight: 'bold',
-  }
+  },
+
+  // ✅ [추가] 퀵 충전 버튼 스타일 (프리미엄 전용)
+  quickChargeContainer: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 24,
+  },
+  quickChargeBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#222',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#333',
+  },
+  quickIconCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "rgba(255, 215, 0, 0.15)",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 10,
+  },
+  quickChargeTitle: {
+    color: 'white',
+    fontSize: 13,
+    fontWeight: 'bold',
+  },
+  quickChargeSub: {
+    color: theme.primary,
+    fontSize: 11,
+    marginTop: 2,
+  },
+
+  // ✅ [추가] 로딩 모달 스타일
+  loadingOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  loadingBox: {
+    width: 150,
+    height: 120,
+    backgroundColor: "#333",
+    borderRadius: 12,
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 15,
+  },
+  loadingText: {
+    color: "white",
+    fontSize: 14,
+    fontWeight: "bold",
+  },
 });

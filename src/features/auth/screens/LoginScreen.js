@@ -134,13 +134,17 @@ const handleNaverLogin = async () => {
   }, []);
 
   const handleGoogleLogin = async () => {
-    setLoading(true);
-    try {
-      await GoogleSignin.hasPlayServices();
-      const userInfo = await GoogleSignin.signIn();
-      const idToken = userInfo.data?.idToken; // 최신 라이브러리 문법
+    setLoading(true);
+    try {
+      await GoogleSignin.hasPlayServices();
 
-      if (idToken) {
+      // ✅ [추가] 항상 계정 선택창을 띄우기 위해 기존 세션 연결 해제
+      await GoogleSignin.signOut();
+
+      const userInfo = await GoogleSignin.signIn();
+      const idToken = userInfo.data?.idToken; // 최신 라이브러리 문법
+
+      if (idToken) {
         await loginWithGoogle(idToken);
         // ✅ RootNavigator(user 상태 기반 분기)가 화면 전환을 담당하므로 reset 호출 제거
       } else {
@@ -378,9 +382,11 @@ const handleNaverLogin = async () => {
                 disabled={loading} // 로딩 중에만 비활성화
               >
                 {/* ✅ [수정] 4색 구글 공식 로고 이미지로 교체 */}
+                {/* ✅ [수정] 더 안정적인 이미지 URL로 변경 및 resizeMode 추가 */}
                 <Image 
-                  source={{ uri: "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c1/Google_\"G\"_Logo.svg/1024px-Google_\"G\"_Logo.svg.png" }} 
+                  source={{ uri: "https://cdn-icons-png.flaticon.com/512/2991/2991148.png" }} 
                   style={styles.googleIconImage} 
+                  resizeMode="contain"
                 />
                 <Text style={styles.googleText}>구글로 시작하기</Text>
               </TouchableOpacity>
@@ -458,6 +464,7 @@ const styles = StyleSheet.create({
   kakaoText: { color: "#3C1E1E", fontWeight: "bold", fontSize: 15 },
   googleBtn: { backgroundColor: "#FFF" },
   googleText: { color: "#555", fontWeight: "bold", fontSize: 15 },
+  googleIconImage: { width: 18, height: 18 },
 
   copyrightText: {
     position: 'absolute',

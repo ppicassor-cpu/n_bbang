@@ -21,7 +21,7 @@ import { checkAndGenerateSamples } from "../../../utils/autoSampleGenerator";
 import { hasBadWord } from "../../../utils/badWordFilter";
 
 // ✅ [추가] 닉네임 로직을 위한 Firebase 임포트
-import { doc, getDoc, updateDoc, collection, query, where, getDocs } from "firebase/firestore";
+import { doc, getDoc, updateDoc, collection, query, where, getDocs, onSnapshot } from "firebase/firestore";
 import { db } from "../../../firebaseConfig";
 
 const CATEGORIES = ["전체", "마트/식품", "생활용품", "핫플레이스", "무료나눔"];
@@ -203,6 +203,26 @@ export default function HomeScreen({ navigation }) {
   const [nicknameModalVisible, setNicknameModalVisible] = useState(false);
   const [newNickname, setNewNickname] = useState("");
   const [hasNickname, setHasNickname] = useState(false);
+  const [unreadNotiCount, setUnreadNotiCount] = useState(0);
+
+  // ✅ [추가] 내 알림 실시간 구독
+  useEffect(() => {
+    if (!user?.uid) {
+      setUnreadNotiCount(0);
+      return;
+    }
+    // 내 알림 중 '안 읽은 것(isRead == false)'만 가져오기
+    const q = query(
+      collection(db, "users", user.uid, "notifications"),
+      where("isRead", "==", false)
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      setUnreadNotiCount(snapshot.size); // 개수 저장
+    });
+
+    return () => unsubscribe();
+  }, [user?.uid]);
 
   // ✅ [추가] 커스텀 알림 모달 상태 (Alert 대체용)
    const [alertModalVisible, setAlertModalVisible] = useState(false);
@@ -856,7 +876,11 @@ const handleSaveNickname = async () => {
             activeOpacity={0.7}
             style={{ padding: 4 }}
           >
-            <Ionicons name="person-circle-outline" size={28} color="white" />
+            <View>
+              <Ionicons name="person-circle-outline" size={28} color="white" />
+              {/* ✅ [추가] 안 읽은 알림이 있으면 빨간 점 표시 */}
+              {unreadNotiCount > 0 && <View style={styles.profileRedDot} />}
+            </View>
           </TouchableOpacity>
         </View>
       </View>
@@ -1222,6 +1246,14 @@ const styles = StyleSheet.create({
     color: "black",
     fontSize: 10,
     fontWeight: "900",
-  }
+  },
+  profileRedDot: {
+    position: "absolute",
+    top: 2,
+    right: 2,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: theme.danger,
+  },
 });
-

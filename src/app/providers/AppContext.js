@@ -284,6 +284,8 @@ const isBooting = !initialReady;
   const [isVerified, setIsVerified] = useState(false);
 
   const [isPremium, setIsPremium] = useState(false);
+  const [isSharedPremium, setIsSharedPremium] = useState(false); 
+
   const [premiumUntil, setPremiumUntil] = useState(null);
   const [dailyPostCount, setDailyPostCount] = useState(0);
   const [dailyPostCountDate, setDailyPostCountDate] = useState(null);
@@ -405,6 +407,8 @@ const isBooting = !initialReady;
       if (isAdminRef.current) {
         setPremiumUntil("2099-12-31T23:59:59.999Z");
         setIsPremium(true);
+        // ✅ [추가] 관리자는 공유 계정이 아님
+        setIsSharedPremium(false);
         setMembershipType("yearly");
         return;
       }
@@ -412,6 +416,15 @@ const isBooting = !initialReady;
       const entitlement = getActiveEntitlement(customerInfo);
       const nextPremiumUntil = entitlement?.expirationDate || null;
       const nextIsPremium = !!entitlement || !!isAdminRef.current;
+
+      // ✅ [추가] 원주인 검증 로직 (철벽 방어)
+      // originalAppUserId가 현재 로그인한 uid와 다르면 '복원된 계정(Shared)'으로 간주
+      const originalUserId = customerInfo?.originalAppUserId;
+      // originalUserId가 없으면(null) 보통 자기 자신이 주인이므로 true 처리
+      const isOwner = !originalUserId || originalUserId === uid;
+      
+      // 프리미엄인데 주인이 아니면 -> SharedPremium (혜택 제한용 플래그)
+      const nextIsShared = nextIsPremium && !isOwner;
 
       let nextMembershipType = "free";
       if (nextIsPremium) {
@@ -425,12 +438,17 @@ const isBooting = !initialReady;
 
       setPremiumUntil(nextPremiumUntil);
       setIsPremium(nextIsPremium);
+      // ✅ [추가] 상태 업데이트
+      setIsSharedPremium(nextIsShared);
       setMembershipType(nextMembershipType);
 
       if (uid) {
         await updateDoc(doc(db, "users", uid), {
           premiumUntil: nextPremiumUntil,
           isPremium: nextIsPremium,
+          // ✅ [추가] DB에도 기록 (CS 대응용)
+          isSharedPremium: nextIsShared,
+          originalPurchaserId: nextIsShared ? originalUserId : null,
           membershipType: nextMembershipType,
           premiumUpdatedAt: new Date().toISOString(),
         });
@@ -1862,6 +1880,21 @@ useEffect(() => {
     const monthKey = getCurrentMonthKeyKST();
     const type = membershipType || "free";
 
+    // ✅ [추가] 공유된(복원된) 프리미엄 계정은 핫스토어 혜택 차단
+    if (isSharedPremium) {
+      return {
+        status: "SHARED_PREMIUM",
+        decision: "DENY",
+        message: "구매 복원된 계정은 멤버십 혜택(글쓰기)이 제한됩니다.\n최초 결제한 계정으로 로그인해주세요.",
+        recommendedUsageType: null,
+        membershipType: type,
+        monthKey,
+        limit: 0,
+        used: 0,
+        remaining: 0,
+      };
+    }
+
     if (!isPremium) {
       return {
         status: "NOT_PREMIUM",
@@ -2108,6 +2141,9 @@ const checkBoostEligibility = async ({ contentType = "post", contentId, mode = "
 
   // ✅ 멤버십 부스트: 월 N회
   if (mode === "membership") {
+    // ✅ [추가] 공유된 프리미엄은 멤버십 무료 부스트 사용 불가
+    if (isSharedPremium) return { status: "SHARED_PREMIUM", ok: false };
+    
     if (!isPremium) return { status: "NOT_PREMIUM", ok: false };
 
     const monthKey = getCurrentMonthKeyKST();
@@ -2473,6 +2509,7 @@ const applyBoostToContent = async ({ contentType = "post", contentId, mode = "fr
         isBooting,
 
         isPremium,
+        isSharedPremium,
         premiumUntil,
         dailyPostCount,
         dailyPostCountDate,

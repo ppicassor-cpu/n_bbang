@@ -6,7 +6,9 @@ import { Text } from "../../../components/MyText";
 import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { collection, query, orderBy, onSnapshot, doc, updateDoc, deleteDoc, writeBatch, where, getDocs, getDoc } from "firebase/firestore";
+import { collection, limit, query, orderBy, onSnapshot, doc, updateDoc, deleteDoc, writeBatch, where, getDocs, getDoc } from "firebase/firestore";
+// ✅ [추가] AsyncStorage 추가
+import AsyncStorage from "@react-native-async-storage/async-storage"; 
 
 import { db } from "../../../firebaseConfig";
 import { theme } from "../../../theme";
@@ -60,18 +62,15 @@ export default function NotificationScreen() {
     }
 
     const colRef = collection(db, "users", user.uid, "notifications");
-    // 최신순 정렬
     const q = query(colRef, orderBy("createdAt", "desc"));
 
     let unsubscribe = () => {};
 
-    // ✅ 화면 표시용 중복 제거 (보여줄 때만 최신 1개 남김)
     const processUniqueNotifications = (rawList) => {
       const uniqueList = [];
       const visitedRoomIds = new Set();
 
       rawList.forEach((item) => {
-        // 채팅 알림이고 roomId가 있는 경우
         if (item.type === "chat" && item.roomId) {
           if (!visitedRoomIds.has(item.roomId)) {
             visitedRoomIds.add(item.roomId);
@@ -87,41 +86,59 @@ export default function NotificationScreen() {
     const attachWithOrder = () =>
       onSnapshot(
         q,
-        (snapshot) => {
-          const loaded = snapshot.docs.map((d) => ({
+        async (snapshot) => {
+          // 1. 내 개인 알림 가져오기
+          const personalData = snapshot.docs.map((d) => ({
             id: d.id,
             ...d.data(),
+            isSystem: false 
           }));
+
+          // 2. 전체 공지 가져오기 (isShow == true인 것 중 가장 최신 1개만)
+          const systemQ = query(
+            collection(db, "system_notices"), 
+            where("isShow", "==", true),
+            orderBy("createdAt", "desc"), // 날짜 최신순으로 줄 세우고
+            limit(1) // 맨 위 1개만 가져옴
+          );
+          const systemSnap = await getDocs(systemQ);
           
-          const filtered = processUniqueNotifications(loaded);
+          // 3. 공지 읽음 상태 확인 (AsyncStorage)
+          const readJson = await AsyncStorage.getItem("READ_SYSTEM_NOTICES");
+          const readIds = readJson ? JSON.parse(readJson) : [];
+
+          const systemData = systemSnap.docs.map((d) => ({
+            id: d.id,
+            ...d.data(),
+            isSystem: true,
+            isRead: readIds.includes(d.id),
+            type: d.data().type || 'notice'
+          }));
+
+          // 4. 합치기 및 정렬 (공지사항 상단 고정)
+          const combined = [...personalData, ...systemData].sort((a, b) => {
+            // [1순위] 공지사항(System)이 무조건 위로 오게 처리
+            if (a.isSystem && !b.isSystem) return -1; // a가 공지면 앞으로
+            if (!a.isSystem && b.isSystem) return 1;  // b가 공지면 앞으로
+
+            // [2순위] 같은 타입끼리는 최신 날짜순
+            const getMillis = (t) => {
+              if (!t) return 0;
+              if (typeof t.toDate === 'function') return t.toDate().getTime();
+              if (t instanceof Date) return t.getTime();
+              return new Date(t).getTime();
+            };
+            return getMillis(b.createdAt) - getMillis(a.createdAt);
+          });
+          
+          const filtered = processUniqueNotifications(combined);
           setNotifications(filtered);
           setLoading(false);
         },
         (error) => {
           console.error("알림 구독 에러:", error);
-          // 폴백 로직
-          try {
-            unsubscribe = onSnapshot(colRef, (snapshot2) => {
-                const loaded2 = snapshot2.docs
-                  .map((d) => ({ id: d.id, ...d.data() }))
-                  .sort((a, b) => {
-                    const ad = a.createdAt?.toDate ? a.createdAt.toDate() : new Date(a.createdAt || 0);
-                    const bd = b.createdAt?.toDate ? b.createdAt.toDate() : new Date(b.createdAt || 0);
-                    return bd - ad;
-                  });
-                const filtered2 = processUniqueNotifications(loaded2);
-                setNotifications(filtered2);
-                setLoading(false);
-              },
-              (error2) => {
-                setNotifications([]);
-                setLoading(false);
-              }
-            );
-          } catch (e2) {
-            setNotifications([]);
-            setLoading(false);
-          }
+          setNotifications([]);
+          setLoading(false);
         }
       );
 
@@ -135,34 +152,42 @@ export default function NotificationScreen() {
     setModalVisible(true);
   };
 
-  // ✅ [수정] 읽음 처리 로직 업그레이드
-  // 채팅 알림 클릭 시 -> 해당 방의 '모든' 안 읽은 알림을 읽음 처리
+  // ✅ [수정] 읽음 처리 로직 (공지사항 포함)
   const handleRead = async (noti) => {
     if (!user) return;
 
     try {
-      // 1. 채팅 알림인 경우: 같은 방의 모든 '안 읽은' 알림 찾아서 읽음 처리
+      // 1. 공지사항(System)인 경우 -> 로컬 스토리지에 읽음 기록
+      if (noti.isSystem) {
+        if (noti.isRead) return;
+        
+        // 화면 즉시 반영
+        setNotifications(prev => prev.map(n => n.id === noti.id ? {...n, isRead: true} : n));
+
+        // AsyncStorage 업데이트
+        const readJson = await AsyncStorage.getItem("READ_SYSTEM_NOTICES");
+        const readIds = readJson ? JSON.parse(readJson) : [];
+        if (!readIds.includes(noti.id)) {
+          readIds.push(noti.id);
+          await AsyncStorage.setItem("READ_SYSTEM_NOTICES", JSON.stringify(readIds));
+        }
+        return;
+      }
+
+      // 2. 채팅 알림인 경우
       if (noti.type === "chat" && noti.roomId) {
         const batch = writeBatch(db);
         const colRef = collection(db, "users", user.uid, "notifications");
-        
-        // 해당 방의 isRead: false인 것들만 쿼리
-        const q = query(
-          colRef, 
-          where("roomId", "==", noti.roomId),
-          where("isRead", "==", false)
-        );
+        const q = query(colRef, where("roomId", "==", noti.roomId), where("isRead", "==", false));
         const snapshot = await getDocs(q);
 
         if (!snapshot.empty) {
-          snapshot.forEach((docSnap) => {
-            batch.update(docSnap.ref, { isRead: true });
-          });
+          snapshot.forEach((docSnap) => batch.update(docSnap.ref, { isRead: true }));
           await batch.commit();
         }
       
       } else {
-        // 2. 일반 알림인 경우: 해당 알림 1개만 읽음 처리
+        // 3. 일반 알림인 경우
         if (!noti.isRead) {
           const notiRef = doc(db, "users", user.uid, "notifications", noti.id);
           await updateDoc(notiRef, { isRead: true });
@@ -173,9 +198,15 @@ export default function NotificationScreen() {
     }
   };
 
-  // 삭제 로직 (이전과 동일하게 그룹 삭제 유지)
+  // ✅ [수정] 삭제 로직 (공지사항은 삭제 불가)
   const handleDelete = async (item) => {
     if (!user) return;
+    
+    if (item.isSystem) {
+      // ✅ [해결] 4번째 파라미터에 '닫기 함수' 추가!
+      openModal("알림", "공지사항은 삭제할 수 없습니다.", "alert", () => setModalVisible(false));
+      return;
+    }
 
     try {
       if (item.type === "chat" && item.roomId) {
@@ -184,9 +215,7 @@ export default function NotificationScreen() {
         const q = query(colRef, where("roomId", "==", item.roomId));
         const snapshot = await getDocs(q);
 
-        snapshot.forEach((docSnap) => {
-          batch.delete(docSnap.ref);
-        });
+        snapshot.forEach((docSnap) => batch.delete(docSnap.ref));
         await batch.commit();
       } else {
         await deleteDoc(doc(db, "users", user.uid, "notifications", item.id));
@@ -197,24 +226,46 @@ export default function NotificationScreen() {
     }
   };
 
+  // ✅ [수정] 전체 읽음 (공지사항 + 개인알림)
   const handleReadAll = async () => {
     if (!user) return;
     if (notifications.length === 0) return;
+    
     try {
       const batch = writeBatch(db);
-      let updateCount = 0;
+      let dbUpdateCount = 0;
+      let systemReadIds = [];
 
-      // 화면에 보이는 것들 + 실제 DB 상의 모든 안 읽은 알림을 처리하는 게 좋지만
-      // 현재는 화면 목록 기준으로 처리 (간단 구현)
+      // 1. AsyncStorage에 있는 기존 읽음 목록 가져오기
+      const readJson = await AsyncStorage.getItem("READ_SYSTEM_NOTICES");
+      const prevReadIds = readJson ? JSON.parse(readJson) : [];
+      systemReadIds = [...prevReadIds];
+
       notifications.forEach((noti) => {
         if (!noti.isRead) {
-          const ref = doc(db, "users", user.uid, "notifications", noti.id);
-          batch.update(ref, { isRead: true });
-          updateCount++;
+          if (noti.isSystem) {
+            // 공지는 로컬 ID 수집
+            if (!systemReadIds.includes(noti.id)) {
+              systemReadIds.push(noti.id);
+            }
+          } else {
+            // 개인 알림은 DB 업데이트
+            const ref = doc(db, "users", user.uid, "notifications", noti.id);
+            batch.update(ref, { isRead: true });
+            dbUpdateCount++;
+          }
         }
       });
 
-      if (updateCount > 0) {
+      // 공지 읽음 처리 반영
+      if (systemReadIds.length > prevReadIds.length) {
+        await AsyncStorage.setItem("READ_SYSTEM_NOTICES", JSON.stringify(systemReadIds));
+        // 화면 강제 갱신
+        setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
+      }
+
+      // 개인 알림 DB 반영
+      if (dbUpdateCount > 0) {
         await batch.commit();
       }
     } catch (e) {
@@ -222,19 +273,26 @@ export default function NotificationScreen() {
     }
   };
 
+  // ✅ [수정] 전체 삭제 (공지사항 제외하고 삭제)
   const handleDeleteAll = () => {
     if (!user) return;
-    if (notifications.length === 0) return;
+    // 개인 알림만 필터링
+    const personalNotis = notifications.filter(n => !n.isSystem);
+    if (personalNotis.length === 0) {
+      // ✅ [해결] 4번째 파라미터에 '닫기 함수' 추가!
+      openModal("알림", "삭제할 개인 알림이 없습니다.", "alert", () => setModalVisible(false));
+      return;
+    }
 
     openModal(
       "알림 전체 삭제",
-      "정말 모든 알림을 삭제하시겠습니까?",
+      "공지사항을 제외한 모든 알림을 삭제하시겠습니까?",
       "confirm",
       async () => {
         setModalVisible(false);
         try {
           const batch = writeBatch(db);
-          notifications.forEach((noti) => {
+          personalNotis.forEach((noti) => {
             const ref = doc(db, "users", user.uid, "notifications", noti.id);
             batch.delete(ref);
           });
@@ -323,7 +381,7 @@ const onPressNoti = async (item) => {
     }
 
     const displayTitle = item.title || "알림";
-    const displayBody = item.body || "내용이 없습니다.";
+    const displayBody = item.body || item.message || "내용이 없습니다.";
 
     return (
       <View style={[styles.card, isRead && styles.readCard]}>
