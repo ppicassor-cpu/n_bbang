@@ -221,11 +221,14 @@ export default function StoreDetailScreen({ route, navigation }) {
 
   const _boostErrorMessage = (elig) => {
     const status = String(elig?.status || elig?.code || "");
-    if (status === "HAS_ACTIVE_BOOST") return "이미 진행 중인 부스트가 있습니다. (동시에 1개만 가능)";
+
+    if (status === "HAS_ACTIVE_BOOST") {
+      return "이미 진행 중인 부스트가 있습니다. (스토어 슬롯에서는 동시에 1개만 가능)";
+    }
+
     if (status === "NOT_OWNER") return "내 가게만 부스트할 수 있습니다.";
     if (status === "NEED_PURCHASE") return "부스트 결제가 필요합니다.";
 
-    // ✅ 줄바꿈(\n) 안 먹는 CustomModal 대비: 구분점으로 3줄 느낌
     const reason = String(elig?.reason || elig?.message || "");
     const codePart = status ? ` · 코드: ${status}` : " · 코드: UNKNOWN";
     const reasonPart = reason ? ` · 사유: ${reason}` : "";
@@ -293,7 +296,7 @@ export default function StoreDetailScreen({ route, navigation }) {
       }
 
       setBoostModalVisible(false);
-      showAlert("오류", "부스트 적용에 실패했습니다.");
+      showAlert("알림", _boostErrorMessage(res));
     } catch (e) {
       console.warn("runBoost 실패:", e);
       setBoostModalVisible(false);

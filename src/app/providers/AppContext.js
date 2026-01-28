@@ -48,11 +48,11 @@ const HOME_DONG_NAME_KEY = "HOME_DONG_NAME";
 const HOME_DONG_CODE_KEY = "HOME_DONG_CODE";
 const HOME_DONG_VERIFIED_KEY = "HOME_DONG_VERIFIED";
 const HOME_DONG_VERIFIED_AT_KEY = "HOME_DONG_VERIFIED_AT";
-const BOOST_DAILY_KEY_FIELD = "boostDailyKey";              // YYYY-MM-DD
-const BOOST_DAILY_FREE_USED_FIELD = "boostDailyFreeUsed";   // number
-const BOOST_MONTH_KEY_FIELD = "boostMonthKey";              // YYYY-MM
-const BOOST_MEMBERSHIP_USED_FIELD = "boostMembershipUsed";  // number
-const BOOST_ACTIVE_FIELD = "activeBoost";                   // { type, contentId, until, appliedAt }
+const BOOST_DAILY_KEY_FIELD = "boostDailyKey";             
+const BOOST_DAILY_FREE_USED_FIELD = "boostDailyFreeUsed";  
+const BOOST_MONTH_KEY_FIELD = "boostMonthKey";              
+const BOOST_MEMBERSHIP_USED_FIELD = "boostMembershipUsed";  
+const BOOST_ACTIVE_FIELD = "activeBoost";    
 
 // ✅ [추가] API BASE URL (cleartext/도메인 분리용)
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || "http://152.67.213.225:4000";
@@ -300,7 +300,7 @@ const isBooting = !initialReady;
   const [boostDailyFreeUsed, setBoostDailyFreeUsed] = useState(0);    // 0/1
   const [boostMonthKey, setBoostMonthKey] = useState(null);           // YYYY-MM
   const [boostMembershipUsed, setBoostMembershipUsed] = useState(0);  // 월 N회 사용
-  const [activeBoost, setActiveBoost] = useState(null);   
+  const [activeBoosts, setActiveBoosts] = useState({});               // { [slotKey]: boostObj }
   const [boostTickets, setBoostTickets] = useState(0);
   const [isAdmin, setIsAdmin] = useState(false);
   const isAdminRef = useRef(false);
@@ -1220,7 +1220,7 @@ const isBooting = !initialReady;
           setBoostDailyFreeUsed(typeof data[BOOST_DAILY_FREE_USED_FIELD] === "number" ? data[BOOST_DAILY_FREE_USED_FIELD] : 0);
           setBoostMonthKey(data[BOOST_MONTH_KEY_FIELD] || null);
           setBoostMembershipUsed(typeof data[BOOST_MEMBERSHIP_USED_FIELD] === "number" ? data[BOOST_MEMBERSHIP_USED_FIELD] : 0);
-          setActiveBoost(data[BOOST_ACTIVE_FIELD] || null);
+          setActiveBoosts(_normalizeActiveBoosts(data[BOOST_ACTIVE_FIELD] || null));
 
           if (adminFlag) {
             setPremiumUntil("2099-12-31T23:59:59.999Z");
@@ -1249,7 +1249,7 @@ const isBooting = !initialReady;
             [BOOST_DAILY_FREE_USED_FIELD]: 0,
             [BOOST_MONTH_KEY_FIELD]: null,
             [BOOST_MEMBERSHIP_USED_FIELD]: 0,
-            [BOOST_ACTIVE_FIELD]: null,
+            [BOOST_ACTIVE_FIELD]: {},
           }); 
           
           setIsAdmin(false);
@@ -1320,7 +1320,7 @@ const isBooting = !initialReady;
           setBoostDailyFreeUsed(typeof data[BOOST_DAILY_FREE_USED_FIELD] === "number" ? data[BOOST_DAILY_FREE_USED_FIELD] : 0);
           setBoostMonthKey(data[BOOST_MONTH_KEY_FIELD] || null);
           setBoostMembershipUsed(typeof data[BOOST_MEMBERSHIP_USED_FIELD] === "number" ? data[BOOST_MEMBERSHIP_USED_FIELD] : 0);
-          setActiveBoost(data[BOOST_ACTIVE_FIELD] || null);
+          setActiveBoosts(_normalizeActiveBoosts(data[BOOST_ACTIVE_FIELD] || null));
           
         } else {
           setBlockedUsers([]);
@@ -2051,6 +2051,58 @@ useEffect(() => {
     return untilMs > Date.now();
   };
 
+  // ✅ activeBoost(legacy 1개) / activeBoosts(map) 호환 정규화
+  const _normalizeActiveBoosts = (raw) => {
+    try {
+      if (!raw || typeof raw !== "object") return {};
+
+      // ✅ legacy: { type, contentId, until, appliedAt, ... }
+      const isLegacy =
+        raw?.type != null &&
+        raw?.contentId != null &&
+        raw?.until != null;
+
+      if (isLegacy) {
+        const slotKey = String(raw?.type || "") === "store" ? "store" : "life";
+        return { [slotKey]: { ...raw, slotKey } };
+      }
+
+      // ✅ map: { [slotKey]: boostObj }
+      const out = {};
+      for (const k of Object.keys(raw || {})) {
+        const v = raw?.[k];
+        if (v && typeof v === "object") {
+          out[k] = { ...v, slotKey: v?.slotKey || k };
+        }
+      }
+      return out;
+    } catch {
+      return {};
+    }
+  };
+
+  // ✅ 슬롯키: store 1개 + post(마트/식품) 1개 + post(생활용품) 1개
+  const _getBoostSlotKey = ({ contentType = "post", contentData = null } = {}) => {
+    if (String(contentType) === "store") return "store";
+
+    const raw = contentData?.category != null ? String(contentData.category) : "";
+    const c = raw.replace(/\s/g, "");
+
+    if (c.includes("마트") || c.includes("식품")) return "mart_food";
+    if (c.includes("생활") || c.includes("용품") || c.includes("생필")) return "life";
+
+    // ✅ 지정 2카테고리 외는 생활용품 슬롯으로 묶어서(총 3개 슬롯 고정)
+    return "life";
+  };
+
+  const _removeBoostSlot = (abs, slotKey) => {
+    const next = { ...(abs || {}) };
+    try {
+      delete next[slotKey];
+    } catch {}
+    return next;
+  };
+
   // ✅ [추가] paid(단건 유료) 중복 방지용 구매ID 추출
   const _getPurchaseIdFromPurchaseInfo = (purchaseInfo) => {
     try {
@@ -2091,40 +2143,44 @@ const checkBoostEligibility = async ({ contentType = "post", contentId, mode = "
   if (!user?.uid) return { status: "NO_USER", ok: false };
   if (!contentId) return { status: "NO_CONTENT_ID", ok: false };
 
-  // ✅ 유저당 동시 1개 활성 부스트 제한 (같은 콘텐츠라도 "진행 중"이면 재부여 차단)
-  const ab = activeBoost;
-  if (ab && _isActiveBoost(ab)) {
-    // ✅ activeBoost가 걸린 콘텐츠가 삭제된 경우, 자동 해제 후 진행
-    try {
-      const abType = String(ab?.type || "");
-      const abId = String(ab?.contentId || "");
-      const abCol = abType === "store" ? "stores" : "posts";
-      const abSnap = await getDoc(doc(db, abCol, abId));
-      if (!abSnap.exists()) {
-        await updateDoc(doc(db, "users", user.uid), {
-          [BOOST_ACTIVE_FIELD]: null,
-        });
-        setActiveBoost(null);
-      } else {
-        return { status: "HAS_ACTIVE_BOOST", ok: false, activeBoost: ab };
-      }
-    } catch {
-      return { status: "HAS_ACTIVE_BOOST", ok: false, activeBoost: ab };
-    }
-  }
-
-
   // ✅ 게시글/스토어 문서 확인 + 6시간 경과 조건(도배 방지)
-  // - paid도 동일하게 걸어두었음(원하면 paid만 즉시 허용으로 바꿀 수 있음)
   const colName = contentType === "store" ? "stores" : "posts";
   const snap = await getDoc(doc(db, colName, String(contentId)));
   if (!snap.exists()) return { status: "NOT_FOUND", ok: false };
 
   const data = snap.data() || {};
+  const slotKey = _getBoostSlotKey({ contentType, contentData: data });
+
+  // ✅ 슬롯별 동시 1개 제한: store 1 + mart/food 1 + life 1
+  const abs = _normalizeActiveBoosts(activeBoosts);
+  const slotAb = abs?.[slotKey] || null;
+
+  if (slotAb && _isActiveBoost(slotAb)) {
+    // ✅ 슬롯 부스트 대상 문서가 삭제된 경우, 해당 슬롯만 자동 해제 후 진행
+    try {
+      const abType = String(slotAb?.type || "");
+      const abId = String(slotAb?.contentId || "");
+      const abCol = abType === "store" ? "stores" : "posts";
+      const abSnap = await getDoc(doc(db, abCol, abId));
+
+      if (!abSnap.exists()) {
+        const nextAbs = _removeBoostSlot(abs, slotKey);
+        await updateDoc(doc(db, "users", user.uid), {
+          [BOOST_ACTIVE_FIELD]: nextAbs,
+        });
+        setActiveBoosts(nextAbs);
+      } else {
+        return { status: "HAS_ACTIVE_BOOST", ok: false, activeBoost: slotAb, slotKey };
+      }
+    } catch {
+      return { status: "HAS_ACTIVE_BOOST", ok: false, activeBoost: slotAb, slotKey };
+    }
+  }
+
   const createdAtMs = _parseMs(data?.createdAt);
   const minAgeMs = 6 * 60 * 60 * 1000;
   if (createdAtMs && Date.now() - createdAtMs < minAgeMs) {
-    return { status: "TOO_EARLY", ok: false, waitMs: (minAgeMs - (Date.now() - createdAtMs)) };
+    return { status: "TOO_EARLY", ok: false, waitMs: (minAgeMs - (Date.now() - createdAtMs)), slotKey };
   }
 
   // ✅ 무료 부스트: 일 1회
@@ -2133,35 +2189,33 @@ const checkBoostEligibility = async ({ contentType = "post", contentId, mode = "
     const used = (boostDailyKey === todayKey) ? (Number(boostDailyFreeUsed || 0)) : 0;
 
     if (used >= 1) {
-      return { status: "FREE_DAILY_LIMIT", ok: false, todayKey, used };
+      return { status: "FREE_DAILY_LIMIT", ok: false, todayKey, used, slotKey };
     }
 
-    return { status: "OK", ok: true, todayKey };
+    return { status: "OK", ok: true, todayKey, slotKey };
   }
 
   // ✅ 멤버십 부스트: 월 N회
   if (mode === "membership") {
-    // ✅ [추가] 공유된 프리미엄은 멤버십 무료 부스트 사용 불가
-    if (isSharedPremium) return { status: "SHARED_PREMIUM", ok: false };
-    
-    if (!isPremium) return { status: "NOT_PREMIUM", ok: false };
+    if (isSharedPremium) return { status: "SHARED_PREMIUM", ok: false, slotKey };
+    if (!isPremium) return { status: "NOT_PREMIUM", ok: false, slotKey };
 
     const monthKey = getCurrentMonthKeyKST();
     const limit = getBoostMembershipMonthlyLimit();
     const used = (boostMonthKey === monthKey) ? Number(boostMembershipUsed || 0) : 0;
 
-    if (limit <= 0) return { status: "NOT_ELIGIBLE", ok: false, monthKey, limit, used };
-    if (used >= limit) return { status: "MEMBERSHIP_LIMIT", ok: false, monthKey, limit, used };
+    if (limit <= 0) return { status: "NOT_ELIGIBLE", ok: false, monthKey, limit, used, slotKey };
+    if (used >= limit) return { status: "MEMBERSHIP_LIMIT", ok: false, monthKey, limit, used, slotKey };
 
-    return { status: "OK", ok: true, monthKey, limit, used };
+    return { status: "OK", ok: true, monthKey, limit, used, slotKey };
   }
 
-  // ✅ paid(단건 유료): 구매 검증은 이후 단계(RevenueCat/결제 연동)에서 붙일 예정
+  // ✅ paid(단건 유료)
   if (mode === "paid") {
-    return { status: "OK", ok: true };
+    return { status: "OK", ok: true, slotKey };
   }
 
-  return { status: "UNKNOWN_MODE", ok: false };
+  return { status: "UNKNOWN_MODE", ok: false, slotKey };
 };
 
   // [수정 후]
@@ -2193,19 +2247,23 @@ const applyBoostToContent = async ({ contentType = "post", contentId, mode = "fr
       }
 
       const userData = userSnap.exists() ? (userSnap.data() || {}) : {};
+      const data = contentSnap.data() || {};
 
-      // ✅ activeBoost 진행 중이면 재부여 차단 (같은 콘텐츠 포함)
-      const ab = userData?.[BOOST_ACTIVE_FIELD] || null;
-      if (ab && _isActiveBoost(ab)) {
-        return { ok: false, status: "HAS_ACTIVE_BOOST", activeBoost: ab };
+      const slotKey = _getBoostSlotKey({ contentType, contentData: data });
+
+      // ✅ 슬롯별 동시 1개 제한
+      const abs = _normalizeActiveBoosts(userData?.[BOOST_ACTIVE_FIELD] || null);
+      const slotAb = abs?.[slotKey] || null;
+
+      if (slotAb && _isActiveBoost(slotAb)) {
+        return { ok: false, status: "HAS_ACTIVE_BOOST", activeBoost: slotAb, slotKey };
       }
 
       // ✅ 6시간 경과 조건 (기존 정책 유지)
-      const data = contentSnap.data() || {};
       const createdAtMs = _parseMs(data?.createdAt);
       const minAgeMs = 6 * 60 * 60 * 1000;
       if (createdAtMs && nowMs - createdAtMs < minAgeMs) {
-        return { ok: false, status: "TOO_EARLY", waitMs: (minAgeMs - (nowMs - createdAtMs)) };
+        return { ok: false, status: "TOO_EARLY", waitMs: (minAgeMs - (nowMs - createdAtMs)), slotKey };
       }
 
       // ✅ 모드별 카운트/자격 검증 (트랜잭션 기준)
@@ -2219,16 +2277,14 @@ const applyBoostToContent = async ({ contentType = "post", contentId, mode = "fr
       let paidPurchaseId = "";
       if (mode === "paid") {
         paidPurchaseId = _getPurchaseIdFromPurchaseInfo(purchaseInfo);
-        if (!paidPurchaseId) return { ok: false, status: "NO_PURCHASE_ID" };
+        if (!paidPurchaseId) return { ok: false, status: "NO_PURCHASE_ID", slotKey };
 
-        // users/{uid}/boostPurchases/{purchaseId} 존재하면 이미 처리된 결제 -> boostCount 중복 +1 금지
         const purchaseRef = doc(db, "users", user.uid, "boostPurchases", String(paidPurchaseId));
         const purchaseSnap = await tx.get(purchaseRef);
         if (purchaseSnap.exists()) {
-          return { ok: false, status: "DUPLICATE_PURCHASE", purchaseId: paidPurchaseId };
+          return { ok: false, status: "DUPLICATE_PURCHASE", purchaseId: paidPurchaseId, slotKey };
         }
 
-        // ✅ 아직 처리 안된 결제면 기록 + boostCount +1 (트랜잭션)
         const baseBoostCount = typeof userData?.boostCount === "number" ? userData.boostCount : 0;
         tx.set(purchaseRef, {
           purchaseId: String(paidPurchaseId),
@@ -2245,7 +2301,7 @@ const applyBoostToContent = async ({ contentType = "post", contentId, mode = "fr
 
       if (mode === "free") {
         const used = (nextDailyKey === todayKey) ? Number(nextDailyUsed || 0) : 0;
-        if (used >= 1) return { ok: false, status: "FREE_DAILY_LIMIT", todayKey, used };
+        if (used >= 1) return { ok: false, status: "FREE_DAILY_LIMIT", todayKey, used, slotKey };
 
         nextDailyKey = todayKey;
         nextDailyUsed = used + 1;
@@ -2253,14 +2309,14 @@ const applyBoostToContent = async ({ contentType = "post", contentId, mode = "fr
 
       if (mode === "membership") {
         const dbIsPremium = !!userData?.isPremium || !!userData?.isAdmin;
-        if (!isPremium && !dbIsPremium) return { ok: false, status: "NOT_PREMIUM" };
+        if (!isPremium && !dbIsPremium) return { ok: false, status: "NOT_PREMIUM", slotKey };
 
         const type = userData?.membershipType || membershipType || "free";
         const limit = (type === "yearly") ? 4 : (type === "monthly") ? 2 : 0;
 
         const used = (nextMonthKey === monthKey) ? Number(nextMembershipUsed || 0) : 0;
-        if (limit <= 0) return { ok: false, status: "NOT_ELIGIBLE", monthKey, limit, used };
-        if (used >= limit) return { ok: false, status: "MEMBERSHIP_LIMIT", monthKey, limit, used };
+        if (limit <= 0) return { ok: false, status: "NOT_ELIGIBLE", monthKey, limit, used, slotKey };
+        if (used >= limit) return { ok: false, status: "MEMBERSHIP_LIMIT", monthKey, limit, used, slotKey };
 
         nextMonthKey = monthKey;
         nextMembershipUsed = used + 1;      
@@ -2273,15 +2329,21 @@ const applyBoostToContent = async ({ contentType = "post", contentId, mode = "fr
         boostMode: String(mode),
       });
 
-      // ✅ 유저 문서 activeBoost + 카운트
-      const patch = {
-        [BOOST_ACTIVE_FIELD]: {
+      // ✅ 유저 문서 activeBoosts(map) 저장 (전체 덮어쓰기: legacy 혼합 방지)
+      const nextAbs = {
+        ...abs,
+        [slotKey]: {
           type: String(contentType),
           contentId: String(contentId),
           appliedAt: appliedAtIso,
           until: untilIso,
           mode: String(mode),
+          slotKey: String(slotKey),
         },
+      };
+
+      const patch = {
+        [BOOST_ACTIVE_FIELD]: nextAbs,
       };
 
       if (mode === "free") {
@@ -2302,6 +2364,8 @@ const applyBoostToContent = async ({ contentType = "post", contentId, mode = "fr
         boostAppliedAt: appliedAtIso,
         boostUntil: untilIso,
         mode: String(mode),
+        slotKey,
+        activeBoosts: nextAbs,
         todayKey: nextDailyKey,
         dailyUsed: nextDailyUsed,
         monthKey: nextMonthKey,
@@ -2311,7 +2375,6 @@ const applyBoostToContent = async ({ contentType = "post", contentId, mode = "fr
 
     if (!txRes?.ok) return { ...txRes, ok: false };
 
-    // ✅ 로컬 state 반영
     if (mode === "free") {
       setBoostDailyKey(txRes?.todayKey || todayKey);
       setBoostDailyFreeUsed(typeof txRes?.dailyUsed === "number" ? txRes.dailyUsed : 0);
@@ -2322,15 +2385,9 @@ const applyBoostToContent = async ({ contentType = "post", contentId, mode = "fr
       setBoostMembershipUsed(typeof txRes?.membershipUsed === "number" ? txRes.membershipUsed : 0);
     }
 
-    setActiveBoost({
-      type: String(contentType),
-      contentId: String(contentId),
-      appliedAt: txRes.boostAppliedAt,
-      until: txRes.boostUntil,
-      mode: String(mode),
-    });
+    setActiveBoosts(_normalizeActiveBoosts(txRes?.activeBoosts || {}));
 
-    return { status: "BOOST_APPLIED", ok: true, boostUntil: txRes.boostUntil, boostAppliedAt: txRes.boostAppliedAt };
+    return { status: "BOOST_APPLIED", ok: true, boostUntil: txRes.boostUntil, boostAppliedAt: txRes.boostAppliedAt, slotKey: txRes.slotKey };
   } catch (e) {
     console.warn("applyBoostToContent 실패:", e);
     return { status: "FAILED", ok: false, error: e };
@@ -2342,30 +2399,44 @@ const applyBoostToContent = async ({ contentType = "post", contentId, mode = "fr
   try {
     if (!user?.uid) return;
 
-    const ab = activeBoost;
-    if (!ab) return;
+    const abs = _normalizeActiveBoosts(activeBoosts);
+    const keys = Object.keys(abs || {});
+    if (!keys.length) return;
 
-    const isActive = _isActiveBoost(ab);
+    let nextAbs = { ...abs };
+    let changed = false;
 
-    // ✅ 진행 중이라도, 대상 문서가 삭제되었으면 activeBoost 해제
-    if (isActive) {
-      try {
-        const abType = String(ab?.type || "");
-        const abId = String(ab?.contentId || "");
-        const abCol = abType === "store" ? "stores" : "posts";
-        const snap = await getDoc(doc(db, abCol, abId));
-        if (snap.exists()) return;
-      } catch {
-        return;
+    for (const slotKey of keys) {
+      const ab = abs?.[slotKey] || null;
+      if (!ab) continue;
+
+      const isActive = _isActiveBoost(ab);
+
+      // ✅ 진행 중이라도, 대상 문서가 삭제되었으면 해당 슬롯만 해제
+      if (isActive) {
+        try {
+          const abType = String(ab?.type || "");
+          const abId = String(ab?.contentId || "");
+          const abCol = abType === "store" ? "stores" : "posts";
+          const snap = await getDoc(doc(db, abCol, abId));
+          if (snap.exists()) continue;
+        } catch {
+          continue;
+        }
       }
+
+      // ✅ 만료(or 삭제) 되었으면 해당 슬롯만 제거
+      nextAbs = _removeBoostSlot(nextAbs, slotKey);
+      changed = true;
     }
 
-    // ✅ 만료(or 삭제) 되었으면 users.activeBoost만 비움
+    if (!changed) return;
+
     await updateDoc(doc(db, "users", user.uid), {
-      [BOOST_ACTIVE_FIELD]: null,
+      [BOOST_ACTIVE_FIELD]: nextAbs,
     });
 
-    setActiveBoost(null);
+    setActiveBoosts(nextAbs);
   } catch (e) {
     console.warn("clearExpiredActiveBoostIfNeeded 실패:", e);
   }

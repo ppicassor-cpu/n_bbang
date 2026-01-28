@@ -74,6 +74,27 @@ export const saveCachedMessages = async (roomId, messages) => {
 
 const isValidRoomId = (roomId) => typeof roomId === "string" && roomId.trim().length > 0;
 
+const pickDisplayNameFromUserDoc = (data, fallback = "") => {
+  const candidates = [
+    data?.displayName,
+    data?.nickname,
+    data?.name,
+    data?.userName,
+    data?.username,
+    data?.profileName,
+  ];
+
+  for (const v of candidates) {
+    const s = String(v || "").trim();
+    if (s && s !== "알 수 없음") return s;
+  }
+
+  const f = String(fallback || "").trim();
+  if (f && f !== "알 수 없음") return f;
+
+  return "";
+};
+
 const getMyDisplayName = async () => {
   try {
     const uid = auth?.currentUser?.uid;
@@ -81,15 +102,18 @@ const getMyDisplayName = async () => {
       const snap = await getDoc(doc(db, "users", uid));
       if (snap.exists()) {
         const data = snap.data() || {};
-        const name = String(data.displayName || "").trim();
+        const name = pickDisplayNameFromUserDoc(data);
         if (name) return name;
+
+        const docEmail = data?.email ? String(data.email).split("@")[0] : "";
+        if (docEmail) return docEmail;
       }
     }
   } catch (e) {}
 
   const u = auth?.currentUser;
   const fromAuth = String(u?.displayName || "").trim();
-  if (fromAuth) return fromAuth;
+  if (fromAuth && fromAuth !== "알 수 없음") return fromAuth;
 
   const fromEmail = u?.email ? String(u.email).split("@")[0] : "";
   return fromEmail || "사용자";
@@ -560,8 +584,8 @@ export const leaveRoom = async (roomId) => {
 
   // ✅ 1. 최신 닉네임 조회
   const userSnap = await getDoc(doc(db, "users", user.uid));
-  const latestNickname = userSnap.exists() 
-    ? (userSnap.data().displayName || "사용자") 
+  const latestNickname = userSnap.exists()
+    ? (pickDisplayNameFromUserDoc(userSnap.data() || {}) || "사용자")
     : "사용자";
 
   const isPostRoom = typeof roomId === "string" && roomId.startsWith("post_");
@@ -643,8 +667,8 @@ export const leaveRoomAsOwner = async (roomId) => {
 
   // ✅ 1. DB에서 방장의 최신 닉네임을 가져옵니다. (닉네임 해결 핵심)
   const userSnap = await getDoc(doc(db, "users", user.uid));
-  const latestNickname = userSnap.exists() 
-    ? (userSnap.data().displayName || "방장") 
+  const latestNickname = userSnap.exists()
+    ? (pickDisplayNameFromUserDoc(userSnap.data() || {}) || "방장")
     : "방장";
 
   if (typeof roomId === "string" && roomId.startsWith("post_")) {

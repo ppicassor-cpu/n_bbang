@@ -291,36 +291,6 @@ export default function WriteFreeScreen({ navigation, route }) {
       return;
     }
 
-    if (typeof ensureHomeDongMatchForWrite === "function") {
-      const now = Date.now();
-      try {
-        const res = await ensureHomeDongMatchForWrite({ forceFresh: true });
-        const ok = typeof res === "boolean" ? res : !!res?.ok;
-
-        if (!ok) {
-          const msg =
-            typeof res === "object" && res?.message
-              ? String(res.message)
-              : "내 동네 인증 지역과 현재 위치가 일치하지 않아 등록할 수 없습니다.";
-
-          // ✅ 쿨다운: 방금 불일치 모달을 띄웠다면 일정 시간 재표시 생략(등록은 계속 막음)
-          if (now - lastHomeDongMismatchShownAtRef.current >= HOME_DONG_MISMATCH_COOLDOWN_MS) {
-            showAlert(msg);
-            lastHomeDongMismatchShownAtRef.current = now;
-          }
-          return;
-        }
-      } catch (e) {
-        const msg = "현재 위치 확인 중 오류가 발생했습니다.\n잠시 후 다시 시도해주세요.";
-
-        if (now - lastHomeDongMismatchShownAtRef.current >= HOME_DONG_MISMATCH_COOLDOWN_MS) {
-          showAlert(msg);
-          lastHomeDongMismatchShownAtRef.current = now;
-        }
-        return;
-      }
-    }
-
     setLoading(true);
     // (UI 반영을 위한 짧은 yield)
     await new Promise((r) => setTimeout(r, 150));

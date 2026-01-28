@@ -403,36 +403,17 @@ export default function WriteScreen({ navigation, route }) {
 
     if (!title) { showAlert("상품명을 입력해주세요."); return; }
 
-    // ✅ [수정] 무료나눔은 buyPrice 필수 아님 (저장은 0으로 통일)
+    // ✅ 무료나눔은 buyPrice 필수 아님
     if (!isFreeShare && !buyPrice) { showAlert("구매 금액을 입력해주세요."); return; }
 
-    // ✅ 로딩 시작: 버튼 비활성화 & 모달 띄우기
-    if (typeof ensureHomeDongMatchForWrite === "function") {
+    // [수정] 복잡한 재검증 삭제, 기존 위치값(currentLocation) 유무만 확인하여 모달 처리
+    if (!currentLocation) {
       const now = Date.now();
-      try {
-        const res = await ensureHomeDongMatchForWrite({ forceFresh: true });
-        const ok = typeof res === "boolean" ? res : !!res?.ok;
-
-        if (!ok) {
-          const msg = typeof res === "object" && res?.message
-            ? String(res.message)
-            : "내 동네 인증 지역과 현재 위치가 일치하지 않아 등록할 수 없습니다.";
-
-          // ✅ 쿨다운: 방금 불일치 모달을 띄웠다면 일정 시간 재표시 생략(등록은 계속 막음)
-          if (now - lastHomeDongMismatchShownAtRef.current >= HOME_DONG_MISMATCH_COOLDOWN_MS) {
-            showAlert(msg);
-            lastHomeDongMismatchShownAtRef.current = now;
-          }
-          return;
-        }
-      } catch (e) {
-        const msg = "현재 위치 확인 중 오류가 발생했습니다.\n잠시 후 다시 시도해주세요.";
-        if (now - lastHomeDongMismatchShownAtRef.current >= HOME_DONG_MISMATCH_COOLDOWN_MS) {
-          showAlert(msg);
-          lastHomeDongMismatchShownAtRef.current = now;
-        }
-        return;
+      if (now - lastHomeDongMismatchShownAtRef.current >= HOME_DONG_MISMATCH_COOLDOWN_MS) {
+        showAlert("내 동네 인증이 필요합니다. 마이페이지에서 동네를 인증해주세요.");
+        lastHomeDongMismatchShownAtRef.current = now;
       }
+      return; 
     }
 
     // ✅ 로딩 시작: 버튼 비활성화 & 모달 띄우기

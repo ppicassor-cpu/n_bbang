@@ -121,4 +121,4 @@ export const PROFANITY_LIST = RAW_PROFANITY_LIST.filter((w) => !EXCLUDE_SET.has(
 export const HARD_PROFANITY_LIST = PROFANITY_LIST;
 
 // 6. 하위 호환성을 위해 합친 리스트도 export (혹시 모를 에러 방지)
-export const BAD_WORDS_LIST = [...ADMIN_KEYWORDS, ...PROFANITY_LIST];
+export const BAD_WORDS_LIST = [...PROFANITY_LIST];

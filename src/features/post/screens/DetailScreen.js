@@ -10,7 +10,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { MaterialIcons } from "@expo/vector-icons";
 
 // ✅ [추가] 닉네임 조회 및 숫자 증가를 위해 firebase 관련 모듈 추가
-import { doc, getDoc, updateDoc, increment, runTransaction, arrayUnion, serverTimestamp, collection } from "firebase/firestore";
+import { doc, getDoc, updateDoc, increment, runTransaction, arrayUnion, serverTimestamp, collection, addDoc } from "firebase/firestore";
 import { db } from "../../../firebaseConfig";
 
 import { theme } from "../../../theme";
@@ -208,20 +208,6 @@ export default function DetailScreen({ route, navigation }) {
               currentParticipants: increment(1),
             });
 
-            // ✅ 2. [추가됨] 입장 시스템 메시지 생성 (여기에 닉네임을 박아넣음)
-            // (user.displayName이 바로 "별명"입니다)
-            const newMsgRef = doc(collection(db, "chatRooms", roomId, "messages"));
-            tx.set(newMsgRef, {
-              text: "님이 입장했습니다.", // 렌더링 시 닉네임 조합됨
-              createdAt: serverTimestamp(),
-              senderId: "system",
-              type: "system",
-              actorId: user.uid,
-              // 👇 여기가 핵심! 내 최신 닉네임을 같이 저장
-              displayName: user.displayName || "알 수 없음", 
-              actorDisplayName: user.displayName || "알 수 없음" 
-            });
-
             didIncrement = true;
           });
 
@@ -229,6 +215,21 @@ export default function DetailScreen({ route, navigation }) {
           // 트랜잭션 성공 시에만 로컬 UI 반영
           if (didIncrement) {
             setPost(prev => ({ ...prev, currentParticipants: Number(prev.currentParticipants || 0) + 1 }));
+
+            try {
+              await addDoc(collection(db, "chatRooms", roomId, "messages"), {
+                text: "님이 입장했습니다.", // 렌더링 시 닉네임 조합됨
+                createdAt: serverTimestamp(),
+                senderId: "system",
+                type: "system",
+                actorId: user.uid,
+                // 👇 여기가 핵심! 내 최신 닉네임을 같이 저장
+                displayName: user.displayName || "알 수 없음", 
+                actorDisplayName: user.displayName || "알 수 없음" 
+              });
+            } catch (e) {
+              console.warn("입장 메시지 생성 실패:", e);
+            }
           }
         } catch (e) {
           console.error("참여 트랜잭션 실패:", e);
@@ -377,11 +378,20 @@ export default function DetailScreen({ route, navigation }) {
 
   const _boostErrorMessage = (elig) => {
     const status = String(elig?.status || "");
-    if (status === "HAS_ACTIVE_BOOST") return "이미 진행 중인 부스트가 있습니다. (동시에 1개만 가능)";
+
+    if (status === "HAS_ACTIVE_BOOST") {
+      const slot = String(elig?.activeBoost?.slotLabel || elig?.activeBoost?.slot || "").trim();
+      return slot
+        ? `이미 진행 중인 부스트가 있습니다. (${slot} 카테고리에서는 동시에 1개만 가능)`
+        : "이미 진행 중인 부스트가 있습니다. (카테고리별로 동시에 1개만 가능)";
+    }
+
     if (status === "TOO_EARLY") return "작성 후 6시간이 지난 글만 무료/멤버십 부스트가 가능합니다.";
     if (status === "FREE_DAILY_LIMIT") return "오늘 무료 부스트(1회)를 이미 사용하셨습니다.";
     if (status === "NOT_PREMIUM") return "멤버십 부스트는 프리미엄 회원만 가능합니다.";
     if (status === "MEMBERSHIP_LIMIT") return "이번 달 멤버십 부스트 횟수를 모두 사용하셨습니다.";
+    if (status === "FAILED" || status === "ERROR") return "부스트 적용에 실패했습니다.";
+
     return "부스트 조건을 만족하지 않습니다.";
   };
 
@@ -415,8 +425,11 @@ export default function DetailScreen({ route, navigation }) {
 
     setBoostLoading(true);
     try {
+      const isAdminUser = (user?.isAdmin === true || user?.role === "admin" || membershipType === "admin");
+
       // 2. 무료/멤버십은 자격 검증 (티켓은 위에서 개수만 확인하고 패스)
-      if (mode !== "ticket") {
+      // ✅ 관리자 글(관리자 계정)은 작성 후 6시간 제한(TOO_EARLY) 무시
+      if (mode !== "ticket" && !isAdminUser) {
           const elig = await checkBoostEligibility({
             contentType: "post",
             contentId: post.id,
@@ -433,11 +446,13 @@ export default function DetailScreen({ route, navigation }) {
       }
 
       // 3. 실제 부스트 적용 (DB 기록)
-      const res = await applyBoostToContent({
+      const durationHours = (user?.isAdmin === true || user?.role === "admin" || membershipType === "admin") ? 48 : 2;
+
+            const res = await applyBoostToContent({
         contentType: "post",
         contentId: post.id,
         mode,
-        durationHours: 2,
+        durationHours,
       });
 
       if (res?.ok) {
@@ -454,7 +469,7 @@ export default function DetailScreen({ route, navigation }) {
             }
         }
 
-        const fallbackUntil = Date.now() + 2 * 60 * 60 * 1000;
+        const fallbackUntil = Date.now() + durationHours * 60 * 60 * 1000;
         const nextBoostUntil = res?.boostUntil ?? res?.data?.boostUntil ?? fallbackUntil;
         const nextBoostAppliedAt = res?.boostAppliedAt ?? res?.data?.boostAppliedAt ?? Date.now();
 
@@ -465,14 +480,16 @@ export default function DetailScreen({ route, navigation }) {
         }));
 
         setBoostModalVisible(false);
-        setAlertMsg("부스트가 적용되었습니다. (2시간)");
+        setAlertMsg("부스트가 적용되었습니다. (" + durationHours + "시간)");
         setSuccessModalVisible(true);
         return;
       }
 
+
       setBoostModalVisible(false);
-      setAlertMsg("부스트 적용에 실패했습니다.");
+      setAlertMsg(_boostErrorMessage(res));
       setErrorModalVisible(true);
+
     } catch (e) {
       console.warn("runBoost 실패:", e);
       setBoostModalVisible(false);
@@ -532,7 +549,7 @@ export default function DetailScreen({ route, navigation }) {
 
         <View style={styles.body}>
           <View style={styles.titleRow}>
-            <Text style={styles.title} numberOfLines={1}>{post.title}</Text>
+            <Text style={styles.title} numberOfLines={2}>{post.title}</Text>
             
             <View style={styles.dropdownContainer}>
               {isMyPost ? (
