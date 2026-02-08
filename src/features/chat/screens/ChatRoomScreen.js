@@ -737,9 +737,18 @@ export default function ChatRoomScreen({ route, navigation }) {
     
     if (isSystemLeave) {
       const actorId = item?.actorId || item?.userId || item?.uid || null;
-      const actorName = item?.displayName || 
-                        (actorId ? (senderMap?.[actorId]?.nickname || senderMap?.[actorId]?.displayName) : null) || 
-                        "사용자";
+
+      const rawDisplayName = typeof item?.displayName === "string" ? item.displayName.trim() : "";
+      const rawSenderName = typeof item?.senderName === "string" ? item.senderName.trim() : "";
+      const rawMapName = actorId
+        ? String(senderMap?.[actorId]?.nickname || senderMap?.[actorId]?.displayName || "").trim()
+        : "";
+
+      const actorName =
+        (rawDisplayName && rawDisplayName !== "알 수 없음" ? rawDisplayName : "") ||
+        (rawSenderName && rawSenderName !== "알 수 없음" ? rawSenderName : "") ||
+        (rawMapName && rawMapName !== "알 수 없음" ? rawMapName : "") ||
+        "사용자";
 
       let displayText = item?.text || "";
       

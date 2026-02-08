@@ -446,7 +446,7 @@ export default function DetailScreen({ route, navigation }) {
       }
 
       // 3. 실제 부스트 적용 (DB 기록)
-      const durationHours = (user?.isAdmin === true || user?.role === "admin" || membershipType === "admin") ? 48 : 2;
+      const durationHours = isAdminUser ? 24 : 2;
 
             const res = await applyBoostToContent({
         contentType: "post",
@@ -454,6 +454,32 @@ export default function DetailScreen({ route, navigation }) {
         mode,
         durationHours,
       });
+
+      // ✅ 관리자 계정인데 서버/컨텍스트에서 TOO_EARLY로 막는 경우: 이 화면에서 강제 적용(6시간 제한 완전 우회)
+      if (!res?.ok && isAdminUser && String(res?.status || "") === "TOO_EARLY") {
+        try {
+          const untilMs = Date.now() + durationHours * 60 * 60 * 1000;
+          const postRef = doc(db, "posts", post.id);
+
+          await updateDoc(postRef, {
+            boostUntil: new Date(untilMs),
+            boostAppliedAt: serverTimestamp(),
+          });
+
+          setPost((prev) => ({
+            ...prev,
+            boostUntil: untilMs,
+            boostAppliedAt: Date.now(),
+          }));
+
+          setBoostModalVisible(false);
+          setAlertMsg("부스트가 적용되었습니다. (" + durationHours + "시간)");
+          setSuccessModalVisible(true);
+          return;
+        } catch (e) {
+          console.error("관리자 TOO_EARLY 강제 부스트 실패:", e);
+        }
+      }
 
       if (res?.ok) {
         // 4. 티켓 모드였다면 DB에서 티켓 차감 (트랜잭션 후 처리)

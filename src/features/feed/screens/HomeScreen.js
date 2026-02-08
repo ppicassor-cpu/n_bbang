@@ -237,7 +237,13 @@ export default function HomeScreen({ navigation }) {
         const latestId = snap.docs[0].id;
         // 로컬 저장소(AsyncStorage) 확인하여 읽은 글인지 체크
         const readJson = await AsyncStorage.getItem("READ_SYSTEM_NOTICES");
-        const readIds = readJson ? JSON.parse(readJson) : [];
+        let readIds = [];
+        try {
+          readIds = readJson ? JSON.parse(readJson) : [];
+        } catch {
+          readIds = [];
+        }
+        if (!Array.isArray(readIds)) readIds = [];
         setHasUnreadNotice(!readIds.includes(latestId));
       } else {
         setHasUnreadNotice(false);
@@ -263,7 +269,13 @@ export default function HomeScreen({ navigation }) {
           if (!snap.empty) {
             const latestId = snap.docs[0].id;
             const readJson = await AsyncStorage.getItem("READ_SYSTEM_NOTICES");
-            const readIds = readJson ? JSON.parse(readJson) : [];
+            let readIds = [];
+            try {
+              readIds = readJson ? JSON.parse(readJson) : [];
+            } catch {
+              readIds = [];
+            }
+            if (!Array.isArray(readIds)) readIds = [];
             // 저장된 ID 목록에 없으면(안 읽었으면) true, 있으면 false
             setHasUnreadNotice(!readIds.includes(latestId));
           }
