@@ -48,7 +48,7 @@ export const Text = ({
       maxFontSizeMultiplier={1} 
       style={combinedStyles}
     >
-      {children}
+      {children ?? ""}
     </RNText>
   );
 };

@@ -1,5 +1,7 @@
 n_bbang/
 ├── android/
+│   ├── .kotlin/
+│   │   └── sessions/
 │   ├── app/
 │   │   ├── src/
 │   │   │   ├── debug/
@@ -72,6 +74,7 @@ n_bbang/
 │   ├── gradlew.bat
 │   └── settings.gradle
 ├── plugins/
+│   ├── withAndroidQueries.js
 │   └── withKakaoAppKeyMetaData.js
 ├── scripts/
 │   ├── build_dong_search_index.py
@@ -157,8 +160,7 @@ n_bbang/
 ├── $null
 ├── .env
 ├── .gitignore
-├── all_project_code_20260124_110849.txt
-├── all_project_code_20260124_215632.txt
+├── all_project_code_20260211_002505.txt
 ├── App.js
 ├── app.json
 ├── babel.config.js
@@ -167,7 +169,6 @@ n_bbang/
 ├── google-services.json
 ├── index.js
 ├── make_full_tree.py
-├── n_bbang_tree_2026-01-24_11-08-52.txt
 ├── package-lock.json
 ├── package.json
 └── randomch-firebase-admin.json
