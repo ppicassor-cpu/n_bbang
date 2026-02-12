@@ -1,20 +1,17 @@
-// FILE: src/features/profile/screens/NotificationScreen.js
-
 import React, { useState, useEffect } from "react";
-import { View, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator  } from "react-native";
-import { Text } from "../../../components/MyText"; 
+import { View, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator } from "react-native";
+import { Text } from "../../../components/MyText";
 import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { collection, limit, query, orderBy, onSnapshot, doc, updateDoc, deleteDoc, writeBatch, where, getDocs, getDoc } from "firebase/firestore";
-// ✅ [추가] AsyncStorage 추가
-import AsyncStorage from "@react-native-async-storage/async-storage"; 
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { db } from "../../../firebaseConfig";
 import { theme } from "../../../theme";
 import { useAppContext } from "../../../app/providers/AppContext";
 import { ROUTES } from "../../../app/navigation/routes";
-import CustomModal from "../../../components/CustomModal"; 
+import CustomModal from "../../../components/CustomModal";
 
 export default function NotificationScreen() {
   const navigation = useNavigation();
@@ -24,12 +21,11 @@ export default function NotificationScreen() {
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // 모달 상태 관리
   const [modalVisible, setModalVisible] = useState(false);
   const [modalConfig, setModalConfig] = useState({
     title: "",
     message: "",
-    type: "alert", // 'alert' | 'confirm'
+    type: "alert",
     onConfirm: () => {},
   });
 
@@ -62,7 +58,7 @@ export default function NotificationScreen() {
     }
 
     const colRef = collection(db, "users", user.uid, "notifications");
-    const q = query(colRef, orderBy("createdAt", "desc"));
+    const q = query(colRef, orderBy("createdAt", "desc"), limit(200));
 
     let unsubscribe = () => {};
 
@@ -74,7 +70,7 @@ export default function NotificationScreen() {
         if (item.type === "chat" && item.roomId) {
           if (!visitedRoomIds.has(item.roomId)) {
             visitedRoomIds.add(item.roomId);
-            uniqueList.push(item); 
+            uniqueList.push(item);
           }
         } else {
           uniqueList.push(item);
@@ -87,23 +83,20 @@ export default function NotificationScreen() {
       onSnapshot(
         q,
         async (snapshot) => {
-          // 1. 내 개인 알림 가져오기
           const personalData = snapshot.docs.map((d) => ({
             id: d.id,
             ...d.data(),
-            isSystem: false 
+            isSystem: false
           }));
 
-          // 2. 전체 공지 가져오기 (isShow == true인 것 중 가장 최신 1개만)
           const systemQ = query(
-            collection(db, "system_notices"), 
+            collection(db, "system_notices"),
             where("isShow", "==", true),
-            orderBy("createdAt", "desc"), // 날짜 최신순으로 줄 세우고
-            limit(1) // 맨 위 1개만 가져옴
+            orderBy("createdAt", "desc"),
+            limit(1)
           );
           const systemSnap = await getDocs(systemQ);
-          
-          // 3. 공지 읽음 상태 확인 (AsyncStorage)
+
           const readJson = await AsyncStorage.getItem("READ_SYSTEM_NOTICES");
           const readIds = readJson ? JSON.parse(readJson) : [];
 
@@ -112,25 +105,22 @@ export default function NotificationScreen() {
             ...d.data(),
             isSystem: true,
             isRead: readIds.includes(d.id),
-            type: d.data().type || 'notice'
+            type: d.data().type || "notice"
           }));
 
-          // 4. 합치기 및 정렬 (공지사항 상단 고정)
           const combined = [...personalData, ...systemData].sort((a, b) => {
-            // [1순위] 공지사항(System)이 무조건 위로 오게 처리
-            if (a.isSystem && !b.isSystem) return -1; // a가 공지면 앞으로
-            if (!a.isSystem && b.isSystem) return 1;  // b가 공지면 앞으로
+            if (a.isSystem && !b.isSystem) return -1;
+            if (!a.isSystem && b.isSystem) return 1;
 
-            // [2순위] 같은 타입끼리는 최신 날짜순
             const getMillis = (t) => {
               if (!t) return 0;
-              if (typeof t.toDate === 'function') return t.toDate().getTime();
+              if (typeof t.toDate === "function") return t.toDate().getTime();
               if (t instanceof Date) return t.getTime();
               return new Date(t).getTime();
             };
             return getMillis(b.createdAt) - getMillis(a.createdAt);
           });
-          
+
           const filtered = processUniqueNotifications(combined);
           setNotifications(filtered);
           setLoading(false);
@@ -152,19 +142,15 @@ export default function NotificationScreen() {
     setModalVisible(true);
   };
 
-  // ✅ [수정] 읽음 처리 로직 (공지사항 포함)
   const handleRead = async (noti) => {
     if (!user) return;
 
     try {
-      // 1. 공지사항(System)인 경우 -> 로컬 스토리지에 읽음 기록
       if (noti.isSystem) {
         if (noti.isRead) return;
-        
-        // 화면 즉시 반영
-        setNotifications(prev => prev.map(n => n.id === noti.id ? {...n, isRead: true} : n));
 
-        // AsyncStorage 업데이트
+        setNotifications((prev) => prev.map((n) => (n.id === noti.id ? { ...n, isRead: true } : n)));
+
         const readJson = await AsyncStorage.getItem("READ_SYSTEM_NOTICES");
         const readIds = readJson ? JSON.parse(readJson) : [];
         if (!readIds.includes(noti.id)) {
@@ -174,7 +160,6 @@ export default function NotificationScreen() {
         return;
       }
 
-      // 2. 채팅 알림인 경우
       if (noti.type === "chat" && noti.roomId) {
         const batch = writeBatch(db);
         const colRef = collection(db, "users", user.uid, "notifications");
@@ -185,9 +170,7 @@ export default function NotificationScreen() {
           snapshot.forEach((docSnap) => batch.update(docSnap.ref, { isRead: true }));
           await batch.commit();
         }
-      
       } else {
-        // 3. 일반 알림인 경우
         if (!noti.isRead) {
           const notiRef = doc(db, "users", user.uid, "notifications", noti.id);
           await updateDoc(notiRef, { isRead: true });
@@ -198,12 +181,10 @@ export default function NotificationScreen() {
     }
   };
 
-  // ✅ [수정] 삭제 로직 (공지사항은 삭제 불가)
   const handleDelete = async (item) => {
     if (!user) return;
-    
+
     if (item.isSystem) {
-      // ✅ [해결] 4번째 파라미터에 '닫기 함수' 추가!
       openModal("알림", "공지사항은 삭제할 수 없습니다.", "alert", () => setModalVisible(false));
       return;
     }
@@ -226,17 +207,15 @@ export default function NotificationScreen() {
     }
   };
 
-  // ✅ [수정] 전체 읽음 (공지사항 + 개인알림)
   const handleReadAll = async () => {
     if (!user) return;
     if (notifications.length === 0) return;
-    
+
     try {
       const batch = writeBatch(db);
       let dbUpdateCount = 0;
       let systemReadIds = [];
 
-      // 1. AsyncStorage에 있는 기존 읽음 목록 가져오기
       const readJson = await AsyncStorage.getItem("READ_SYSTEM_NOTICES");
       const prevReadIds = readJson ? JSON.parse(readJson) : [];
       systemReadIds = [...prevReadIds];
@@ -244,12 +223,10 @@ export default function NotificationScreen() {
       notifications.forEach((noti) => {
         if (!noti.isRead) {
           if (noti.isSystem) {
-            // 공지는 로컬 ID 수집
             if (!systemReadIds.includes(noti.id)) {
               systemReadIds.push(noti.id);
             }
           } else {
-            // 개인 알림은 DB 업데이트
             const ref = doc(db, "users", user.uid, "notifications", noti.id);
             batch.update(ref, { isRead: true });
             dbUpdateCount++;
@@ -257,14 +234,11 @@ export default function NotificationScreen() {
         }
       });
 
-      // 공지 읽음 처리 반영
       if (systemReadIds.length > prevReadIds.length) {
         await AsyncStorage.setItem("READ_SYSTEM_NOTICES", JSON.stringify(systemReadIds));
-        // 화면 강제 갱신
-        setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
+        setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
       }
 
-      // 개인 알림 DB 반영
       if (dbUpdateCount > 0) {
         await batch.commit();
       }
@@ -273,13 +247,11 @@ export default function NotificationScreen() {
     }
   };
 
-  // ✅ [수정] 전체 삭제 (공지사항 제외하고 삭제)
   const handleDeleteAll = () => {
     if (!user) return;
-    // 개인 알림만 필터링
-    const personalNotis = notifications.filter(n => !n.isSystem);
+
+    const personalNotis = notifications.filter((n) => !n.isSystem);
     if (personalNotis.length === 0) {
-      // ✅ [해결] 4번째 파라미터에 '닫기 함수' 추가!
       openModal("알림", "삭제할 개인 알림이 없습니다.", "alert", () => setModalVisible(false));
       return;
     }
@@ -307,36 +279,30 @@ export default function NotificationScreen() {
     );
   };
 
-const onPressNoti = async (item) => {
-    // ✅ 클릭 시 그룹 읽음 처리 실행
+  const onPressNoti = async (item) => {
     await handleRead(item);
 
-    // ✅ [추가] 공지사항(isSystem)이면 내용 모달 띄우기
     if (item.isSystem) {
       openModal(
-        item.title || "공지사항", 
-        item.message || item.body || "내용이 없습니다.", 
-        "alert", 
-        () => setModalVisible(false) // 확인 버튼 누르면 닫기
+        item.title || "공지사항",
+        item.message || item.body || "내용이 없습니다.",
+        "alert",
+        () => setModalVisible(false)
       );
       return;
     }
 
-    // 채팅(또는 게시글 연동 채팅) 알림일 경우
     if (item?.type === "chat" && item?.roomId) {
       try {
-        // ✅ 이동하기 전에 실제 데이터(채팅방/게시글)가 존재하는지 확인
         const roomRef = doc(db, "chat_rooms", item.roomId);
         const roomSnap = await getDoc(roomRef);
 
         if (roomSnap.exists()) {
-          // 존재하면 정상 이동
           navigation.navigate(ROUTES.CHAT_ROOM, {
             roomId: item.roomId,
             roomName: item.roomName || item.title || "채팅방",
           });
         } else {
-          // ❌ 존재하지 않음 (Snapshot은 가져왔으나 데이터가 없는 경우)
           const handleConfirm = () => setModalVisible(false);
           openModal(
             "알림",
@@ -350,9 +316,7 @@ const onPressNoti = async (item) => {
 
         const handleConfirm = () => setModalVisible(false);
 
-        // ✅ [핵심 수정] 권한 없음(permission-denied)도 삭제된 것으로 간주
-        // (보안 규칙상 삭제된 문서는 접근 권한 체크 실패로 이어지는 경우가 많음)
-        if (e.code === 'permission-denied' || e.code === 'not-found') {
+        if (e.code === "permission-denied" || e.code === "not-found") {
           openModal(
             "알림",
             "해당 게시글(또는 채팅방)이 삭제되어\n내용을 확인할 수 없습니다.",
@@ -360,11 +324,10 @@ const onPressNoti = async (item) => {
             handleConfirm
           );
         } else {
-          // 그 외의 진짜 오류 (네트워크 문제 등)
           openModal(
-            "오류", 
-            "내용을 불러오는 중 문제가 발생했습니다.", 
-            "alert", 
+            "오류",
+            "내용을 불러오는 중 문제가 발생했습니다.",
+            "alert",
             handleConfirm
           );
         }
@@ -480,7 +443,7 @@ const onPressNoti = async (item) => {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.background },
-  
+
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -489,26 +452,26 @@ const styles = StyleSheet.create({
     height: 56,
     borderBottomWidth: 1,
     borderBottomColor: "#333",
-    position: 'relative',
+    position: "relative",
   },
   headerBtn: {
     padding: 5,
     zIndex: 10,
   },
   headerTitleContainer: {
-    position: 'absolute',
+    position: "absolute",
     left: 0,
     right: 0,
     top: 0,
     bottom: 0,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     zIndex: 1,
   },
-  headerTitle: { 
-    color: "white", 
-    fontSize: 18, 
-    fontWeight: "bold" 
+  headerTitle: {
+    color: "white",
+    fontSize: 18,
+    fontWeight: "bold",
   },
 
   center: { flex: 1, justifyContent: "center", alignItems: "center", marginTop: 50 },

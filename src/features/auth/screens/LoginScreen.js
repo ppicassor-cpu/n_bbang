@@ -134,17 +134,17 @@ const handleNaverLogin = async () => {
   }, []);
 
   const handleGoogleLogin = async () => {
-    setLoading(true);
-    try {
-      await GoogleSignin.hasPlayServices();
+  setLoading(true);
+  try {
+   await GoogleSignin.hasPlayServices();
 
       // ✅ [추가] 항상 계정 선택창을 띄우기 위해 기존 세션 연결 해제
       await GoogleSignin.signOut();
 
-      const userInfo = await GoogleSignin.signIn();
-      const idToken = userInfo.data?.idToken; // 최신 라이브러리 문법
+   const userInfo = await GoogleSignin.signIn();
+   const idToken = userInfo.data?.idToken; // 최신 라이브러리 문법
 
-      if (idToken) {
+   if (idToken) {
         await loginWithGoogle(idToken);
         // ✅ RootNavigator(user 상태 기반 분기)가 화면 전환을 담당하므로 reset 호출 제거
       } else {

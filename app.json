@@ -5,7 +5,7 @@
     "owner": "son_sunghyun",
     "version": "1.0.0",
     "orientation": "portrait",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
     "scheme": "com.sonsunghyun.nbbang",
     "icon": "./assets/icon.png",
     "splash": {
@@ -27,6 +27,11 @@
       "runtimeVersion": {
         "policy": "appVersion"
       }
+    },
+    "androidNavigationBar": {
+      "backgroundColor": "#000000",
+      "barStyle": "light-content",
+      "enforceContrast": false
     },
     "android": {
       "package": "com.sonsunghyun.nbbang",
@@ -77,14 +82,11 @@
           "apiKey": "AIzaSyAXEC--KNqOk_JgpXu9iu1QTlT58TKOpdk"
         }
       },
-      "runtimeVersion": "1.0.0",
-      "navigationBar": {
-        "backgroundColor": "#000000",
-        "barStyle": "light-content"
-      }
+      "runtimeVersion": "1.0.0"
     },
     "plugins": [
       "@react-native-google-signin/google-signin",
+      "./plugins/withKakaoMavenRepo",
       [
         "@react-native-seoul/naver-login",
         {

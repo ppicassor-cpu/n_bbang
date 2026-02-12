@@ -435,15 +435,7 @@ export const subscribeMessages = (roomId, callback, lastDate = null) => {
   const roomRef = doc(db, "chatRooms", roomId);
   const messagesRef = collection(db, "chatRooms", roomId, "messages");
 
-  // ✅ [수정] lastDate가 있으면 '이후' 데이터만 쿼리(비용 절감), 없으면 기존처럼 '최신' 쿼리
-  let q;
-  if (lastDate) {
-    // 캐시 이후 데이터는 시간순(ASC)으로 가져옴
-    q = query(messagesRef, orderBy("createdAt", "asc"), where("createdAt", ">", lastDate));
-  } else {
-    // 캐시 없을 땐 최신 50개(DESC)
-    q = query(messagesRef, orderBy("createdAt", "desc"), limit(50));
-  }
+  const INCREMENTAL_LIMIT = 200;
 
   let msgUnsubscribe = null;
 
@@ -462,6 +454,28 @@ export const subscribeMessages = (roomId, callback, lastDate = null) => {
       : (joinedDate || leftDate);
 
     const filterTime = effectiveDate ? effectiveDate.getTime() - 1000 : 0;
+
+    // ✅ [수정] lastDate + joinedAt/leftAt 기준을 쿼리에 직접 반영 + lastDate 경로에도 limit 적용
+    const baseStartDate = filterTime ? new Date(filterTime) : null;
+    const lastDateObj = safeToDate(lastDate);
+    const startDate =
+      lastDateObj && baseStartDate
+        ? (lastDateObj > baseStartDate ? lastDateObj : baseStartDate)
+        : (lastDateObj || baseStartDate);
+
+    let q;
+    if (lastDate) {
+      // 캐시 이후 데이터는 시간순(ASC)으로 가져옴 (✅ limit 적용)
+      q = startDate
+        ? query(messagesRef, orderBy("createdAt", "asc"), where("createdAt", ">", startDate), limit(INCREMENTAL_LIMIT))
+        : query(messagesRef, orderBy("createdAt", "asc"), limit(INCREMENTAL_LIMIT));
+    } else {
+      // 캐시 없을 땐 최신 50개(DESC) (✅ joined/left 기준은 쿼리에 반영)
+      q = startDate
+        ? query(messagesRef, orderBy("createdAt", "desc"), where("createdAt", ">=", startDate), limit(50))
+        : query(messagesRef, orderBy("createdAt", "desc"), limit(50));
+    }
+
     if (msgUnsubscribe) msgUnsubscribe();
 
     msgUnsubscribe = onSnapshot(q, (snapshot) => {
@@ -485,6 +499,7 @@ export const subscribeMessages = (roomId, callback, lastDate = null) => {
         allMessages = allMessages.reverse();
       }
 
+      // ✅ [유지] 안전장치: 혹시 모를 케이스 대비 필터 유지
       const filtered = allMessages.filter((m) => {
         const t = m?.createdAt instanceof Date ? m.createdAt.getTime() : new Date(0).getTime();
         return t >= filterTime;

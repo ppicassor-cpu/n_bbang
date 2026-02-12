@@ -28,6 +28,10 @@ import { db } from "../../../firebaseConfig";
 
 const CATEGORIES = ["전체", "마트/식품", "생활용품", "핫플레이스", "무료나눔"];
 
+const ADMIN_UIDS_CACHE_KEY = "ADMIN_UIDS_CACHE_V1";
+const ADMIN_UIDS_CACHE_TS_KEY = "ADMIN_UIDS_CACHE_TS_V1";
+const ADMIN_UIDS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+
 // ✅ [최적화 핵심] 리스트 아이템을 별도 컴포넌트로 분리하고 React.memo로 감쌈
 const PostItem = React.memo(({ item, onPress }) => {
   const isStore = item.type === "store"; // ✅ 가게 여부 확인
@@ -209,6 +213,52 @@ export default function HomeScreen({ navigation }) {
   // ✅ [수정] 알림 상태 분리 (개인 알림 개수 + 안 읽은 공지 여부)
   const [unreadPersonalCount, setUnreadPersonalCount] = useState(0);
   const [hasUnreadNotice, setHasUnreadNotice] = useState(false);
+
+  const [adminOwnerUidList, setAdminOwnerUidList] = useState([]);
+  const adminOwnerUidSet = useMemo(() => new Set(adminOwnerUidList), [adminOwnerUidList]);
+
+  useEffect(() => {
+    let alive = true;
+
+    (async () => {
+      try {
+        const tsStr = await AsyncStorage.getItem(ADMIN_UIDS_CACHE_TS_KEY);
+        const ts = tsStr ? Number(tsStr) : 0;
+
+        const cachedJson = await AsyncStorage.getItem(ADMIN_UIDS_CACHE_KEY);
+        let cached = [];
+        try {
+          cached = cachedJson ? JSON.parse(cachedJson) : [];
+        } catch {
+          cached = [];
+        }
+
+        if (Array.isArray(cached) && ts && (Date.now() - ts) < ADMIN_UIDS_CACHE_TTL_MS) {
+          if (alive) setAdminOwnerUidList(cached.filter(Boolean).map((v) => String(v)));
+          return;
+        }
+
+        const qAdmins = query(
+          collection(db, "users"),
+          where("isAdmin", "==", true),
+          limit(50)
+        );
+        const snap = await getDocs(qAdmins);
+        const uids = snap.docs.map((d) => d.id).filter(Boolean);
+
+        await AsyncStorage.setItem(ADMIN_UIDS_CACHE_KEY, JSON.stringify(uids));
+        await AsyncStorage.setItem(ADMIN_UIDS_CACHE_TS_KEY, String(Date.now()));
+
+        if (alive) setAdminOwnerUidList(uids);
+      } catch (e) {
+        if (alive) setAdminOwnerUidList([]);
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   // ✅ [추가] 내 알림 실시간 구독
   // ✅ [수정] 통합 알림 구독 (개인 알림 + 전체 공지)
@@ -675,7 +725,7 @@ const handleSaveNickname = async () => {
       );
 
       // ✅ 관리자(isAdmin)이면 거리 제한 무시, 아니면 5km 제한
-      if (isAdmin || item.ownerIsAdmin || dist <= 5) {
+      if (isAdmin || adminOwnerUidSet.has(_ownerKey(item)) || dist <= 5) {
         if (selectedCategory === "전체" || item.category === selectedCategory) {
           acc.push({ ...item, distText: ` ${dist.toFixed(1)}km` });
         }
@@ -980,9 +1030,6 @@ const handleSaveNickname = async () => {
         onEndReached={() => {
           if (selectedCategory === "전체") {
             loadMorePosts();
-            if (typeof loadMoreStores === "function") {
-              loadMoreStores();
-            }
             return;
           }
 

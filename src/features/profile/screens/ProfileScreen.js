@@ -123,7 +123,7 @@ export default function ProfileScreen() {
   };
 
   // ✅ [추가] 구매 복원 핸들러
-    const handleRestore = async () => {
+   const handleRestore = async () => {
     if (loading) return;
     setLoading(true);
     try {
@@ -1214,26 +1214,26 @@ export default function ProfileScreen() {
         onConfirm={handleDeleteAccount} // 확인 버튼 (기본 테마색, 빨간색 아님)
         onCancel={() => setDeleteAccountModalVisible(false)} // 취소 버튼
         confirmText="탈퇴하기" // 버튼 텍스트 변경
-      />
-      {/* ================================================= */}
+   />
+   {/* ================================================= */}
 
-      {/* ✅ [추가] 로딩 인디케이터 모달 (결제/복원 시 반응용) */}
-      <Modal
-        transparent={true}
-        animationType="none"
-        visible={loading}
-        onRequestClose={() => {}}
-      >
-        <View style={styles.loadingOverlay}>
-          <View style={styles.loadingBox}>
-            <ActivityIndicator size="large" color={theme.primary} />
-            <Text style={styles.loadingText}>처리 중입니다...</Text>
-          </View>
-        </View>
-      </Modal>
+   {/* ✅ [추가] 로딩 인디케이터 모달 (결제/복원 시 반응용) */}
+   <Modal
+    transparent={true}
+    animationType="none"
+    visible={loading}
+    onRequestClose={() => {}}
+   >
+    <View style={styles.loadingOverlay}>
+     <View style={styles.loadingBox}>
+      <ActivityIndicator size="large" color={theme.primary} />
+      <Text style={styles.loadingText}>처리 중입니다...</Text>
+     </View>
+    </View>
+   </Modal>
 
-    </SafeAreaView>
-  );
+  </SafeAreaView>
+ );
 }
 
 // 메뉴 아이템 컴포넌트
@@ -1599,30 +1599,30 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
   quickChargeSub: {
-    color: theme.primary,
-    fontSize: 11,
-    marginTop: 2,
-  },
+  color: theme.primary,
+  fontSize: 11,
+  marginTop: 2,
+ },
 
-  // ✅ [추가] 로딩 모달 스타일
-  loadingOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0, 0, 0, 0.5)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  loadingBox: {
-    width: 150,
-    height: 120,
-    backgroundColor: "#333",
-    borderRadius: 12,
-    justifyContent: "center",
-    alignItems: "center",
-    gap: 15,
-  },
-  loadingText: {
-    color: "white",
-    fontSize: 14,
-    fontWeight: "bold",
-  },
+ // ✅ [추가] 로딩 모달 스타일
+ loadingOverlay: {
+  flex: 1,
+  backgroundColor: "rgba(0, 0, 0, 0.5)",
+  justifyContent: "center",
+  alignItems: "center",
+ },
+ loadingBox: {
+  width: 150,
+  height: 120,
+  backgroundColor: "#333",
+  borderRadius: 12,
+  justifyContent: "center",
+  alignItems: "center",
+  gap: 15,
+ },
+ loadingText: {
+  color: "white",
+  fontSize: 14,
+  fontWeight: "bold",
+ },
 });
