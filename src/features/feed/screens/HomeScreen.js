@@ -2,7 +2,7 @@
 //  FILE: src/features/feed/screens/HomeScreen.js
 // ================================================================================
 
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 // ✅ [필수] 화면 표시용 컴포넌트들
 import { View, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, RefreshControl, TextInput, Alert, Linking  } from "react-native";
 import { Text } from "../../../components/MyText";
@@ -25,12 +25,21 @@ import { doc, getDoc, updateDoc, collection, query, where, getDocs, onSnapshot, 
 // ✅ [추가] AsyncStorage 추가
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { db } from "../../../firebaseConfig";
+import { BannerAd, BannerAdSize, TestIds } from 'react-native-google-mobile-ads';
+import { Platform } from "react-native";
 
 const CATEGORIES = ["전체", "마트/식품", "생활용품", "핫플레이스", "무료나눔"];
 
 const ADMIN_UIDS_CACHE_KEY = "ADMIN_UIDS_CACHE_V1";
 const ADMIN_UIDS_CACHE_TS_KEY = "ADMIN_UIDS_CACHE_TS_V1";
 const ADMIN_UIDS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+
+const adUnitId = __DEV__ 
+  ? TestIds.BANNER 
+  : Platform.select({
+      ios: 'ca-app-pub-3940256099942544/2934735716', 
+      android: 'ca-app-pub-5144004139813427/9737329455',
+    });
 
 // ✅ [최적화 핵심] 리스트 아이템을 별도 컴포넌트로 분리하고 React.memo로 감쌈
 const PostItem = React.memo(({ item, onPress }) => {
@@ -200,6 +209,36 @@ export default function HomeScreen({ navigation }) {
   const [writeModalVisible, setWriteModalVisible] = useState(false);
   const [isLocationLoading, setIsLocationLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [footerSpinnerVisible, setFooterSpinnerVisible] = useState(false);
+
+  // ✅ [추가] sample_posts에서 가져온 샘플글(최대 3개)
+  const [samplePosts, setSamplePosts] = useState([]);
+
+  const footerSpinnerDelayTimerRef = useRef(null);
+  const footerSpinnerShownAtRef = useRef(0);
+
+  const FOOTER_SPINNER_DELAY_MS = 250;
+  const FOOTER_SPINNER_MIN_MS = 700;
+
+  const PAGE_SIZE = 20;
+
+  const [hasMorePosts, setHasMorePosts] = useState(true);
+  const [hasMoreStores, setHasMoreStores] = useState(true);
+
+  const postsLenRef = useRef(0);
+  const storesLenRef = useRef(0);
+  const noGrowPostsRef = useRef(0);
+  const noGrowStoresRef = useRef(0);
+  const endReachedLockRef = useRef(false);
+
+  useEffect(() => {
+    postsLenRef.current = (posts || []).length;
+  }, [posts]);
+
+  useEffect(() => {
+    storesLenRef.current = (stores || []).length;
+  }, [stores]);
 
   const [hotplaceModalVisible, setHotplaceModalVisible] = useState(false);
   const [hotplaceModalType, setHotplaceModalType] = useState(null);
@@ -650,10 +689,95 @@ const handleSaveNickname = async () => {
   }, [user?.uid]);
 
   useEffect(() => {
-    if (myCoords && myCoords.latitude) {
-      checkAndGenerateSamples(myCoords);
-    }
-  }, [myCoords]);
+    let alive = true;
+
+    (async () => {
+      if (!(myCoords && myCoords.latitude)) {
+        if (alive) setSamplePosts([]);
+        return;
+      }
+
+      // ✅ 샘플 생성 (컬렉션: sample_posts)
+      await checkAndGenerateSamples(myCoords);
+
+      try {
+        const GRID_SIZE_DEG = 0.05;
+
+        const lat = Number(myCoords.latitude);
+        const lng = Number(myCoords.longitude);
+
+        const gLat = Math.floor(lat / GRID_SIZE_DEG) * GRID_SIZE_DEG;
+        const gLng = Math.floor(lng / GRID_SIZE_DEG) * GRID_SIZE_DEG;
+
+        const a = gLat.toFixed(2).replace(".", "");
+        const b = gLng.toFixed(2).replace(".", "");
+
+        const grid = `${a}_${b}`;
+
+        // ✅ (우선) 기대하는 3개 샘플 문서ID 직접 조회
+        const expectedKeys = [
+          `sample_${grid}_mart_food_1`,
+          `sample_${grid}_life_goods_2`,
+          `sample_${grid}_free_share_3`,
+        ];
+
+        const reads = await Promise.all(
+          expectedKeys.map((k) => getDoc(doc(db, "sample_posts", k)))
+        );
+
+        const found = reads
+          .filter((s) => s?.exists?.())
+          .map((s) => ({ id: s.id, ...s.data() }));
+
+        if (found.length === 3) {
+          if (alive) setSamplePosts(found);
+          return;
+        }
+
+        // ✅ (폴백) sample_posts 전체(샘플만)에서 가까운 3개를 뽑음
+        const q = query(
+          collection(db, "sample_posts"),
+          where("ownerId", "==", "SAMPLE_DATA"),
+          limit(80)
+        );
+
+        const snap = await getDocs(q);
+        const items = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+        const _normalize = (v) => {
+          if (!v || typeof v !== "object") return null;
+          const la = Number(v.latitude ?? v.lat);
+          const ln = Number(v.longitude ?? v.lng);
+          if (!Number.isFinite(la) || !Number.isFinite(ln)) return null;
+          return { latitude: la, longitude: ln };
+        };
+
+        const nearest = items
+          .map((it) => {
+            const c = _normalize(it.coords) || _normalize(it.location);
+            if (!c) return null;
+            const dist = getDistanceFromLatLonInKm(
+              myCoords.latitude, myCoords.longitude,
+              c.latitude, c.longitude
+            );
+            const distKm = dist > 100 ? (dist / 1000) : dist;
+            return { it, distKm };
+          })
+          .filter(Boolean)
+          .sort((a, b) => a.distKm - b.distKm)
+          .slice(0, 3)
+          .map((x) => x.it);
+
+        if (alive) setSamplePosts(nearest);
+      } catch (e) {
+        if (alive) setSamplePosts([]);
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [myCoords, getDistanceFromLatLonInKm]);
 
   // ✅ 스크롤 최적화를 위한 데이터 가공 (useMemo)
    const _toMs = (v) => {
@@ -709,10 +833,20 @@ const handleSaveNickname = async () => {
     // 2. 게시글과 가게 합치기
     const allData = [...(posts || []), ...normalizedStores];
 
+    const _normalizeCoords = (v) => {
+      if (!v || typeof v !== "object") return null;
+      const lat = Number(v.latitude ?? v.lat);
+      const lng = Number(v.longitude ?? v.lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+      return { latitude: lat, longitude: lng };
+    };
+
         // 3. 거리/카테고리 필터 + distText 부여
-    const filtered = allData.reduce((acc, item) => {
-      // ✅ item.coords가 있어야 거리 계산 가능 (위에서 매핑해줌)
-      if (!myCoords || !item.coords) {
+   const filtered = allData.reduce((acc, item) => {
+      // ✅ coords는 {latitude,longitude} 또는 {lat,lng} 둘 다 허용
+      const coords = _normalizeCoords(item.coords) || _normalizeCoords(item.location);
+
+      if (!myCoords || !coords) {
         if (selectedCategory === "전체" || item.category === selectedCategory) {
           acc.push({ ...item, distText: "" });
         }
@@ -721,17 +855,57 @@ const handleSaveNickname = async () => {
 
       const dist = getDistanceFromLatLonInKm(
         myCoords.latitude, myCoords.longitude,
-        item.coords.latitude, item.coords.longitude
+        coords.latitude, coords.longitude
       );
 
+      const distKm = dist > 100 ? (dist / 1000) : dist;
+
       // ✅ 관리자(isAdmin)이면 거리 제한 무시, 아니면 5km 제한
-      if (isAdmin || adminOwnerUidSet.has(_ownerKey(item)) || dist <= 5) {
+      if (isAdmin || adminOwnerUidSet.has(_ownerKey(item)) || distKm <= 5) {
         if (selectedCategory === "전체" || item.category === selectedCategory) {
-          acc.push({ ...item, distText: ` ${dist.toFixed(1)}km` });
+          acc.push({ ...item, distText: ` ${distKm.toFixed(1)}km` });
         }
       }
       return acc;
     }, []);
+
+    // ✅ [추가] 샘플글 중복 제거(표시 안전망)
+    // - sampleKey가 있으면 sampleKey 기준
+    // - sampleKey가 없으면(레거시) ownerId=SAMPLE_DATA 인 경우 category+title 기준
+    const deduped = (() => {
+      const sampleMap = new Map(); // key -> { item, idx }
+      const out = [];
+
+      for (const item of filtered) {
+        const isSampleItem = item?.isSample === true || item?.ownerId === "SAMPLE_DATA";
+
+        if (!isSampleItem) {
+          out.push(item);
+          continue;
+        }
+
+        const key = item?.sampleKey
+          ? `sample:${String(item.sampleKey)}`
+          : `sample:legacy:${String(item?.category ?? "")}::${String(item?.title ?? "")}`;
+
+        const prev = sampleMap.get(key);
+        if (!prev) {
+          const idx = out.push(item) - 1;
+          sampleMap.set(key, { item, idx });
+          continue;
+        }
+
+        const prevMs = _createdAtMs(prev.item);
+        const curMs = _createdAtMs(item);
+
+        if (curMs > prevMs) {
+          out[prev.idx] = item;
+          sampleMap.set(key, { item, idx: prev.idx });
+        }
+      }
+
+      return out;
+    })();
 
         // 4. 부스트 후보/일반 후보 분리 + 정렬 (updatedAt 끌올 악용 방지: updatedAt 사용 안 함)
     const now = Date.now();
@@ -757,8 +931,8 @@ const handleSaveNickname = async () => {
     // ✅ 일반 정렬: createdAt 최신순 유지
     const _sortNormal = (a, b) => _createdAtMs(b) - _createdAtMs(a);
 
-    const boostedCandidates = filtered.filter(_isBoosted).sort(_sortBoosted);
-    const normalCandidates = filtered.filter((item) => !_isBoosted(item)).sort(_sortNormal);
+    const boostedCandidates = deduped.filter(_isBoosted).sort(_sortBoosted);
+    const normalCandidates = deduped.filter((item) => !_isBoosted(item)).sort(_sortNormal);
 
     // 5. 상단 3슬롯 구성:
     // - 1~2위: 최근 N빵 부스트 우선 보장
@@ -885,12 +1059,77 @@ const handleSaveNickname = async () => {
     const pickedKeySet = new Set(picked.map((r) => r.key));
     const rest = keyedCombined.filter((r) => !pickedKeySet.has(r.key));
 
-    return [...picked.map((r) => r.item), ...rest.map((r) => r.item)];
+    // 6. 최종 리스트에 배너 광고 삽입 (10개마다 1개, 상단 3슬롯 후부터 적용)
+    const finalList = [...picked.map((r) => r.item), ...rest.map((r) => r.item)];
 
-  }, [posts, stores, myCoords, selectedCategory, isAdmin, getDistanceFromLatLonInKm]);
+    // ✅ 유저글(스토어 제외)이 5개 이하이면 샘플 3개를 하단에 추가 (컬렉션: sample_posts)
+    const userPostCount = finalList.reduce((cnt, it) => (it?.type === "store" ? cnt : cnt + 1), 0);
+    const shouldAppendSamples = (selectedCategory === "전체" && userPostCount <= 5);
+
+    const finalListWithSamples = (() => {
+      if (!shouldAppendSamples) return finalList;
+      if (!Array.isArray(samplePosts) || samplePosts.length === 0) return finalList;
+
+      const appended = [];
+
+      for (let i = 0; i < samplePosts.length; i++) {
+        const s = samplePosts[i];
+        const coords = _normalizeCoords(s.coords) || _normalizeCoords(s.location);
+
+        if (!myCoords || !coords) {
+          appended.push({ ...s, distText: "" });
+          continue;
+        }
+
+        const dist = getDistanceFromLatLonInKm(
+          myCoords.latitude, myCoords.longitude,
+          coords.latitude, coords.longitude
+        );
+
+        const distKm = dist > 100 ? (dist / 1000) : dist;
+
+        // ✅ 기존 거리 규칙 그대로(관리자면 무시, 아니면 5km)
+        if (isAdmin || distKm <= 5) {
+          appended.push({ ...s, distText: ` ${distKm.toFixed(1)}km` });
+        }
+      }
+
+      // ✅ 샘플은 최대 3개만 붙임
+      return [...finalList, ...appended.slice(0, 3)];
+    })();
+
+const withAds = [];
+let adIndex = 0;
+
+finalListWithSamples.forEach((item, index) => {
+  // 5번째, 10번째, 15번째... (인덱스 기준 4, 9, 14...) 아이템 뒤에 광고 삽입
+  withAds.push(item);
+
+  if (index % 8 === 7) {
+    withAds.push({ type: 'banner_ad', adId: adIndex++ });
+  }
+});
+
+    return withAds;
+
+ }, [posts, stores, samplePosts, myCoords, selectedCategory, isAdmin, getDistanceFromLatLonInKm, adminOwnerUidSet]);
 
   // ✅ 렌더링 함수
   const renderItem = useCallback(({ item }) => {
+  if (item.type === 'banner_ad') {
+    return (
+      <View style={styles.adContainer}>
+        <BannerAd
+          unitId={adUnitId}
+          size={BannerAdSize.INLINE_ADAPTIVE_BANNER}
+          requestOptions={{
+            requestNonPersonalizedAdsOnly: true,
+          }}
+        />
+      </View>
+    );
+  }
+
   return (
     <PostItem
       item={item}
@@ -911,11 +1150,121 @@ const handleSaveNickname = async () => {
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    if (typeof refreshPostsAndStores === "function") {
-      await refreshPostsAndStores();
+
+    // ✅ refresh 시에는 다시 로드 가능하도록 상태/카운터 초기화
+    endReachedLockRef.current = false;
+    noGrowPostsRef.current = 0;
+    noGrowStoresRef.current = 0;
+    setHasMorePosts(true);
+    setHasMoreStores(true);
+
+    try {
+      if (typeof refreshPostsAndStores === "function") {
+        await refreshPostsAndStores();
+      }
+    } finally {
+      setRefreshing(false);
     }
-    setRefreshing(false);
   };
+
+  const handleLoadMore = async () => {
+    if (loadingMore) return;
+
+    // ✅ onEndReached 연타/바운스 방지(짧은 락)
+    if (endReachedLockRef.current) return;
+    endReachedLockRef.current = true;
+
+    const _waitForListGrow = async (getLen, beforeLen) => {
+      for (let i = 0; i < 5; i++) {
+        await new Promise((r) => setTimeout(r, 200));
+        if (getLen() > beforeLen) return true;
+      }
+      return false;
+    };
+
+    // ✅ (1) 스피너 지연 표시 + 최소 표시시간(깜빡임/뺑글뺑글 반복 완화)
+    if (footerSpinnerDelayTimerRef.current) {
+      clearTimeout(footerSpinnerDelayTimerRef.current);
+      footerSpinnerDelayTimerRef.current = null;
+    }
+    footerSpinnerShownAtRef.current = 0;
+    setFooterSpinnerVisible(false);
+
+    footerSpinnerDelayTimerRef.current = setTimeout(() => {
+      footerSpinnerShownAtRef.current = Date.now();
+      setFooterSpinnerVisible(true);
+    }, FOOTER_SPINNER_DELAY_MS);
+
+    setLoadingMore(true);
+    try {
+      if (selectedCategory === "전체") {
+        if (!hasMorePosts) return;
+
+        const beforeLen = postsLenRef.current;
+
+        // ✅ (4) 페이지 사이즈 20 (지원 시에만 전달)
+        await loadMorePosts();
+
+        const grew = await _waitForListGrow(() => postsLenRef.current, beforeLen);
+
+        if (grew) {
+          noGrowPostsRef.current = 0;
+          setHasMorePosts(true);
+        } else {
+          noGrowPostsRef.current += 1;
+
+          // ✅ 너무 빨리 false 방지: 여러 번(5회) 연속으로 “증가 없음”일 때만 stop
+          if (noGrowPostsRef.current >= 5) {
+            setHasMorePosts(false);
+          }
+        }
+      } else if (selectedCategory === "핫플레이스") {
+        if (!hasMoreStores) return;
+        if (typeof loadMoreStores !== "function") return;
+
+        const beforeLen = storesLenRef.current;
+
+        // ✅ (4) 페이지 사이즈 20 (지원 시에만 전달)
+        await loadMoreStores();
+
+        const grew = await _waitForListGrow(() => storesLenRef.current, beforeLen);
+
+        if (grew) {
+          noGrowStoresRef.current = 0;
+          setHasMoreStores(true);
+        } else {
+          noGrowStoresRef.current += 1;
+
+          // ✅ 너무 빨리 false 방지: 여러 번(5회) 연속으로 “증가 없음”일 때만 stop
+          if (noGrowStoresRef.current >= 5) {
+            setHasMoreStores(false);
+          }
+        }
+      }
+    } finally {
+      if (footerSpinnerDelayTimerRef.current) {
+        clearTimeout(footerSpinnerDelayTimerRef.current);
+        footerSpinnerDelayTimerRef.current = null;
+      }
+
+      const shownAt = footerSpinnerShownAtRef.current;
+      if (shownAt) {
+        const elapsed = Date.now() - shownAt;
+        const remain = Math.max(0, FOOTER_SPINNER_MIN_MS - elapsed);
+        if (remain > 0) {
+          await new Promise((r) => setTimeout(r, remain));
+        }
+      }
+
+      footerSpinnerShownAtRef.current = 0;
+      setFooterSpinnerVisible(false);
+      setLoadingMore(false);
+
+      // ✅ 락 해제(다음 스크롤에서 정상 동작)
+      endReachedLockRef.current = false;
+    }
+  };
+
 
   const gateMessage = isPermissionIssue
     ? "위치 권한을 허용해야 홈을 볼 수 있습니다.\n설정에서 위치 권한을 허용해주세요."
@@ -1017,7 +1366,7 @@ const handleSaveNickname = async () => {
       <FlatList
         data={formattedPosts}
         renderItem={renderItem}
-        keyExtractor={(item) => _stableItemKey(item)}
+        keyExtractor={(item) => item.type === 'banner_ad' ? `ad_${item.adId}` : _stableItemKey(item)}
         contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
         ItemSeparatorComponent={() => (
           <View style={{ height: 1, backgroundColor: "#333", marginVertical: 12 }} />
@@ -1027,25 +1376,14 @@ const handleSaveNickname = async () => {
             <Text style={{ color: "grey" }}>해당 카테고리의 글이 없습니다.</Text>
           </View>
         }
-        onEndReached={() => {
-          if (selectedCategory === "전체") {
-            loadMorePosts();
-            return;
-          }
-
-          if (selectedCategory === "핫플레이스") {
-            if (typeof loadMoreStores === "function") {
-              loadMoreStores();
-            }
-            return;
-          }
-        }}
-        onEndReachedThreshold={0.5}
+        ListFooterComponent={footerSpinnerVisible ? <ActivityIndicator size="large" color={theme.primary} /> : null}
+        onEndReached={handleLoadMore}
+        onEndReachedThreshold={0.2}
         initialNumToRender={8}
         maxToRenderPerBatch={6}
         updateCellsBatchingPeriod={50}
         windowSize={7} 
-        removeClippedSubviews={true} 
+        removeClippedSubviews={false} 
         scrollEventThrottle={16}
         showsVerticalScrollIndicator={false}
         refreshControl={
@@ -1365,5 +1703,15 @@ const styles = StyleSheet.create({
     height: 8,
     borderRadius: 4,
     backgroundColor: theme.danger,
+  },
+  adContainer: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderTopWidth: 1,
+    borderTopColor: "#333",
+    backgroundColor: "#202020", // 광고 로드 전 배경색
+    paddingTop: 5,
+    paddingBottom: 0,
   },
 });

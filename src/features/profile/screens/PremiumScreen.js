@@ -124,7 +124,7 @@ export default function PremiumScreen({ navigation }) {
     }
     setLoading(true);
     try {
-      await activatePremium(selectedPlan); 
+      await activatePremium(selectedPlan === "$rc_annual" ? "yearly" : "monthly"); 
       await refreshPremiumFromRevenueCat();
       showModal("환영합니다!", "프리미엄 멤버십이 시작되었습니다.");
     } catch (e) {
