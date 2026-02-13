@@ -365,8 +365,8 @@ const isBooting = !initialReady;
     "boost_single",
     "boost_one_time",
   ];
-  // ✅ [점검 2] AppContext에서는 절대 configure 하지 않음 (유지)
   const rcLoggedInUidRef = useRef(null);
+  const rcConfiguredRef = useRef(false);
 
   const getActiveEntitlement = (customerInfo) => {
     try {
@@ -381,26 +381,32 @@ const isBooting = !initialReady;
   };
 
   const initRevenueCatForUser = async (uid) => {
-    try {
-      const apiKey = getRevenueCatApiKey();
-      if (!apiKey) {
-        rcLoggedInUidRef.current = null;
-        return;
-      }
-
-      if (uid && rcLoggedInUidRef.current !== uid && Purchases.logIn) {
-        try {
-          await Purchases.logIn(uid);
-          rcLoggedInUidRef.current = uid;
-        } catch (e) {
-          console.warn("RevenueCat logIn 실패(무시 가능):", e);
-        }
-      }
-    } catch (e) {
+  try {
+    const apiKey = getRevenueCatApiKey();
+    if (!apiKey) {
       rcLoggedInUidRef.current = null;
-      console.warn("RevenueCat logIn 실패:", e);
+      return;
     }
-  };
+
+    if (!rcConfiguredRef.current) {
+      Purchases.configure({ apiKey });
+      rcConfiguredRef.current = true;
+    }
+
+    if (uid && rcLoggedInUidRef.current !== uid && Purchases.logIn) {
+      try {
+        await Purchases.logIn(uid);
+        rcLoggedInUidRef.current = uid;
+      } catch (e) {
+        console.warn("RevenueCat logIn 실패(무시 가능):", e);
+      }
+    }
+  } catch (e) {
+    rcLoggedInUidRef.current = null;
+    console.warn("RevenueCat init 실패:", e);
+  }
+};
+
 
   const applyCustomerInfoToStateAndDb = async (uid, customerInfo) => {
     try {

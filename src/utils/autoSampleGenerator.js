@@ -260,7 +260,7 @@ export const checkAndGenerateSamples = async (currentCoords) => {
         location: "우리동네 공원",
         pickup_point: "공원 벤치",
         // ✅ 로컬 이미지 적용
-        images: [localChairUri],
+        images: ["https://images.pexels.com/photos/2092058/pexels-photo-2092058.jpeg?auto=compress&cs=tinysrgb&w=600"],
         status: "나눔중",
         ownerId: "SAMPLE_DATA",
         ownerEmail: "chair@nbbang.com",

@@ -845,10 +845,13 @@ const handleSaveNickname = async () => {
    const filtered = allData.reduce((acc, item) => {
       // ✅ coords는 {latitude,longitude} 또는 {lat,lng} 둘 다 허용
       const coords = _normalizeCoords(item.coords) || _normalizeCoords(item.location);
+      const isAdminPost = adminOwnerUidSet.has(_ownerKey(item));
 
       if (!myCoords || !coords) {
-        if (selectedCategory === "전체" || item.category === selectedCategory) {
-          acc.push({ ...item, distText: "" });
+        if (isAdminPost) {
+          if (selectedCategory === "전체" || item.category === selectedCategory) {
+            acc.push({ ...item, distText: "" });
+          }
         }
         return acc;
       }
@@ -861,7 +864,7 @@ const handleSaveNickname = async () => {
       const distKm = dist > 100 ? (dist / 1000) : dist;
 
       // ✅ 관리자(isAdmin)이면 거리 제한 무시, 아니면 5km 제한
-      if (isAdmin || adminOwnerUidSet.has(_ownerKey(item)) || distKm <= 5) {
+      if (isAdmin || isAdminPost || distKm <= 5) {
         if (selectedCategory === "전체" || item.category === selectedCategory) {
           acc.push({ ...item, distText: ` ${distKm.toFixed(1)}km` });
         }
@@ -1364,7 +1367,7 @@ finalListWithSamples.forEach((item, index) => {
       </View>
 
       <FlatList
-        data={formattedPosts}
+        data={locationGateVisible ? [] : formattedPosts}
         renderItem={renderItem}
         keyExtractor={(item) => item.type === 'banner_ad' ? `ad_${item.adId}` : _stableItemKey(item)}
         contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
@@ -1376,7 +1379,6 @@ finalListWithSamples.forEach((item, index) => {
             <Text style={{ color: "grey" }}>해당 카테고리의 글이 없습니다.</Text>
           </View>
         }
-        ListFooterComponent={footerSpinnerVisible ? <ActivityIndicator size="large" color={theme.primary} /> : null}
         onEndReached={handleLoadMore}
         onEndReachedThreshold={0.2}
         initialNumToRender={8}
@@ -1625,7 +1627,7 @@ finalListWithSamples.forEach((item, index) => {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.background },
   header: { flexDirection: "row", justifyContent: "space-between", padding: 16, alignItems: "center" },
-  location: { color: "white", fontSize: 25, fontWeight: "bold" },
+  location: { color: "white", fontSize: 25, fontWeight: "bold", letterSpacing: -0.5 },
   miniBadge: {
     marginLeft: 8,
     paddingHorizontal: 6,

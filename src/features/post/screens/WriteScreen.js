@@ -46,6 +46,12 @@ export default function WriteScreen({ navigation, route }) {
   const [category, setCategory] = useState("마트/식품");
   const [title, setTitle] = useState("");
   const [content, setContent] = useState(""); 
+
+  const CONTENT_MIN_HEIGHT = 120;
+  const CONTENT_MAX_HEIGHT = 260;
+  const [contentContentHeight, setContentContentHeight] = useState(CONTENT_MIN_HEIGHT);
+  const [contentInputHeight, setContentInputHeight] = useState(CONTENT_MIN_HEIGHT);
+
   const [buyPrice, setBuyPrice] = useState("");
   const [participants, setParticipants] = useState(2);
   const [selectedTip, setSelectedTip] = useState(0);
@@ -562,8 +568,14 @@ export default function WriteScreen({ navigation, route }) {
           />
           
           <TextInput 
-            style={styles.contentInput}
+            style={[styles.contentInput, { height: contentInputHeight, maxHeight: CONTENT_MAX_HEIGHT }]}
             multiline
+            scrollEnabled={contentContentHeight > CONTENT_MAX_HEIGHT}
+            onContentSizeChange={(e) => {
+              const h = e.nativeEvent.contentSize.height;
+              setContentContentHeight(h);
+              setContentInputHeight(Math.min(Math.max(CONTENT_MIN_HEIGHT, h), CONTENT_MAX_HEIGHT));
+            }}
             placeholder={"[상세 내용 예시]\n\n- 같이 살 물건: 코스트코 베이글 1+1\n- 소분 방식: 반반 나눔\n- 만날 시간: 내일 저녁 7시쯤\n"}
             placeholderTextColor="#777"
             value={content}

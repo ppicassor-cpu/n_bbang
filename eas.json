@@ -6,25 +6,13 @@
     "development": {
       "developmentClient": true,
       "distribution": "internal",
-      "channel": "development",
-      "env": {
-        "REVENUECAT_PUBLIC_SDK_KEY": "$(REVENUECAT_PUBLIC_SDK_KEY)",
-        "EXPO_PUBLIC_REVENUECAT_PUBLIC_SDK_KEY": "$(EXPO_PUBLIC_REVENUECAT_PUBLIC_SDK_KEY)",
-        "NAVER_CLIENT_ID": "$(NAVER_CLIENT_ID)",
-"NAVER_CLIENT_SECRET": "$(NAVER_CLIENT_SECRET)"
-      }
+      "channel": "development"
     },
     "preview": {
       "distribution": "internal",
       "channel": "preview",
       "android": {
         "buildType": "apk"
-      },
-      "env": {
-        "REVENUECAT_PUBLIC_SDK_KEY": "$(REVENUECAT_PUBLIC_SDK_KEY)",
-        "EXPO_PUBLIC_REVENUECAT_PUBLIC_SDK_KEY": "$(EXPO_PUBLIC_REVENUECAT_PUBLIC_SDK_KEY)",
-        "NAVER_CLIENT_ID": "$(NAVER_CLIENT_ID)",
-"NAVER_CLIENT_SECRET": "$(NAVER_CLIENT_SECRET)"
       }
     },
     "production": {
@@ -32,12 +20,6 @@
       "channel": "production",
       "android": {
         "buildType": "app-bundle"
-      },
-      "env": {
-        "REVENUECAT_PUBLIC_SDK_KEY": "$(REVENUECAT_PUBLIC_SDK_KEY)",
-        "EXPO_PUBLIC_REVENUECAT_PUBLIC_SDK_KEY": "$(EXPO_PUBLIC_REVENUECAT_PUBLIC_SDK_KEY)",
-        "NAVER_CLIENT_ID": "$(NAVER_CLIENT_ID)",
-"NAVER_CLIENT_SECRET": "$(NAVER_CLIENT_SECRET)"
       }
     }
   },
