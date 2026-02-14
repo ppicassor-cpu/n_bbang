@@ -42,6 +42,12 @@ export default function StoreWriteScreen({ route, navigation }) {
 
   const [name, setName] = useState("");
   const [desc, setDesc] = useState("");
+
+  const DESC_MIN_HEIGHT = 110;
+  const DESC_MAX_HEIGHT = 240;
+  const [descContentHeight, setDescContentHeight] = useState(DESC_MIN_HEIGHT);
+  const [descInputHeight, setDescInputHeight] = useState(DESC_MIN_HEIGHT);
+
   const [phone, setPhone] = useState("");
   const [homepage, setHomepage] = useState("");
   const [address, setAddress] = useState("");
@@ -325,10 +331,16 @@ export default function StoreWriteScreen({ route, navigation }) {
 
           <Text style={styles.label}>업체 소개</Text>
           <TextInput
-            style={[styles.input, { height: 110, textAlignVertical: "top" }]}
+            style={[styles.input, { height: descInputHeight, maxHeight: DESC_MAX_HEIGHT, textAlignVertical: "top" }]}
             placeholder="업체 소개와 N빵 유저 혜택 등을 적어주세요."
             placeholderTextColor="grey"
             multiline
+            scrollEnabled={descContentHeight > DESC_MAX_HEIGHT}
+            onContentSizeChange={(e) => {
+              const h = e.nativeEvent.contentSize.height;
+              setDescContentHeight(h);
+              setDescInputHeight(Math.min(Math.max(DESC_MIN_HEIGHT, h), DESC_MAX_HEIGHT));
+            }}
             value={desc}
             onChangeText={setDesc}
           />

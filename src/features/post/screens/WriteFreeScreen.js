@@ -56,6 +56,12 @@ export default function WriteFreeScreen({ navigation, route }) {
   // ✅ 상태
   const [title, setTitle] = useState(isEditMode ? editPostData?.title || "" : "");
   const [content, setContent] = useState(isEditMode ? editPostData?.content || "" : DEFAULT_DESC);
+
+  const CONTENT_MIN_HEIGHT = 140;
+  const CONTENT_MAX_HEIGHT = 260;
+  const [contentContentHeight, setContentContentHeight] = useState(CONTENT_MIN_HEIGHT);
+  const [contentInputHeight, setContentInputHeight] = useState(CONTENT_MIN_HEIGHT);
+
   const [coords, setCoords] = useState(
     isEditMode && editPostData?.coords
       ? {
@@ -402,8 +408,14 @@ export default function WriteFreeScreen({ navigation, route }) {
         <Text style={styles.label}>나눔 설명</Text>
         <TextInput
           // ✅ [수정] 안내 문구일 때 글자색을 흐릿하게 (#888) 처리
-          style={[styles.textarea, content === DEFAULT_DESC && { color: "#888" }]}
+          style={[styles.textarea, { height: contentInputHeight, maxHeight: CONTENT_MAX_HEIGHT }, content === DEFAULT_DESC && { color: "#888" }]}
           multiline
+          scrollEnabled={contentContentHeight > CONTENT_MAX_HEIGHT}
+          onContentSizeChange={(e) => {
+            const h = e.nativeEvent.contentSize.height;
+            setContentContentHeight(h);
+            setContentInputHeight(Math.min(Math.max(CONTENT_MIN_HEIGHT, h), CONTENT_MAX_HEIGHT));
+          }}
           placeholderTextColor="#666"
           value={content}
           onChangeText={setContent}

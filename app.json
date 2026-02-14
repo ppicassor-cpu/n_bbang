@@ -3,7 +3,7 @@
     "name": "nbbang",
     "slug": "nbbang",
     "owner": "son_sunghyun",
-    "version": "11.0.0",
+    "version": "13.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "scheme": "com.sonsunghyun.nbbang",
@@ -35,7 +35,7 @@
     },
     "android": {
       "package": "com.sonsunghyun.nbbang",
-      "versionCode": 11,
+      "versionCode": 13,
       "googleServicesFile": "./google-services.json",
       "permissions": [
         "com.google.android.gms.permission.AD_ID",
